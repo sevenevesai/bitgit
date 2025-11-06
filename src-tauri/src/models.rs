@@ -74,6 +74,7 @@ pub enum SyncStatus {
 pub enum SyncAction {
     PushLocal,
     MergeBranches { branches: Vec<String> },
+    PullBranches { branches: Vec<String> },
     FullSync,
 }
 

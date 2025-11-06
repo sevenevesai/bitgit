@@ -126,6 +126,22 @@ pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResul
                 },
             })
         }
+        SyncAction::PullBranches { branches } => {
+            let pulled = service.pull_branches(local_path, &branches)
+                .map_err(|e| format!("Pull failed: {}", e))?;
+
+            Ok(SyncResult {
+                success: true,
+                message: format!("Successfully pulled {} branches", pulled.len()),
+                details: SyncDetails {
+                    committed: None,
+                    pushed: Some(1), // Main branch is pushed
+                    merged: Some(pulled.clone()),
+                    deleted: None, // Branches are NOT deleted
+                    errors: None,
+                },
+            })
+        }
         SyncAction::FullSync => {
             let result = service.full_sync(local_path)
                 .map_err(|e| format!("Full sync failed: {}", e))?;
@@ -631,6 +647,22 @@ pub async fn sync_project(project_id: String, action: SyncAction) -> Result<Sync
                     pushed: None,
                     merged: Some(merged.clone()),
                     deleted: Some(merged),
+                    errors: None,
+                },
+            })
+        }
+        SyncAction::PullBranches { branches } => {
+            let pulled = service.pull_branches(local_path, &branches)
+                .map_err(|e| format!("Pull failed: {}", e))?;
+
+            Ok(SyncResult {
+                success: true,
+                message: format!("Successfully pulled {} branches", pulled.len()),
+                details: SyncDetails {
+                    committed: None,
+                    pushed: Some(1), // Main branch is pushed
+                    merged: Some(pulled.clone()),
+                    deleted: None, // Branches are NOT deleted
                     errors: None,
                 },
             })

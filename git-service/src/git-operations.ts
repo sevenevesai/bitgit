@@ -194,6 +194,78 @@ export class GitOperations {
     }
   }
 
+  /**
+   * Pull updates from remote branches without deleting them.
+   * Use this for iterative work (e.g., pulling from Claude Code web sessions).
+   * The branches remain alive for future pulls.
+   */
+  async pullBranches(branches: string[]): Promise<string[]> {
+    // Ensure this is a git repository
+    await this.ensureGitRepo();
+
+    const pulled: string[] = [];
+
+    // Get current branch and ensure we're on main/master before starting
+    const initialStatus = await this.git.status();
+    const mainBranch = initialStatus.current || 'main';
+
+    // Only proceed if we're starting from main/master
+    if (mainBranch !== 'main' && mainBranch !== 'master') {
+      throw new Error(`Must be on main/master branch to pull. Currently on: ${mainBranch}`);
+    }
+
+    try {
+      // Fetch all remotes and prune stale branches
+      await this.git.fetch(['--prune', 'origin']);
+
+      for (const branch of branches) {
+        try {
+          console.error(`[Git] Starting pull of branch: ${branch}`);
+
+          // Fetch the remote branch
+          await this.git.fetch(['origin', branch]);
+
+          // Merge the remote branch directly (no need to checkout)
+          await this.git.merge([`origin/${branch}`, '--no-ff', '-m', `Pull updates from branch '${branch}'`]);
+
+          console.error(`[Git] Pulled ${branch} successfully`);
+
+          // Push updated main
+          await this.git.push('origin', mainBranch);
+          console.error(`[Git] Pushed main branch`);
+
+          // NOTE: Branch is NOT deleted - it stays alive for future pulls
+
+          pulled.push(branch);
+        } catch (error) {
+          console.error(`[Git] Failed to pull ${branch}:`, error);
+          // If merge failed, try to abort it to clean up
+          try {
+            await this.git.merge(['--abort']);
+            console.error(`[Git] Aborted failed pull of ${branch}`);
+          } catch (abortError) {
+            // Merge might not have been in progress
+          }
+          // Continue with other branches
+        }
+      }
+
+      return pulled;
+    } catch (error) {
+      // Ensure we're back on main branch if anything went wrong
+      try {
+        const currentStatus = await this.git.status();
+        if (currentStatus.current !== mainBranch) {
+          await this.git.checkout(mainBranch);
+          console.error(`[Git] Returned to ${mainBranch} after error`);
+        }
+      } catch (checkoutError) {
+        console.error(`[Git] Failed to return to main branch:`, checkoutError);
+      }
+      throw new Error(`Failed to pull branches: ${error}`);
+    }
+  }
+
   async fullSync(): Promise<SyncResult> {
     // Ensure this is a git repository
     await this.ensureGitRepo();

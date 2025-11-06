@@ -76,6 +76,7 @@ export interface OperationLog {
 export type SyncAction =
   | { type: 'push_local' }
   | { type: 'merge_branches'; branches: string[] }
+  | { type: 'pull_branches'; branches: string[] }
   | { type: 'full_sync' };
 
 export interface SyncResult {

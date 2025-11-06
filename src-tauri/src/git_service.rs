@@ -146,6 +146,16 @@ impl GitService {
         Ok(merged.merged)
     }
 
+    pub fn pull_branches(&self, repo_path: &str, branches: &[String]) -> Result<Vec<String>> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "branches": branches
+        });
+        let result = self.execute("pullBranches", payload)?;
+        let pulled: PullResult = serde_json::from_value(result)?;
+        Ok(pulled.pulled)
+    }
+
     pub fn full_sync(&self, repo_path: &str) -> Result<FullSyncResult> {
         let payload = serde_json::json!({ "repoPath": repo_path });
         let result = self.execute("fullSync", payload)?;
@@ -250,6 +260,11 @@ pub struct PushResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MergeResult {
     pub merged: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PullResult {
+    pub pulled: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

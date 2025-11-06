@@ -84,6 +84,13 @@ export class IPCServer {
           return { id: command.id, success: true, data: { merged } };
         }
 
+        case 'pullBranches': {
+          const { repoPath, branches } = command.payload;
+          const git = new GitOperations(repoPath);
+          const pulled = await git.pullBranches(branches);
+          return { id: command.id, success: true, data: { pulled } };
+        }
+
         case 'fullSync': {
           const { repoPath } = command.payload;
           const git = new GitOperations(repoPath);

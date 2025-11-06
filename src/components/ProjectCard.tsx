@@ -428,17 +428,31 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </button>
 
             <button
+              onClick={() => handleSync({ type: 'pull_branches', branches: project.gitStatus?.remoteBranches || [] })}
+              disabled={!hasRemoteBranches || isLoading}
+              className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Pull branch updates without deleting (for iterative work)"
+            >
+              {isLoading ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              Pull Updates
+            </button>
+
+            <button
               onClick={() => handleSync({ type: 'merge_branches', branches: project.gitStatus?.remoteBranches || [] })}
               disabled={!hasRemoteBranches || isLoading}
               className="flex items-center gap-2 px-4 py-2 text-white bg-orange-600 rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Merge and delete remote branches"
+              title="Merge and delete remote branches (final cleanup)"
             >
               {isLoading ? (
                 <RefreshCw className="w-4 h-4 animate-spin" />
               ) : (
                 <GitMerge className="w-4 h-4" />
               )}
-              Merge Remote
+              Merge & Delete
             </button>
 
             <button
