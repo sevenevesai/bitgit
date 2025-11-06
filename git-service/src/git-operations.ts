@@ -1,5 +1,5 @@
-import simpleGit, { SimpleGit, StatusResult } from 'simple-git';
-import { StatusInfo, SyncResult } from './types.js';
+import simpleGit, { SimpleGit, StatusResult, LogResult, DiffResult } from 'simple-git';
+import { StatusInfo, SyncResult, BranchInfo, CommitInfo, StashInfo, TagInfo, DiffInfo } from './types.js';
 
 export class GitOperations {
   private git: SimpleGit;
@@ -330,6 +330,297 @@ export class GitOperations {
     }
 
     return result;
+  }
+
+  // ==================== ADVANCED GIT FEATURES ====================
+
+  /**
+   * Get all branches (local and remote)
+   */
+  async getBranches(): Promise<BranchInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      const branchSummary = await this.git.branch(['-a', '-v']);
+      const branches: BranchInfo[] = [];
+
+      for (const [name, info] of Object.entries(branchSummary.branches)) {
+        const isRemote = name.startsWith('remotes/');
+        const cleanName = isRemote ? name.replace('remotes/origin/', '') : name;
+
+        // Skip HEAD references
+        if (cleanName.includes('HEAD')) continue;
+
+        branches.push({
+          name: cleanName,
+          current: info.current,
+          commit: info.commit,
+          label: info.label,
+          isRemote,
+        });
+      }
+
+      return branches;
+    } catch (error) {
+      throw new Error(`Failed to get branches: ${error}`);
+    }
+  }
+
+  /**
+   * Create a new branch
+   */
+  async createBranch(branchName: string, checkout: boolean = false): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      if (checkout) {
+        await this.git.checkoutLocalBranch(branchName);
+      } else {
+        await this.git.branch([branchName]);
+      }
+    } catch (error) {
+      throw new Error(`Failed to create branch: ${error}`);
+    }
+  }
+
+  /**
+   * Switch to a different branch
+   */
+  async switchBranch(branchName: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.checkout(branchName);
+    } catch (error) {
+      throw new Error(`Failed to switch branch: ${error}`);
+    }
+  }
+
+  /**
+   * Delete a branch
+   */
+  async deleteBranch(branchName: string, force: boolean = false): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      const flag = force ? '-D' : '-d';
+      await this.git.branch([flag, branchName]);
+    } catch (error) {
+      throw new Error(`Failed to delete branch: ${error}`);
+    }
+  }
+
+  /**
+   * Get commit history with limit
+   */
+  async getCommitHistory(limit: number = 50): Promise<CommitInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      const log: LogResult = await this.git.log({ maxCount: limit });
+
+      return log.all.map(commit => ({
+        hash: commit.hash,
+        author: commit.author_name,
+        email: commit.author_email,
+        date: commit.date,
+        message: commit.message,
+        body: commit.body,
+        refs: commit.refs,
+      }));
+    } catch (error) {
+      throw new Error(`Failed to get commit history: ${error}`);
+    }
+  }
+
+  /**
+   * Get file diff for specific files or all changed files
+   */
+  async getDiff(filePath?: string): Promise<DiffInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      let diffResult: string;
+
+      if (filePath) {
+        diffResult = await this.git.diff([filePath]);
+      } else {
+        diffResult = await this.git.diff();
+      }
+
+      // Parse diff output into structured format
+      const diffs: DiffInfo[] = [];
+      const fileBlocks = diffResult.split('diff --git');
+
+      for (const block of fileBlocks) {
+        if (!block.trim()) continue;
+
+        const lines = block.split('\n');
+        const fileMatch = lines[0].match(/a\/(.*) b\/(.*)/);
+
+        if (fileMatch) {
+          const fileName = fileMatch[2];
+          const changes: { line: number; type: 'add' | 'remove' | 'context'; content: string }[] = [];
+          let currentLine = 0;
+
+          for (const line of lines.slice(1)) {
+            if (line.startsWith('@@')) {
+              const lineMatch = line.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/);
+              if (lineMatch) {
+                currentLine = parseInt(lineMatch[2]);
+              }
+            } else if (line.startsWith('+') && !line.startsWith('+++')) {
+              changes.push({ line: currentLine++, type: 'add', content: line.substring(1) });
+            } else if (line.startsWith('-') && !line.startsWith('---')) {
+              changes.push({ line: currentLine, type: 'remove', content: line.substring(1) });
+            } else if (line.startsWith(' ')) {
+              changes.push({ line: currentLine++, type: 'context', content: line.substring(1) });
+            }
+          }
+
+          diffs.push({ fileName, changes });
+        }
+      }
+
+      return diffs;
+    } catch (error) {
+      throw new Error(`Failed to get diff: ${error}`);
+    }
+  }
+
+  /**
+   * Stash management
+   */
+  async createStash(message?: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      if (message) {
+        await this.git.stash(['save', message]);
+      } else {
+        await this.git.stash();
+      }
+    } catch (error) {
+      throw new Error(`Failed to create stash: ${error}`);
+    }
+  }
+
+  async listStashes(): Promise<StashInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      const stashList = await this.git.stashList();
+
+      return stashList.all.map((stash, index) => ({
+        index,
+        hash: stash.hash,
+        message: stash.message,
+        date: stash.date,
+      }));
+    } catch (error) {
+      throw new Error(`Failed to list stashes: ${error}`);
+    }
+  }
+
+  async applyStash(index: number): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.stash(['apply', `stash@{${index}}`]);
+    } catch (error) {
+      throw new Error(`Failed to apply stash: ${error}`);
+    }
+  }
+
+  async popStash(): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.stash(['pop']);
+    } catch (error) {
+      throw new Error(`Failed to pop stash: ${error}`);
+    }
+  }
+
+  async dropStash(index: number): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.stash(['drop', `stash@{${index}}`]);
+    } catch (error) {
+      throw new Error(`Failed to drop stash: ${error}`);
+    }
+  }
+
+  /**
+   * Tag management
+   */
+  async createTag(tagName: string, message?: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      if (message) {
+        await this.git.tag(['-a', tagName, '-m', message]);
+      } else {
+        await this.git.tag([tagName]);
+      }
+    } catch (error) {
+      throw new Error(`Failed to create tag: ${error}`);
+    }
+  }
+
+  async listTags(): Promise<TagInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      const tags = await this.git.tags();
+
+      return tags.all.map(tag => ({
+        name: tag,
+        // We could enhance this with more tag info if needed
+      }));
+    } catch (error) {
+      throw new Error(`Failed to list tags: ${error}`);
+    }
+  }
+
+  async pushTag(tagName: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.push(['origin', tagName]);
+    } catch (error) {
+      throw new Error(`Failed to push tag: ${error}`);
+    }
+  }
+
+  async pushAllTags(): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.push(['--tags']);
+    } catch (error) {
+      throw new Error(`Failed to push tags: ${error}`);
+    }
+  }
+
+  async deleteTag(tagName: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.tag(['-d', tagName]);
+    } catch (error) {
+      throw new Error(`Failed to delete tag: ${error}`);
+    }
+  }
+
+  /**
+   * Cherry-pick a commit
+   */
+  async cherryPick(commitHash: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.raw(['cherry-pick', commitHash]);
+    } catch (error) {
+      throw new Error(`Failed to cherry-pick commit: ${error}`);
+    }
+  }
+
+  /**
+   * Get current branch name
+   */
+  async getCurrentBranch(): Promise<string> {
+    await this.ensureGitRepo();
+    try {
+      const status = await this.git.status();
+      return status.current || 'main';
+    } catch (error) {
+      throw new Error(`Failed to get current branch: ${error}`);
+    }
   }
 }
 

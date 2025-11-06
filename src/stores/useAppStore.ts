@@ -32,6 +32,7 @@ interface AppState {
   // Settings actions
   updateSettings: (settings: Partial<AppSettings>) => void;
   saveGitHubToken: (username: string, token: string) => Promise<void>;
+  toggleTheme: () => void;
 
   // Batch operations
   syncSelected: (action: SyncAction) => Promise<void>;
@@ -242,6 +243,29 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  // Toggle theme (simple 2-state: light <-> dark)
+  toggleTheme: () => {
+    set((state) => {
+      const currentTheme = state.settings.ui.theme;
+      // Simple toggle between light and dark only
+      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+      // Apply theme to document
+      if (newTheme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+
+      return {
+        settings: {
+          ...state.settings,
+          ui: { ...state.settings.ui, theme: newTheme },
+        },
+      };
+    });
+  },
+
   // Save GitHub token securely
   saveGitHubToken: async (username: string, token: string) => {
     try {
@@ -268,19 +292,27 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    toast.loading(`Syncing ${selectedIds.length} projects...`);
+    const loadingToastId = toast.loading(`Starting batch sync of ${selectedIds.length} projects...`);
 
+    let completed = 0;
     const results = await Promise.allSettled(
-      selectedIds.map((id) => get().syncProject(id, action))
+      selectedIds.map(async (id) => {
+        const result = await get().syncProject(id, action);
+        completed++;
+        toast.loading(`Syncing projects... (${completed}/${selectedIds.length})`, { id: loadingToastId });
+        return result;
+      })
     );
 
     const successful = results.filter((r) => r.status === 'fulfilled').length;
     const failed = results.length - successful;
 
     if (failed === 0) {
-      toast.success(`Successfully synced ${successful} projects`);
+      toast.success(`Successfully synced all ${successful} projects!`, { id: loadingToastId });
+    } else if (successful === 0) {
+      toast.error(`All ${failed} projects failed to sync`, { id: loadingToastId });
     } else {
-      toast.error(`Synced ${successful} projects, ${failed} failed`);
+      toast.error(`Synced ${successful} of ${selectedIds.length} projects (${failed} failed)`, { id: loadingToastId });
     }
   },
 }));

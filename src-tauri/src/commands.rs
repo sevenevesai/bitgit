@@ -1,5 +1,5 @@
 use crate::credentials::CredentialManager;
-use crate::git_service::{GitService, GitHubRepository, StatusInfo as GitStatusInfo};
+use crate::git_service::{GitService, StatusInfo as GitStatusInfo, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo, DiffChange};
 use crate::models::*;
 use crate::project_cache;
 use crate::scanner::RepositoryScanner;
@@ -684,4 +684,132 @@ pub async fn sync_project(project_id: String, action: SyncAction) -> Result<Sync
             })
         }
     }
+}
+
+// ==================== ADVANCED GIT FEATURES ====================
+
+#[tauri::command]
+pub async fn git_get_branches(repo_path: String) -> Result<Vec<BranchInfo>, String> {
+    let service = get_git_service()?;
+    service.get_branches(&repo_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_create_branch(repo_path: String, branch_name: String, checkout: bool) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.create_branch(&repo_path, &branch_name, checkout)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_switch_branch(repo_path: String, branch_name: String) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.switch_branch(&repo_path, &branch_name)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_delete_branch(repo_path: String, branch_name: String, force: bool) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.delete_branch(&repo_path, &branch_name, force)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_get_commit_history(repo_path: String, limit: u32) -> Result<Vec<CommitInfo>, String> {
+    let service = get_git_service()?;
+    service.get_commit_history(&repo_path, limit)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_get_diff(repo_path: String, file_path: Option<String>) -> Result<Vec<DiffInfo>, String> {
+    let service = get_git_service()?;
+    service.get_diff(&repo_path, file_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_create_stash(repo_path: String, message: Option<String>) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.create_stash(&repo_path, message)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_list_stashes(repo_path: String) -> Result<Vec<StashInfo>, String> {
+    let service = get_git_service()?;
+    service.list_stashes(&repo_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_apply_stash(repo_path: String, index: u32) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.apply_stash(&repo_path, index)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_pop_stash(repo_path: String) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.pop_stash(&repo_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_drop_stash(repo_path: String, index: u32) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.drop_stash(&repo_path, index)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_create_tag(repo_path: String, tag_name: String, message: Option<String>) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.create_tag(&repo_path, &tag_name, message)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_list_tags(repo_path: String) -> Result<Vec<TagInfo>, String> {
+    let service = get_git_service()?;
+    service.list_tags(&repo_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_push_tag(repo_path: String, tag_name: String) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.push_tag(&repo_path, &tag_name)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_push_all_tags(repo_path: String) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.push_all_tags(&repo_path)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_delete_tag(repo_path: String, tag_name: String) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.delete_tag(&repo_path, &tag_name)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_cherry_pick(repo_path: String, commit_hash: String) -> Result<(), String> {
+    let service = get_git_service()?;
+    service.cherry_pick(&repo_path, &commit_hash)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_get_current_branch(repo_path: String) -> Result<String, String> {
+    let service = get_git_service()?;
+    service.get_current_branch(&repo_path)
+        .map_err(|e| e.to_string())
 }

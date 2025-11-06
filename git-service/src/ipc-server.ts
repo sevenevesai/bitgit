@@ -153,6 +153,133 @@ export class IPCServer {
           return { id: command.id, success: true };
         }
 
+        // Advanced Git Features
+        case 'getBranches': {
+          const { repoPath } = command.payload;
+          const git = new GitOperations(repoPath);
+          const branches = await git.getBranches();
+          return { id: command.id, success: true, data: branches };
+        }
+
+        case 'createBranch': {
+          const { repoPath, branchName, checkout } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.createBranch(branchName, checkout);
+          return { id: command.id, success: true };
+        }
+
+        case 'switchBranch': {
+          const { repoPath, branchName } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.switchBranch(branchName);
+          return { id: command.id, success: true };
+        }
+
+        case 'deleteBranch': {
+          const { repoPath, branchName, force } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.deleteBranch(branchName, force);
+          return { id: command.id, success: true };
+        }
+
+        case 'getCommitHistory': {
+          const { repoPath, limit } = command.payload;
+          const git = new GitOperations(repoPath);
+          const commits = await git.getCommitHistory(limit || 50);
+          return { id: command.id, success: true, data: commits };
+        }
+
+        case 'getDiff': {
+          const { repoPath, filePath } = command.payload;
+          const git = new GitOperations(repoPath);
+          const diffs = await git.getDiff(filePath);
+          return { id: command.id, success: true, data: diffs };
+        }
+
+        case 'createStash': {
+          const { repoPath, message } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.createStash(message);
+          return { id: command.id, success: true };
+        }
+
+        case 'listStashes': {
+          const { repoPath } = command.payload;
+          const git = new GitOperations(repoPath);
+          const stashes = await git.listStashes();
+          return { id: command.id, success: true, data: stashes };
+        }
+
+        case 'applyStash': {
+          const { repoPath, index } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.applyStash(index);
+          return { id: command.id, success: true };
+        }
+
+        case 'popStash': {
+          const { repoPath } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.popStash();
+          return { id: command.id, success: true };
+        }
+
+        case 'dropStash': {
+          const { repoPath, index } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.dropStash(index);
+          return { id: command.id, success: true };
+        }
+
+        case 'createTag': {
+          const { repoPath, tagName, message } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.createTag(tagName, message);
+          return { id: command.id, success: true };
+        }
+
+        case 'listTags': {
+          const { repoPath } = command.payload;
+          const git = new GitOperations(repoPath);
+          const tags = await git.listTags();
+          return { id: command.id, success: true, data: tags };
+        }
+
+        case 'pushTag': {
+          const { repoPath, tagName } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.pushTag(tagName);
+          return { id: command.id, success: true };
+        }
+
+        case 'pushAllTags': {
+          const { repoPath } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.pushAllTags();
+          return { id: command.id, success: true };
+        }
+
+        case 'deleteTag': {
+          const { repoPath, tagName } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.deleteTag(tagName);
+          return { id: command.id, success: true };
+        }
+
+        case 'cherryPick': {
+          const { repoPath, commitHash } = command.payload;
+          const git = new GitOperations(repoPath);
+          await git.cherryPick(commitHash);
+          return { id: command.id, success: true };
+        }
+
+        case 'getCurrentBranch': {
+          const { repoPath } = command.payload;
+          const git = new GitOperations(repoPath);
+          const branch = await git.getCurrentBranch();
+          return { id: command.id, success: true, data: branch };
+        }
+
         default:
           throw new Error(`Unknown command type: ${command.type}`);
       }

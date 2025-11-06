@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { LinkLocalModal } from './LinkLocalModal';
 import { LinkGitHubModal } from './LinkGitHubModal';
 import { CreateRepoModal } from './CreateRepoModal';
+import { ProjectDetails } from './ProjectDetails';
 import {
   GitBranch,
   GitCommit,
@@ -23,6 +24,8 @@ import {
   Download,
   Trash2,
   RotateCw,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 interface ProjectCardProps {
@@ -37,8 +40,12 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const [showLinkLocalModal, setShowLinkLocalModal] = useState(false);
   const [showLinkGitHubModal, setShowLinkGitHubModal] = useState(false);
   const [showCreateRepoModal, setShowCreateRepoModal] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
   const isSelected = selectedProjectIds.has(project.id);
+
+  // Show details button only when both GitHub and Local are configured
+  const canShowDetails = project.githubUrl && project.localPath;
 
   const handleRefreshStatus = async () => {
     console.log('[ProjectCard] handleRefreshStatus clicked for project:', project.id, project.name);
@@ -331,7 +338,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
           <div className="flex gap-2">
             <button
               onClick={() => setShowLinkGitHubModal(true)}
-              className="flex items-center gap-2 px-4 py-2 text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 text-white bg-purple-600 dark:bg-purple-700 rounded-lg hover:bg-purple-700 dark:hover:bg-purple-600 transition-colors"
               title="Link to GitHub repository"
             >
               <Github className="w-4 h-4" />
@@ -339,7 +346,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </button>
             <button
               onClick={() => setShowLinkLocalModal(true)}
-              className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 dark:bg-indigo-700 rounded-lg hover:bg-indigo-700 dark:hover:bg-indigo-600 transition-colors"
               title="Link to local directory"
             >
               <FolderGit className="w-4 h-4" />
@@ -366,7 +373,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </button>
             <button
               onClick={() => setShowLinkLocalModal(true)}
-              className="flex items-center gap-2 px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               title="Link to existing local directory"
             >
               <LinkIcon className="w-4 h-4" />
@@ -393,7 +400,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </button>
             <button
               onClick={() => setShowLinkGitHubModal(true)}
-              className="flex items-center gap-2 px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               title="Link to existing GitHub repository"
             >
               <LinkIcon className="w-4 h-4" />
@@ -471,11 +478,22 @@ export function ProjectCard({ project }: ProjectCardProps) {
 
             <button
               onClick={handleOpenVSCode}
-              className="flex items-center gap-2 px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               title="Open in VS Code"
             >
               <Code className="w-4 h-4" />
             </button>
+
+            {canShowDetails && (
+              <button
+                onClick={() => setShowDetails(!showDetails)}
+                className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                title="Show advanced Git features"
+              >
+                {showDetails ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                Details
+              </button>
+            )}
           </div>
         );
 
@@ -486,7 +504,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
 
   return (
     <div
-      className={`bg-white rounded-lg shadow-sm border-l-4 ${getStatusColor()} p-6 transition-all hover:shadow-md`}
+      className={`bg-white dark:bg-gray-800 rounded-lg shadow-sm border-l-4 ${getStatusColor()} p-6 transition-all hover:shadow-md dark:hover:shadow-lg`}
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
@@ -499,15 +517,15 @@ export function ProjectCard({ project }: ProjectCardProps) {
           />
           {getStatusIcon()}
           <div>
-            <h3 className="font-semibold text-lg text-gray-900">{project.name}</h3>
-            <p className="text-sm text-gray-500">{getStatusText()}</p>
+            <h3 className="font-semibold text-lg text-gray-900 dark:text-white">{project.name}</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{getStatusText()}</p>
           </div>
           {/* Refresh button - only show if both GitHub and Local are configured */}
           {project.githubUrl && project.localPath && (
             <button
               onClick={handleRefreshStatus}
               disabled={isRefreshing}
-              className="ml-2 p-1.5 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors disabled:opacity-50"
+              className="ml-2 p-1.5 text-gray-400 dark:text-gray-500 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
               title="Refresh status"
             >
               <RotateCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -516,7 +534,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
         </div>
         <button
           onClick={handleDelete}
-          className="text-gray-400 hover:text-red-600 transition-colors"
+          className="text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 transition-colors"
           title="Delete project"
         >
           <Trash2 className="w-5 h-5" />
@@ -526,17 +544,17 @@ export function ProjectCard({ project }: ProjectCardProps) {
       {/* Project Info */}
       <div className="space-y-2 mb-4 text-sm">
         {project.githubUrl && (
-          <div className="flex items-center gap-2 text-gray-700">
+          <div className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
             <Github className="w-4 h-4" />
             <span className="font-medium">GitHub:</span>
-            <span className="text-gray-600">{project.githubOwner}/{project.githubRepo}</span>
+            <span className="text-gray-600 dark:text-gray-400">{project.githubOwner}/{project.githubRepo}</span>
           </div>
         )}
         {project.localPath && (
-          <div className="flex items-center gap-2 text-gray-700">
+          <div className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
             <FolderGit className="w-4 h-4" />
             <span className="font-medium">Local:</span>
-            <span className="text-gray-600 truncate">{project.localPath}</span>
+            <span className="text-gray-600 dark:text-gray-400 truncate">{project.localPath}</span>
           </div>
         )}
 
@@ -561,6 +579,11 @@ export function ProjectCard({ project }: ProjectCardProps) {
 
       {/* Actions */}
       {renderActions()}
+
+      {/* Expandable Details Panel */}
+      {showDetails && canShowDetails && (
+        <ProjectDetails project={project} onClose={() => setShowDetails(false)} />
+      )}
 
       {/* Modals */}
       <LinkLocalModal

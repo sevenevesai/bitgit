@@ -114,3 +114,42 @@ export interface UISettings {
   refreshInterval: number;
   showNotifications: boolean;
 }
+
+// Advanced Git Features Types
+export interface BranchInfo {
+  name: string;
+  current: boolean;
+  commit: string;
+  label: string;
+  isRemote: boolean;
+}
+
+export interface CommitInfo {
+  hash: string;
+  author: string;
+  email: string;
+  date: string;
+  message: string;
+  body: string;
+  refs: string;
+}
+
+export interface DiffInfo {
+  fileName: string;
+  changes: Array<{
+    line: number;
+    type: 'add' | 'remove' | 'context';
+    content: string;
+  }>;
+}
+
+export interface StashInfo {
+  index: number;
+  hash: string;
+  message: string;
+  date: string;
+}
+
+export interface TagInfo {
+  name: string;
+}

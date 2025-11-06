@@ -36,6 +36,25 @@ fn main() {
             clone_repository,
             create_github_repository,
             sync_project,
+            // Advanced Git features
+            git_get_branches,
+            git_create_branch,
+            git_switch_branch,
+            git_delete_branch,
+            git_get_commit_history,
+            git_get_diff,
+            git_create_stash,
+            git_list_stashes,
+            git_apply_stash,
+            git_pop_stash,
+            git_drop_stash,
+            git_create_tag,
+            git_list_tags,
+            git_push_tag,
+            git_push_all_tags,
+            git_delete_tag,
+            git_cherry_pick,
+            git_get_current_branch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

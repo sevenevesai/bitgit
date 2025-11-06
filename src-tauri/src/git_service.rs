@@ -228,6 +228,160 @@ impl GitService {
         self.execute("pushToRemote", payload)?;
         Ok(())
     }
+
+    // Advanced Git Features
+    pub fn get_branches(&self, repo_path: &str) -> Result<Vec<BranchInfo>> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        let result = self.execute("getBranches", payload)?;
+        let branches: Vec<BranchInfo> = serde_json::from_value(result)?;
+        Ok(branches)
+    }
+
+    pub fn create_branch(&self, repo_path: &str, branch_name: &str, checkout: bool) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "branchName": branch_name,
+            "checkout": checkout
+        });
+        self.execute("createBranch", payload)?;
+        Ok(())
+    }
+
+    pub fn switch_branch(&self, repo_path: &str, branch_name: &str) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "branchName": branch_name
+        });
+        self.execute("switchBranch", payload)?;
+        Ok(())
+    }
+
+    pub fn delete_branch(&self, repo_path: &str, branch_name: &str, force: bool) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "branchName": branch_name,
+            "force": force
+        });
+        self.execute("deleteBranch", payload)?;
+        Ok(())
+    }
+
+    pub fn get_commit_history(&self, repo_path: &str, limit: u32) -> Result<Vec<CommitInfo>> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "limit": limit
+        });
+        let result = self.execute("getCommitHistory", payload)?;
+        let commits: Vec<CommitInfo> = serde_json::from_value(result)?;
+        Ok(commits)
+    }
+
+    pub fn get_diff(&self, repo_path: &str, file_path: Option<String>) -> Result<Vec<DiffInfo>> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "filePath": file_path
+        });
+        let result = self.execute("getDiff", payload)?;
+        let diffs: Vec<DiffInfo> = serde_json::from_value(result)?;
+        Ok(diffs)
+    }
+
+    pub fn create_stash(&self, repo_path: &str, message: Option<String>) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "message": message
+        });
+        self.execute("createStash", payload)?;
+        Ok(())
+    }
+
+    pub fn list_stashes(&self, repo_path: &str) -> Result<Vec<StashInfo>> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        let result = self.execute("listStashes", payload)?;
+        let stashes: Vec<StashInfo> = serde_json::from_value(result)?;
+        Ok(stashes)
+    }
+
+    pub fn apply_stash(&self, repo_path: &str, index: u32) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "index": index
+        });
+        self.execute("applyStash", payload)?;
+        Ok(())
+    }
+
+    pub fn pop_stash(&self, repo_path: &str) -> Result<()> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        self.execute("popStash", payload)?;
+        Ok(())
+    }
+
+    pub fn drop_stash(&self, repo_path: &str, index: u32) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "index": index
+        });
+        self.execute("dropStash", payload)?;
+        Ok(())
+    }
+
+    pub fn create_tag(&self, repo_path: &str, tag_name: &str, message: Option<String>) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "tagName": tag_name,
+            "message": message
+        });
+        self.execute("createTag", payload)?;
+        Ok(())
+    }
+
+    pub fn list_tags(&self, repo_path: &str) -> Result<Vec<TagInfo>> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        let result = self.execute("listTags", payload)?;
+        let tags: Vec<TagInfo> = serde_json::from_value(result)?;
+        Ok(tags)
+    }
+
+    pub fn push_tag(&self, repo_path: &str, tag_name: &str) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "tagName": tag_name
+        });
+        self.execute("pushTag", payload)?;
+        Ok(())
+    }
+
+    pub fn push_all_tags(&self, repo_path: &str) -> Result<()> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        self.execute("pushAllTags", payload)?;
+        Ok(())
+    }
+
+    pub fn delete_tag(&self, repo_path: &str, tag_name: &str) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "tagName": tag_name
+        });
+        self.execute("deleteTag", payload)?;
+        Ok(())
+    }
+
+    pub fn cherry_pick(&self, repo_path: &str, commit_hash: &str) -> Result<()> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "commitHash": commit_hash
+        });
+        self.execute("cherryPick", payload)?;
+        Ok(())
+    }
+
+    pub fn get_current_branch(&self, repo_path: &str) -> Result<String> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        let result = self.execute("getCurrentBranch", payload)?;
+        let branch: String = serde_json::from_value(result)?;
+        Ok(branch)
+    }
 }
 
 impl Drop for GitService {
@@ -292,4 +446,55 @@ pub struct GitHubRepository {
     pub owner: String,
     pub is_private: bool,
     pub default_branch: String,
+}
+
+// Advanced Git Features Types
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchInfo {
+    pub name: String,
+    pub current: bool,
+    pub commit: String,
+    pub label: String,
+    pub is_remote: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommitInfo {
+    pub hash: String,
+    pub author: String,
+    pub email: String,
+    pub date: String,
+    pub message: String,
+    pub body: String,
+    pub refs: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffChange {
+    pub line: i32,
+    #[serde(rename = "type")]
+    pub change_type: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffInfo {
+    pub file_name: String,
+    pub changes: Vec<DiffChange>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StashInfo {
+    pub index: u32,
+    pub hash: String,
+    pub message: String,
+    pub date: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TagInfo {
+    pub name: String,
 }
