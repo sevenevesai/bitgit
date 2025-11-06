@@ -13,21 +13,51 @@ export function Dashboard() {
   const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [showArchived, setShowArchived] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [sortBy, setSortBy] = useState<'name' | 'favorite' | 'activity'>('favorite');
 
   const ThemeIcon = settings.ui.theme === 'dark' ? Moon : Sun;
   const hasSelection = selectedProjectIds.size > 0;
 
-  // Filter projects based on search and status
-  const filteredProjects = projects.filter((project) => {
-    const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         project.localPath?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         (project.githubOwner && project.githubOwner.toLowerCase().includes(searchQuery.toLowerCase())) ||
-                         (project.githubRepo && project.githubRepo.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Filter and sort projects
+  const filteredProjects = projects
+    .filter((project) => {
+      // Search filter
+      const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                           project.localPath?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                           (project.githubOwner && project.githubOwner.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                           (project.githubRepo && project.githubRepo.toLowerCase().includes(searchQuery.toLowerCase()));
 
-    const matchesStatus = statusFilter === 'all' || project.projectStatus === statusFilter;
+      // Status filter
+      const matchesStatus = statusFilter === 'all' || project.projectStatus === statusFilter;
 
-    return matchesSearch && matchesStatus;
-  });
+      // Archive filter
+      const matchesArchive = showArchived || !project.archived;
+
+      // Favorites filter
+      const matchesFavorites = !favoritesOnly || project.favorite;
+
+      return matchesSearch && matchesStatus && matchesArchive && matchesFavorites;
+    })
+    .sort((a, b) => {
+      // Sort by favorites first if enabled
+      if (sortBy === 'favorite') {
+        const aFav = a.favorite ? 1 : 0;
+        const bFav = b.favorite ? 1 : 0;
+        if (aFav !== bFav) return bFav - aFav;
+      }
+
+      // Then by activity
+      if (sortBy === 'activity') {
+        const aActivity = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
+        const bActivity = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
+        if (aActivity !== bActivity) return bActivity - aActivity;
+      }
+
+      // Finally by name
+      return a.name.localeCompare(b.name);
+    });
 
   useEffect(() => {
     console.log('[Dashboard] Loading projects on mount...');
@@ -222,6 +252,43 @@ export function Dashboard() {
                 <option value="not_configured">Not Configured</option>
               </select>
             </div>
+
+            {/* Favorites Filter */}
+            <button
+              onClick={() => setFavoritesOnly(!favoritesOnly)}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                favoritesOnly
+                  ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border-2 border-yellow-400 dark:border-yellow-600'
+                  : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+              }`}
+              title="Show only favorites"
+            >
+              ⭐ {favoritesOnly ? 'Favorites Only' : 'All'}
+            </button>
+
+            {/* Archived Filter */}
+            <button
+              onClick={() => setShowArchived(!showArchived)}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                showArchived
+                  ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border-2 border-orange-400 dark:border-orange-600'
+                  : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+              }`}
+              title="Show archived projects"
+            >
+              📦 {showArchived ? 'With Archived' : 'No Archived'}
+            </button>
+
+            {/* Sort dropdown */}
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as 'name' | 'favorite' | 'activity')}
+              className="px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500 min-w-[180px]"
+            >
+              <option value="favorite">Sort: Favorites First</option>
+              <option value="activity">Sort: Recent Activity</option>
+              <option value="name">Sort: Name (A-Z)</option>
+            </select>
           </div>
         </div>
       </div>

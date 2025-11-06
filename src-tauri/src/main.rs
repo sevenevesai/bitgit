@@ -55,6 +55,12 @@ fn main() {
             git_delete_tag,
             git_cherry_pick,
             git_get_current_branch,
+            // Project Management (Priority 3)
+            update_project_metadata,
+            toggle_project_favorite,
+            toggle_project_archived,
+            apply_project_template,
+            increment_project_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

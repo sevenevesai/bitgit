@@ -313,6 +313,13 @@ pub async fn add_repositories(repo_paths: Vec<String>) -> Result<Vec<Repository>
             git_status,
             created_at: chrono::Utc::now().to_rfc3339(),
             last_synced: None,
+            // Priority 3 fields
+            description: None,
+            archived: None,
+            favorite: None,
+            last_activity: None,
+            statistics: None,
+            template: None,
         };
 
         add_repository_to_cache(repo.clone());
@@ -346,6 +353,13 @@ pub async fn fetch_github_repos(token: String) -> Result<Vec<Repository>, String
             git_status: None, // No git status without local path
             created_at: chrono::Utc::now().to_rfc3339(),
             last_synced: None,
+            // Priority 3 fields
+            description: None,
+            archived: None,
+            favorite: None,
+            last_activity: None,
+            statistics: None,
+            template: None,
         };
 
         add_repository_to_cache(repo.clone());
@@ -398,6 +412,13 @@ pub async fn create_project(
         git_status: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         last_synced: None,
+        // Priority 3 fields
+        description: None,
+        archived: None,
+        favorite: None,
+        last_activity: None,
+        statistics: None,
+        template: None,
     };
 
     // Save to cache
@@ -812,4 +833,185 @@ pub async fn git_get_current_branch(repo_path: String) -> Result<String, String>
     let service = get_git_service()?;
     service.get_current_branch(&repo_path)
         .map_err(|e| e.to_string())
+}
+
+// ==================== PROJECT MANAGEMENT (PRIORITY 3) ====================
+
+/// Update project metadata (description, favorite, archived)
+#[tauri::command]
+pub async fn update_project_metadata(
+    project_id: String,
+    description: Option<String>,
+    favorite: Option<bool>,
+    archived: Option<bool>,
+) -> Result<Project, String> {
+    let projects = project_cache::load_projects()
+        .map_err(|e| format!("Failed to load projects: {}", e))?;
+
+    let mut project = projects
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+
+    // Update fields if provided
+    if description.is_some() {
+        project.description = description;
+    }
+    if favorite.is_some() {
+        project.favorite = favorite;
+    }
+    if archived.is_some() {
+        project.archived = archived;
+    }
+
+    // Update last activity
+    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
+
+    // Save updated project
+    project_cache::save_project(project.clone())
+        .map_err(|e| format!("Failed to save project: {}", e))?;
+
+    Ok(project)
+}
+
+/// Toggle project favorite status
+#[tauri::command]
+pub async fn toggle_project_favorite(project_id: String) -> Result<Project, String> {
+    let projects = project_cache::load_projects()
+        .map_err(|e| format!("Failed to load projects: {}", e))?;
+
+    let mut project = projects
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+
+    project.favorite = Some(!project.favorite.unwrap_or(false));
+    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
+
+    project_cache::save_project(project.clone())
+        .map_err(|e| format!("Failed to save project: {}", e))?;
+
+    Ok(project)
+}
+
+/// Toggle project archived status
+#[tauri::command]
+pub async fn toggle_project_archived(project_id: String) -> Result<Project, String> {
+    let projects = project_cache::load_projects()
+        .map_err(|e| format!("Failed to load projects: {}", e))?;
+
+    let mut project = projects
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+
+    project.archived = Some(!project.archived.unwrap_or(false));
+    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
+
+    project_cache::save_project(project.clone())
+        .map_err(|e| format!("Failed to save project: {}", e))?;
+
+    Ok(project)
+}
+
+/// Apply a template to a project (write .gitignore and other files)
+#[tauri::command]
+pub async fn apply_project_template(
+    project_id: String,
+    template_id: String,
+    gitignore_content: String,
+) -> Result<Project, String> {
+    use std::fs;
+    use std::path::Path;
+
+    let projects = project_cache::load_projects()
+        .map_err(|e| format!("Failed to load projects: {}", e))?;
+
+    let mut project = projects
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+
+    // Check if local path exists
+    let local_path = project.local_path
+        .as_ref()
+        .ok_or_else(|| "Project has no local path".to_string())?;
+
+    // Write .gitignore file if content is provided
+    if !gitignore_content.is_empty() {
+        let gitignore_path = Path::new(local_path).join(".gitignore");
+        fs::write(&gitignore_path, gitignore_content)
+            .map_err(|e| format!("Failed to write .gitignore: {}", e))?;
+    }
+
+    // Update project template
+    project.template = Some(template_id);
+    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
+
+    project_cache::save_project(project.clone())
+        .map_err(|e| format!("Failed to save project: {}", e))?;
+
+    Ok(project)
+}
+
+/// Increment project statistics
+#[tauri::command]
+pub async fn increment_project_stats(
+    project_id: String,
+    stat_type: String,
+) -> Result<Project, String> {
+    use crate::models::ProjectStatistics;
+
+    let projects = project_cache::load_projects()
+        .map_err(|e| format!("Failed to load projects: {}", e))?;
+
+    let mut project = projects
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+
+    // Initialize statistics if not present
+    if project.statistics.is_none() {
+        project.statistics = Some(ProjectStatistics {
+            total_syncs: 0,
+            total_commits: 0,
+            total_pushes: 0,
+            total_merges: 0,
+            total_pulls: 0,
+            last_sync_date: None,
+            last_commit_date: None,
+        });
+    }
+
+    if let Some(ref mut stats) = project.statistics {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        match stat_type.as_str() {
+            "sync" => {
+                stats.total_syncs += 1;
+                stats.last_sync_date = Some(now.clone());
+            }
+            "commit" => {
+                stats.total_commits += 1;
+                stats.last_commit_date = Some(now.clone());
+            }
+            "push" => {
+                stats.total_pushes += 1;
+            }
+            "merge" => {
+                stats.total_merges += 1;
+            }
+            "pull" => {
+                stats.total_pulls += 1;
+            }
+            _ => return Err(format!("Unknown stat type: {}", stat_type)),
+        }
+    }
+
+    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
+
+    project_cache::save_project(project.clone())
+        .map_err(|e| format!("Failed to save project: {}", e))?;
+
+    Ok(project)
 }

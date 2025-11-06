@@ -26,6 +26,11 @@ import {
   RotateCw,
   ChevronDown,
   ChevronUp,
+  Star,
+  Archive,
+  Edit2,
+  Save,
+  X,
 } from 'lucide-react';
 
 interface ProjectCardProps {
@@ -41,8 +46,12 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const [showLinkGitHubModal, setShowLinkGitHubModal] = useState(false);
   const [showCreateRepoModal, setShowCreateRepoModal] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [descriptionText, setDescriptionText] = useState(project.description || '');
 
   const isSelected = selectedProjectIds.has(project.id);
+  const isFavorite = project.favorite || false;
+  const isArchived = project.archived || false;
 
   // Show details button only when both GitHub and Local are configured
   const canShowDetails = project.githubUrl && project.localPath;
@@ -94,6 +103,51 @@ export function ProjectCard({ project }: ProjectCardProps) {
       console.error('Failed to delete project:', error);
       // Error toast is already shown by the store
     }
+  };
+
+  const handleToggleFavorite = async () => {
+    try {
+      const updatedProject = await invoke<Project>('toggle_project_favorite', {
+        projectId: project.id,
+      });
+      updateProject(updatedProject);
+      toast.success(updatedProject.favorite ? 'Added to favorites' : 'Removed from favorites', { duration: 2000 });
+    } catch (error: any) {
+      toast.error(`Failed to update favorite: ${error}`);
+    }
+  };
+
+  const handleToggleArchive = async () => {
+    try {
+      const updatedProject = await invoke<Project>('toggle_project_archived', {
+        projectId: project.id,
+      });
+      updateProject(updatedProject);
+      toast.success(updatedProject.archived ? 'Project archived' : 'Project restored', { duration: 2000 });
+    } catch (error: any) {
+      toast.error(`Failed to update archive status: ${error}`);
+    }
+  };
+
+  const handleSaveDescription = async () => {
+    try {
+      const updatedProject = await invoke<Project>('update_project_metadata', {
+        projectId: project.id,
+        description: descriptionText || null,
+        favorite: null,
+        archived: null,
+      });
+      updateProject(updatedProject);
+      setIsEditingDescription(false);
+      toast.success('Description saved', { duration: 2000 });
+    } catch (error: any) {
+      toast.error(`Failed to save description: ${error}`);
+    }
+  };
+
+  const handleCancelDescription = () => {
+    setDescriptionText(project.description || '');
+    setIsEditingDescription(false);
   };
 
   const handleOpenVSCode = async () => {
@@ -494,6 +548,19 @@ export function ProjectCard({ project }: ProjectCardProps) {
                 Details
               </button>
             )}
+
+            <button
+              onClick={handleToggleArchive}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                isArchived
+                  ? 'text-orange-700 dark:text-orange-300 bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-700'
+                  : 'text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+              }`}
+              title={isArchived ? 'Restore from archive' : 'Archive project'}
+            >
+              <Archive className="w-4 h-4" />
+              {isArchived ? 'Restore' : 'Archive'}
+            </button>
           </div>
         );
 
@@ -517,15 +584,32 @@ export function ProjectCard({ project }: ProjectCardProps) {
           />
           {getStatusIcon()}
           <div>
-            <h3 className="font-semibold text-lg text-gray-900 dark:text-white">{project.name}</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold text-lg text-gray-900 dark:text-white">{project.name}</h3>
+              {isFavorite && <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />}
+              {isArchived && <Archive className="w-4 h-4 text-gray-400 dark:text-gray-500" />}
+            </div>
             <p className="text-sm text-gray-500 dark:text-gray-400">{getStatusText()}</p>
           </div>
+          {/* Favorite button */}
+          <button
+            onClick={handleToggleFavorite}
+            className={`p-1.5 rounded-lg transition-colors ${
+              isFavorite
+                ? 'text-yellow-500 hover:text-yellow-600 bg-yellow-50 dark:bg-yellow-900/20'
+                : 'text-gray-400 dark:text-gray-500 hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20'
+            }`}
+            title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+          >
+            <Star className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
+          </button>
+
           {/* Refresh button - only show if both GitHub and Local are configured */}
           {project.githubUrl && project.localPath && (
             <button
               onClick={handleRefreshStatus}
               disabled={isRefreshing}
-              className="ml-2 p-1.5 text-gray-400 dark:text-gray-500 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+              className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
               title="Refresh status"
             >
               <RotateCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -540,6 +624,61 @@ export function ProjectCard({ project }: ProjectCardProps) {
           <Trash2 className="w-5 h-5" />
         </button>
       </div>
+
+      {/* Description Section */}
+      {(project.description || isEditingDescription) && (
+        <div className="mb-4">
+          {isEditingDescription ? (
+            <div className="space-y-2">
+              <textarea
+                value={descriptionText}
+                onChange={(e) => setDescriptionText(e.target.value)}
+                placeholder="Add a description for this project..."
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm resize-none"
+                rows={3}
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSaveDescription}
+                  className="flex items-center gap-1 px-3 py-1 text-sm bg-teal-600 dark:bg-teal-700 text-white rounded-lg hover:bg-teal-700 dark:hover:bg-teal-800 transition-colors"
+                >
+                  <Save className="w-3 h-3" />
+                  Save
+                </button>
+                <button
+                  onClick={handleCancelDescription}
+                  className="flex items-center gap-1 px-3 py-1 text-sm bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+              <p className="flex-1">{project.description}</p>
+              <button
+                onClick={() => setIsEditingDescription(true)}
+                className="p-1 text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 transition-colors"
+                title="Edit description"
+              >
+                <Edit2 className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Add Description Button */}
+      {!project.description && !isEditingDescription && (
+        <button
+          onClick={() => setIsEditingDescription(true)}
+          className="mb-4 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 transition-colors"
+        >
+          <Edit2 className="w-4 h-4" />
+          Add description
+        </button>
+      )}
 
       {/* Project Info */}
       <div className="space-y-2 mb-4 text-sm">

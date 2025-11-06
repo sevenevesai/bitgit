@@ -22,6 +22,14 @@ export interface Project {
   // Timestamps
   createdAt: string;
   lastSynced: string | null;
+
+  // Priority 3: Project Management Features
+  description?: string | null;          // Project notes/description
+  archived?: boolean;                   // Archive status (hide without deleting)
+  favorite?: boolean;                   // Pinned/favorited projects
+  lastActivity?: string | null;         // Last activity timestamp
+  statistics?: ProjectStatistics | null; // Usage statistics
+  template?: string | null;             // Template used to initialize
 }
 
 // Overall project configuration state
@@ -153,3 +161,169 @@ export interface StashInfo {
 export interface TagInfo {
   name: string;
 }
+
+// Project Management Types (Priority 3)
+export interface ProjectStatistics {
+  totalSyncs: number;
+  totalCommits: number;
+  totalPushes: number;
+  totalMerges: number;
+  totalPulls: number;
+  lastSyncDate: string | null;
+  lastCommitDate: string | null;
+}
+
+export interface ProjectTemplate {
+  id: string;
+  name: string;
+  description: string;
+  gitignore: string;
+  readme?: string;
+  additionalFiles?: { path: string; content: string }[];
+}
+
+// Predefined templates
+export const PROJECT_TEMPLATES: ProjectTemplate[] = [
+  {
+    id: 'blank',
+    name: 'Blank',
+    description: 'Empty project with no templates',
+    gitignore: '',
+  },
+  {
+    id: 'node',
+    name: 'Node.js',
+    description: 'Node.js project with common ignores',
+    gitignore: `# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build
+dist/
+build/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store`,
+  },
+  {
+    id: 'python',
+    name: 'Python',
+    description: 'Python project with virtual env ignores',
+    gitignore: `# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/`,
+  },
+  {
+    id: 'react',
+    name: 'React',
+    description: 'React/Vite project setup',
+    gitignore: `# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Production
+/build
+/dist
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Testing
+coverage/`,
+  },
+  {
+    id: 'rust',
+    name: 'Rust',
+    description: 'Rust project with Cargo ignores',
+    gitignore: `# Cargo
+/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# OS
+Thumbs.db`,
+  },
+  {
+    id: 'java',
+    name: 'Java',
+    description: 'Java/Maven/Gradle project',
+    gitignore: `# Compiled class files
+*.class
+
+# Package Files
+*.jar
+*.war
+*.ear
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+
+# Gradle
+.gradle/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+.DS_Store`,
+  },
+];

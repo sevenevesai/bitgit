@@ -24,6 +24,20 @@ pub struct Project {
     // Timestamps
     pub created_at: String,
     pub last_synced: Option<String>,
+
+    // Priority 3: Project Management Features
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub favorite: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub statistics: Option<ProjectStatistics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 // Overall project configuration state
@@ -94,4 +108,17 @@ pub struct SyncDetails {
     pub merged: Option<Vec<String>>,
     pub deleted: Option<Vec<String>>,
     pub errors: Option<Vec<String>>,
+}
+
+// Project Management (Priority 3)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectStatistics {
+    pub total_syncs: u32,
+    pub total_commits: u32,
+    pub total_pushes: u32,
+    pub total_merges: u32,
+    pub total_pulls: u32,
+    pub last_sync_date: Option<String>,
+    pub last_commit_date: Option<String>,
 }

@@ -398,7 +398,7 @@ function ChangesTab({ diffs }: { diffs: DiffInfo[] }) {
     <div className="space-y-4">
       {diffs.map((diff) => (
         <div key={diff.fileName} className="rounded-lg border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 overflow-hidden">
-          <div className="px-4 py-2 bg-gray-100 dark:bg-gray-750 border-b border-gray-200 dark:border-gray-700">
+          <div className="px-4 py-2 bg-gray-100 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-700">
             <span className="font-mono text-sm text-gray-900 dark:text-white">{diff.fileName}</span>
           </div>
           <div className="p-2 font-mono text-xs max-h-60 overflow-y-auto">
