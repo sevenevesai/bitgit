@@ -1,0 +1,21 @@
+{
+  "name": "bitgit-git-service",
+  "version": "0.1.0",
+  "description": "Git operations service for BitGit",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "simple-git": "^3.21.0",
+    "@octokit/rest": "^20.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.5",
+    "typescript": "^5.3.3",
+    "tsx": "^4.7.0"
+  }
+}
