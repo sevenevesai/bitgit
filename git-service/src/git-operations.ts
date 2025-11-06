@@ -10,7 +10,28 @@ export class GitOperations {
     this.git = simpleGit(repoPath);
   }
 
+  /**
+   * Ensures the directory is initialized as a git repository.
+   * If .git doesn't exist, initializes it with main branch.
+   * Returns true if initialization was needed, false if already a repo.
+   */
+  async ensureGitRepo(): Promise<boolean> {
+    try {
+      // Try to get status - if this succeeds, it's already a git repo
+      await this.git.status();
+      return false; // Already initialized
+    } catch (error) {
+      // Not a git repo, initialize it
+      console.error(`[Git] Directory ${this.repoPath} is not a git repository, initializing...`);
+      await this.git.init(['-b', 'main']);
+      console.error(`[Git] Initialized git repository at ${this.repoPath}`);
+      return true; // Just initialized
+    }
+  }
+
   async checkStatus(): Promise<StatusInfo> {
+    // Ensure this is a git repository before checking status
+    await this.ensureGitRepo();
     try {
       // Try to fetch and prune, but don't fail if it doesn't work
       try {
@@ -59,6 +80,9 @@ export class GitOperations {
   }
 
   async pushLocal(): Promise<{ committed: number; pushed: boolean }> {
+    // Ensure this is a git repository
+    await this.ensureGitRepo();
+
     try {
       const status = await this.git.status();
       const currentBranch = status.current || 'main';
@@ -95,6 +119,9 @@ export class GitOperations {
   }
 
   async mergeBranches(branches: string[]): Promise<string[]> {
+    // Ensure this is a git repository
+    await this.ensureGitRepo();
+
     const merged: string[] = [];
 
     // Get current branch and ensure we're on main/master before starting
@@ -168,6 +195,9 @@ export class GitOperations {
   }
 
   async fullSync(): Promise<SyncResult> {
+    // Ensure this is a git repository
+    await this.ensureGitRepo();
+
     const result: SyncResult = {
       success: true,
       message: 'Full sync completed',
