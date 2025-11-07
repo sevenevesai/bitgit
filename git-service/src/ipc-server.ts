@@ -96,30 +96,30 @@ export class IPCServer {
         }
 
         case 'pushLocal': {
-          const { repoPath } = command.payload;
+          const { repoPath, remoteUrl } = command.payload;
           const git = new GitOperations(repoPath);
-          const result = await git.pushLocal();
+          const result = await git.pushLocal(remoteUrl);
           return { id: command.id, success: true, data: result };
         }
 
         case 'mergeBranches': {
-          const { repoPath, branches } = command.payload;
+          const { repoPath, branches, remoteUrl } = command.payload;
           const git = new GitOperations(repoPath);
-          const merged = await git.mergeBranches(branches);
+          const merged = await git.mergeBranches(branches, remoteUrl);
           return { id: command.id, success: true, data: { merged } };
         }
 
         case 'pullBranches': {
-          const { repoPath, branches } = command.payload;
+          const { repoPath, branches, remoteUrl } = command.payload;
           const git = new GitOperations(repoPath);
-          const pulled = await git.pullBranches(branches);
+          const pulled = await git.pullBranches(branches, remoteUrl);
           return { id: command.id, success: true, data: { pulled } };
         }
 
         case 'fullSync': {
-          const { repoPath } = command.payload;
+          const { repoPath, remoteUrl } = command.payload;
           const git = new GitOperations(repoPath);
-          const result = await git.fullSync();
+          const result = await git.fullSync(remoteUrl);
           return { id: command.id, success: true, data: result };
         }
 

@@ -129,35 +129,47 @@ impl GitService {
         Ok(status)
     }
 
-    pub fn push_local(&self, repo_path: &str) -> Result<PushResult> {
-        let payload = serde_json::json!({ "repoPath": repo_path });
+    pub fn push_local(&self, repo_path: &str, remote_url: Option<&str>) -> Result<PushResult> {
+        let mut payload = serde_json::json!({ "repoPath": repo_path });
+        if let Some(url) = remote_url {
+            payload["remoteUrl"] = serde_json::json!(url);
+        }
         let result = self.execute("pushLocal", payload)?;
         let push_result: PushResult = serde_json::from_value(result)?;
         Ok(push_result)
     }
 
-    pub fn merge_branches(&self, repo_path: &str, branches: &[String]) -> Result<Vec<String>> {
-        let payload = serde_json::json!({
+    pub fn merge_branches(&self, repo_path: &str, branches: &[String], remote_url: Option<&str>) -> Result<Vec<String>> {
+        let mut payload = serde_json::json!({
             "repoPath": repo_path,
             "branches": branches
         });
+        if let Some(url) = remote_url {
+            payload["remoteUrl"] = serde_json::json!(url);
+        }
         let result = self.execute("mergeBranches", payload)?;
         let merged: MergeResult = serde_json::from_value(result)?;
         Ok(merged.merged)
     }
 
-    pub fn pull_branches(&self, repo_path: &str, branches: &[String]) -> Result<Vec<String>> {
-        let payload = serde_json::json!({
+    pub fn pull_branches(&self, repo_path: &str, branches: &[String], remote_url: Option<&str>) -> Result<Vec<String>> {
+        let mut payload = serde_json::json!({
             "repoPath": repo_path,
             "branches": branches
         });
+        if let Some(url) = remote_url {
+            payload["remoteUrl"] = serde_json::json!(url);
+        }
         let result = self.execute("pullBranches", payload)?;
         let pulled: PullResult = serde_json::from_value(result)?;
         Ok(pulled.pulled)
     }
 
-    pub fn full_sync(&self, repo_path: &str) -> Result<FullSyncResult> {
-        let payload = serde_json::json!({ "repoPath": repo_path });
+    pub fn full_sync(&self, repo_path: &str, remote_url: Option<&str>) -> Result<FullSyncResult> {
+        let mut payload = serde_json::json!({ "repoPath": repo_path });
+        if let Some(url) = remote_url {
+            payload["remoteUrl"] = serde_json::json!(url);
+        }
         let result = self.execute("fullSync", payload)?;
         let sync_result: FullSyncResult = serde_json::from_value(result)?;
         Ok(sync_result)

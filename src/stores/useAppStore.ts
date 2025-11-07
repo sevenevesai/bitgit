@@ -332,8 +332,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleTheme: () => {
     set((state) => {
       const currentTheme = state.settings.ui.theme;
-      // Simple toggle between light and dark only
-      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+      // Determine actual current theme (resolve 'system' to actual preference)
+      let actualCurrentTheme = currentTheme;
+      if (currentTheme === 'system') {
+        actualCurrentTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+
+      // Toggle to opposite theme
+      const newTheme = actualCurrentTheme === 'dark' ? 'light' : 'dark';
 
       // Apply theme to document
       if (newTheme === 'dark') {

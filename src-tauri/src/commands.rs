@@ -90,9 +90,12 @@ pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResul
 
     let service = get_git_service()?;
 
+    // Get GitHub URL as Option<&str> for passing to git service
+    let remote_url = repo.github_url.as_deref();
+
     match action {
         SyncAction::PushLocal => {
-            let result = service.push_local(local_path)
+            let result = service.push_local(local_path, remote_url)
                 .map_err(|e| format!("Push failed: {}", e))?;
 
             let new_status = service.check_status(local_path)
@@ -111,7 +114,7 @@ pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResul
             })
         }
         SyncAction::MergeBranches { branches } => {
-            let merged = service.merge_branches(local_path, &branches)
+            let merged = service.merge_branches(local_path, &branches, remote_url)
                 .map_err(|e| format!("Merge failed: {}", e))?;
 
             Ok(SyncResult {
@@ -127,7 +130,7 @@ pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResul
             })
         }
         SyncAction::PullBranches { branches } => {
-            let pulled = service.pull_branches(local_path, &branches)
+            let pulled = service.pull_branches(local_path, &branches, remote_url)
                 .map_err(|e| format!("Pull failed: {}", e))?;
 
             Ok(SyncResult {
@@ -143,7 +146,7 @@ pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResul
             })
         }
         SyncAction::FullSync => {
-            let result = service.full_sync(local_path)
+            let result = service.full_sync(local_path, remote_url)
                 .map_err(|e| format!("Full sync failed: {}", e))?;
 
             Ok(SyncResult {
@@ -639,9 +642,12 @@ pub async fn sync_project(project_id: String, action: SyncAction) -> Result<Sync
 
     let service = get_git_service()?;
 
+    // Get GitHub URL as Option<&str> for passing to git service
+    let remote_url = project.github_url.as_deref();
+
     match action {
         SyncAction::PushLocal => {
-            let result = service.push_local(local_path)
+            let result = service.push_local(local_path, remote_url)
                 .map_err(|e| format!("Push failed: {}", e))?;
 
             Ok(SyncResult {
@@ -657,7 +663,7 @@ pub async fn sync_project(project_id: String, action: SyncAction) -> Result<Sync
             })
         }
         SyncAction::MergeBranches { branches } => {
-            let merged = service.merge_branches(local_path, &branches)
+            let merged = service.merge_branches(local_path, &branches, remote_url)
                 .map_err(|e| format!("Merge failed: {}", e))?;
 
             Ok(SyncResult {
@@ -673,7 +679,7 @@ pub async fn sync_project(project_id: String, action: SyncAction) -> Result<Sync
             })
         }
         SyncAction::PullBranches { branches } => {
-            let pulled = service.pull_branches(local_path, &branches)
+            let pulled = service.pull_branches(local_path, &branches, remote_url)
                 .map_err(|e| format!("Pull failed: {}", e))?;
 
             Ok(SyncResult {
@@ -689,7 +695,7 @@ pub async fn sync_project(project_id: String, action: SyncAction) -> Result<Sync
             })
         }
         SyncAction::FullSync => {
-            let result = service.full_sync(local_path)
+            let result = service.full_sync(local_path, remote_url)
                 .map_err(|e| format!("Full sync failed: {}", e))?;
 
             Ok(SyncResult {

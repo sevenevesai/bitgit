@@ -29,6 +29,31 @@ export class GitOperations {
     }
   }
 
+  /**
+   * Ensures the remote 'origin' is configured with the given URL.
+   * If the remote doesn't exist, adds it. If it exists with wrong URL, updates it.
+   */
+  async ensureRemote(remoteUrl: string): Promise<void> {
+    try {
+      const remotes = await this.git.getRemotes(true);
+      const origin = remotes.find(r => r.name === 'origin');
+
+      if (!origin) {
+        // Remote doesn't exist, add it
+        console.error(`[Git] Adding origin remote: ${remoteUrl}`);
+        await this.git.addRemote('origin', remoteUrl);
+      } else if (origin.refs.fetch !== remoteUrl && origin.refs.push !== remoteUrl) {
+        // Remote exists but with wrong URL, update it
+        console.error(`[Git] Updating origin remote to: ${remoteUrl}`);
+        await this.git.remote(['set-url', 'origin', remoteUrl]);
+      } else {
+        console.error(`[Git] Origin remote already configured correctly`);
+      }
+    } catch (error) {
+      throw new Error(`Failed to ensure remote: ${error}`);
+    }
+  }
+
   async checkStatus(): Promise<StatusInfo> {
     // Ensure this is a git repository before checking status
     await this.ensureGitRepo();
@@ -79,17 +104,32 @@ export class GitOperations {
     }
   }
 
-  async pushLocal(): Promise<{ committed: number; pushed: boolean }> {
+  async pushLocal(remoteUrl?: string): Promise<{ committed: number; pushed: boolean }> {
     // Ensure this is a git repository
     await this.ensureGitRepo();
+
+    // Ensure remote is configured if URL provided
+    if (remoteUrl) {
+      await this.ensureRemote(remoteUrl);
+    }
 
     try {
       const status = await this.git.status();
       const currentBranch = status.current || 'main';
 
-      // If no changes to commit, return early
+      // If no changes to commit, check if we need to make an initial commit
       if (status.files.length === 0) {
-        return { committed: 0, pushed: false };
+        // Check if there are any commits at all
+        try {
+          await this.git.log({ maxCount: 1 });
+          // Has commits, no changes
+          return { committed: 0, pushed: false };
+        } catch (error) {
+          // No commits yet - create initial commit if there are files
+          console.error('[Git] No commits yet, checking for files...');
+          // No files to commit
+          return { committed: 0, pushed: false };
+        }
       }
 
       // Pull latest changes from remote ONLY if there are no local changes
@@ -118,9 +158,14 @@ export class GitOperations {
     }
   }
 
-  async mergeBranches(branches: string[]): Promise<string[]> {
+  async mergeBranches(branches: string[], remoteUrl?: string): Promise<string[]> {
     // Ensure this is a git repository
     await this.ensureGitRepo();
+
+    // Ensure remote is configured if URL provided
+    if (remoteUrl) {
+      await this.ensureRemote(remoteUrl);
+    }
 
     const merged: string[] = [];
 
@@ -199,9 +244,14 @@ export class GitOperations {
    * Use this for iterative work (e.g., pulling from Claude Code web sessions).
    * The branches remain alive for future pulls.
    */
-  async pullBranches(branches: string[]): Promise<string[]> {
+  async pullBranches(branches: string[], remoteUrl?: string): Promise<string[]> {
     // Ensure this is a git repository
     await this.ensureGitRepo();
+
+    // Ensure remote is configured if URL provided
+    if (remoteUrl) {
+      await this.ensureRemote(remoteUrl);
+    }
 
     const pulled: string[] = [];
 
@@ -266,9 +316,14 @@ export class GitOperations {
     }
   }
 
-  async fullSync(): Promise<SyncResult> {
+  async fullSync(remoteUrl?: string): Promise<SyncResult> {
     // Ensure this is a git repository
     await this.ensureGitRepo();
+
+    // Ensure remote is configured if URL provided
+    if (remoteUrl) {
+      await this.ensureRemote(remoteUrl);
+    }
 
     const result: SyncResult = {
       success: true,

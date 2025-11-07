@@ -35,7 +35,7 @@ export function Dashboard() {
 
   // Check actual dark mode state from document class, not just settings
   const isDarkMode = document.documentElement.classList.contains('dark');
-  const ThemeIcon = isDarkMode ? Sun : Moon;
+  const ThemeIcon = isDarkMode ? Moon : Sun;
   const hasSelection = selectedProjectIds.size > 0;
 
   // Filter and sort projects
