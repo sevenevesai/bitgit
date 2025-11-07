@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/tauri';
 import toast from 'react-hot-toast';
-import { Project, SyncAction, SyncResult, AppSettings } from '../types';
+import { Project, SyncAction, SyncResult, AppSettings, QueuedOperation, RetryConfig, AnalyticsData } from '../types';
 
 interface AppState {
   // State
@@ -10,13 +10,21 @@ interface AppState {
   isLoading: boolean;
   selectedProjectIds: Set<string>;
 
+  // Priority 6: Performance & Reliability State
+  operationQueue: QueuedOperation[];
+  backgroundCheckInterval: number | null;
+
+  // Priority 1: Analytics State
+  analytics: AnalyticsData | null;
+  isLoadingAnalytics: boolean;
+
   // Project actions
   loadProjects: () => Promise<void>;
   createProject: (name: string, githubOwner?: string, githubRepo?: string, githubUrl?: string, localPath?: string) => Promise<Project>;
   updateProject: (project: Project) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
   refreshProject: (id: string) => Promise<void>;
-  syncProject: (id: string, action: SyncAction) => Promise<void>;
+  syncProject: (id: string, action: SyncAction, retry?: RetryConfig) => Promise<void>;
 
   // Legacy aliases for compatibility
   repositories: Project[];
@@ -36,6 +44,20 @@ interface AppState {
 
   // Batch operations
   syncSelected: (action: SyncAction) => Promise<void>;
+
+  // Priority 6: Performance & Reliability Actions
+  startBackgroundChecking: () => void;
+  stopBackgroundChecking: () => void;
+  refreshAllProjects: () => Promise<void>;
+  queueOperation: (projectId: string, action: SyncAction) => void;
+  cancelOperation: (operationId: string) => void;
+  retryOperation: (operationId: string) => Promise<void>;
+  clearCompletedOperations: () => void;
+  syncSelectedParallel: (action: SyncAction, maxConcurrent?: number) => Promise<void>;
+
+  // Priority 1: Analytics Actions
+  loadAnalytics: () => Promise<void>;
+  refreshAnalytics: () => Promise<void>;
 }
 
 const defaultSettings: AppSettings = {
@@ -50,9 +72,61 @@ const defaultSettings: AppSettings = {
   },
   ui: {
     theme: 'system',
-    refreshInterval: 0,
+    refreshInterval: 5 * 60 * 1000, // 5 minutes default
     showNotifications: true,
   },
+};
+
+// Helper function for retry with exponential backoff
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const retryWithBackoff = async <T>(
+  fn: () => Promise<T>,
+  config: RetryConfig = { maxAttempts: 3, delayMs: 1000, backoffMultiplier: 2 }
+): Promise<T> => {
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < config.maxAttempts) {
+        const delayTime = config.delayMs * Math.pow(config.backoffMultiplier, attempt - 1);
+        console.log(`Attempt ${attempt} failed, retrying in ${delayTime}ms...`);
+        await delay(delayTime);
+      }
+    }
+  }
+
+  throw lastError;
+};
+
+// Helper function for parallel execution with concurrency limit
+const parallelLimit = async <T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<any>
+): Promise<PromiseSettledResult<any>[]> => {
+  const results: PromiseSettledResult<any>[] = [];
+  const executing: Promise<any>[] = [];
+
+  for (const item of items) {
+    const promise = fn(item).then(
+      (value) => ({ status: 'fulfilled' as const, value }),
+      (reason) => ({ status: 'rejected' as const, reason })
+    );
+
+    results.push(promise as any);
+    executing.push(promise);
+
+    if (executing.length >= limit) {
+      await Promise.race(executing);
+      executing.splice(executing.findIndex(p => results.includes(p as any)), 1);
+    }
+  }
+
+  return Promise.all(results);
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -61,6 +135,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   settings: defaultSettings,
   isLoading: false,
   selectedProjectIds: new Set(),
+  operationQueue: [],
+  backgroundCheckInterval: null,
+  analytics: null,
+  isLoadingAnalytics: false,
 
   // Load projects from cache
   loadProjects: async () => {
@@ -180,28 +258,35 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  // Sync a project with given action
-  syncProject: async (id: string, action: SyncAction) => {
+  // Sync a project with given action (with optional retry)
+  syncProject: async (id: string, action: SyncAction, retryConfig?: RetryConfig) => {
     const project = get().projects.find((p) => p.id === id);
     if (!project) return;
 
     const actionName = action.type.replace('_', ' ');
     const loadingToast = toast.loading(`${actionName} in progress...`);
 
-    try {
+    const executSync = async () => {
       const result = await invoke<SyncResult>('sync_project', { projectId: id, action });
-
-      if (result.success) {
-        toast.success(`${actionName} completed successfully`, { id: loadingToast });
-
-        // Refresh the project status
-        await get().refreshProject(id);
-      } else {
-        toast.error(`${actionName} failed: ${result.message}`, { id: loadingToast });
+      if (!result.success) {
+        throw new Error(result.message);
       }
+      return result;
+    };
+
+    try {
+      const result = retryConfig
+        ? await retryWithBackoff(executSync, retryConfig)
+        : await executSync();
+
+      toast.success(`${actionName} completed successfully`, { id: loadingToast });
+
+      // Refresh the project status
+      await get().refreshProject(id);
     } catch (error: any) {
       console.error('Sync failed:', error);
-      toast.error(`${actionName} failed: ${error}`, { id: loadingToast });
+      toast.error(`${actionName} failed: ${error.message || error}`, { id: loadingToast });
+      throw error;
     }
   },
 
@@ -284,7 +369,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  // Batch sync selected projects
+  // Batch sync selected projects (sequential)
   syncSelected: async (action: SyncAction) => {
     const selectedIds = Array.from(get().selectedProjectIds);
     if (selectedIds.length === 0) {
@@ -313,6 +398,219 @@ export const useAppStore = create<AppState>((set, get) => ({
       toast.error(`All ${failed} projects failed to sync`, { id: loadingToastId });
     } else {
       toast.error(`Synced ${successful} of ${selectedIds.length} projects (${failed} failed)`, { id: loadingToastId });
+    }
+  },
+
+  // ===== Priority 6: Performance & Reliability =====
+
+  // Start background status checking
+  startBackgroundChecking: () => {
+    const interval = get().settings.ui.refreshInterval;
+    if (interval <= 0) return;
+
+    // Clear existing interval if any
+    get().stopBackgroundChecking();
+
+    const intervalId = window.setInterval(() => {
+      console.log('[Background] Running scheduled status check...');
+      get().refreshAllProjects();
+    }, interval);
+
+    set({ backgroundCheckInterval: intervalId });
+    console.log(`[Background] Status checking started (every ${interval / 1000}s)`);
+  },
+
+  // Stop background status checking
+  stopBackgroundChecking: () => {
+    const intervalId = get().backgroundCheckInterval;
+    if (intervalId !== null) {
+      window.clearInterval(intervalId);
+      set({ backgroundCheckInterval: null });
+      console.log('[Background] Status checking stopped');
+    }
+  },
+
+  // Refresh all projects in parallel
+  refreshAllProjects: async () => {
+    const projects = get().projects.filter(p => p.githubUrl && p.localPath);
+    if (projects.length === 0) return;
+
+    console.log(`[Background] Refreshing ${projects.length} projects...`);
+
+    const results = await parallelLimit(
+      projects,
+      5, // Max 5 concurrent refreshes
+      async (project) => {
+        try {
+          await get().refreshProject(project.id);
+        } catch (error) {
+          console.error(`[Background] Failed to refresh ${project.name}:`, error);
+        }
+      }
+    );
+
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    console.log(`[Background] Refreshed ${successful}/${projects.length} projects`);
+  },
+
+  // Sync selected projects in parallel with concurrency limit
+  syncSelectedParallel: async (action: SyncAction, maxConcurrent = 3) => {
+    const selectedIds = Array.from(get().selectedProjectIds);
+    if (selectedIds.length === 0) {
+      toast.error('No projects selected');
+      return;
+    }
+
+    const loadingToastId = toast.loading(`Starting parallel sync of ${selectedIds.length} projects...`);
+
+    let completed = 0;
+    const results = await parallelLimit(
+      selectedIds,
+      maxConcurrent,
+      async (id) => {
+        try {
+          await get().syncProject(id, action, { maxAttempts: 2, delayMs: 1000, backoffMultiplier: 2 });
+          completed++;
+          toast.loading(`Syncing projects... (${completed}/${selectedIds.length})`, { id: loadingToastId });
+        } catch (error) {
+          console.error(`Failed to sync project ${id}:`, error);
+          throw error;
+        }
+      }
+    );
+
+    const successful = results.filter((r) => r.status === 'fulfilled').length;
+    const failed = results.length - successful;
+
+    if (failed === 0) {
+      toast.success(`Successfully synced all ${successful} projects in parallel!`, { id: loadingToastId });
+    } else if (successful === 0) {
+      toast.error(`All ${failed} projects failed to sync`, { id: loadingToastId });
+    } else {
+      toast.error(`Synced ${successful} of ${selectedIds.length} projects (${failed} failed)`, { id: loadingToastId });
+    }
+  },
+
+  // Queue an operation
+  queueOperation: (projectId: string, action: SyncAction) => {
+    const project = get().projects.find(p => p.id === projectId);
+    if (!project) return;
+
+    const operation: QueuedOperation = {
+      id: `${Date.now()}-${Math.random()}`,
+      projectId,
+      projectName: project.name,
+      action,
+      status: 'pending',
+      attempts: 0,
+      maxAttempts: 3,
+    };
+
+    set((state) => ({
+      operationQueue: [...state.operationQueue, operation],
+    }));
+
+    toast.success(`Operation queued for ${project.name}`);
+  },
+
+  // Cancel an operation
+  cancelOperation: (operationId: string) => {
+    set((state) => ({
+      operationQueue: state.operationQueue.map(op =>
+        op.id === operationId && op.status === 'pending'
+          ? { ...op, status: 'cancelled' as const }
+          : op
+      ),
+    }));
+    toast.info('Operation cancelled');
+  },
+
+  // Retry a failed operation
+  retryOperation: async (operationId: string) => {
+    const operation = get().operationQueue.find(op => op.id === operationId);
+    if (!operation || operation.status !== 'failed') return;
+
+    // Update operation status to pending
+    set((state) => ({
+      operationQueue: state.operationQueue.map(op =>
+        op.id === operationId
+          ? { ...op, status: 'pending' as const, error: undefined }
+          : op
+      ),
+    }));
+
+    // Execute the operation
+    try {
+      set((state) => ({
+        operationQueue: state.operationQueue.map(op =>
+          op.id === operationId
+            ? { ...op, status: 'running' as const, startedAt: new Date().toISOString(), attempts: op.attempts + 1 }
+            : op
+        ),
+      }));
+
+      await get().syncProject(operation.projectId, operation.action);
+
+      set((state) => ({
+        operationQueue: state.operationQueue.map(op =>
+          op.id === operationId
+            ? { ...op, status: 'completed' as const, completedAt: new Date().toISOString() }
+            : op
+        ),
+      }));
+
+      toast.success(`Retry successful for ${operation.projectName}`);
+    } catch (error: any) {
+      set((state) => ({
+        operationQueue: state.operationQueue.map(op =>
+          op.id === operationId
+            ? { ...op, status: 'failed' as const, error: error.message || String(error) }
+            : op
+        ),
+      }));
+
+      toast.error(`Retry failed for ${operation.projectName}`);
+    }
+  },
+
+  // Clear completed operations
+  clearCompletedOperations: () => {
+    set((state) => ({
+      operationQueue: state.operationQueue.filter(
+        op => op.status !== 'completed' && op.status !== 'cancelled'
+      ),
+    }));
+  },
+
+  // ===== Priority 1: Analytics =====
+
+  // Load analytics data
+  loadAnalytics: async () => {
+    set({ isLoadingAnalytics: true });
+    try {
+      console.log('[Store] Loading analytics...');
+      const analytics = await invoke<AnalyticsData>('generate_analytics');
+      console.log('[Store] Analytics loaded:', analytics);
+      set({ analytics, isLoadingAnalytics: false });
+    } catch (error) {
+      console.error('[Store] Failed to load analytics:', error);
+      toast.error('Failed to load analytics');
+      set({ isLoadingAnalytics: false });
+    }
+  },
+
+  // Refresh analytics (same as load, but with user feedback)
+  refreshAnalytics: async () => {
+    const loadingToast = toast.loading('Refreshing analytics...');
+    set({ isLoadingAnalytics: true });
+    try {
+      const analytics = await invoke<AnalyticsData>('generate_analytics');
+      set({ analytics, isLoadingAnalytics: false });
+      toast.success('Analytics refreshed', { id: loadingToast });
+    } catch (error) {
+      console.error('[Store] Failed to refresh analytics:', error);
+      toast.error('Failed to refresh analytics', { id: loadingToast });
+      set({ isLoadingAnalytics: false });
     }
   },
 }));

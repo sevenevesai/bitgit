@@ -1,5 +1,5 @@
 use crate::credentials::CredentialManager;
-use crate::git_service::{GitService, StatusInfo as GitStatusInfo, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo, DiffChange};
+use crate::git_service::{GitService, StatusInfo as GitStatusInfo, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo, DiffChange, AnalyticsCommit, BranchStaleness, AggregateStats};
 use crate::models::*;
 use crate::project_cache;
 use crate::scanner::RepositoryScanner;
@@ -1014,4 +1014,377 @@ pub async fn increment_project_stats(
         .map_err(|e| format!("Failed to save project: {}", e))?;
 
     Ok(project)
+}
+
+// ==================== ANALYTICS FEATURES ====================
+
+/// Simplified analytics data structures for Tauri commands
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AnalyticsData {
+    pub overview: DashboardOverview,
+    pub timeline: Vec<ActivityEntry>,
+    pub health: Vec<HealthIndicator>,
+    pub heatmap: ContributionHeatmap,
+    pub last_updated: String,
+    pub generated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DashboardOverview {
+    pub total_projects: usize,
+    pub active_projects: usize,
+    pub needs_attention: usize,
+    pub commits_today: u32,
+    pub commits_this_week: u32,
+    pub commits_this_month: u32,
+    pub total_branches: u32,
+    pub total_stashes: u32,
+    pub total_tags: u32,
+    pub most_active_project: Option<MostActiveProject>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MostActiveProject {
+    pub id: String,
+    pub name: String,
+    pub commit_count: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ActivityEntry {
+    pub id: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub project_color: String,
+    pub commit_hash: String,
+    pub commit_message: String,
+    pub author: String,
+    pub email: String,
+    pub date: String,
+    pub branch: String,
+    pub files_changed: u32,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct HealthIndicator {
+    pub project_id: String,
+    pub project_name: String,
+    pub days_since_last_commit: Option<i32>,
+    pub uncommitted_changes_duration: Option<i32>,
+    pub stale_branches: Vec<StaleBranchInfo>,
+    pub health_status: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StaleBranchInfo {
+    pub name: String,
+    pub days_since_last_commit: i32,
+    pub is_remote: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContributionHeatmap {
+    pub daily_contributions: HashMap<String, DailyContribution>,
+    pub start_date: String,
+    pub end_date: String,
+    pub total_contributions: u32,
+    pub current_streak: u32,
+    pub longest_streak: u32,
+    pub most_productive_day: Option<MostProductiveDay>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DailyContribution {
+    pub date: String,
+    pub count: u32,
+    pub projects: Vec<String>,
+    pub level: u8,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MostProductiveDay {
+    pub date: String,
+    pub count: u32,
+}
+
+/// Generate comprehensive analytics for all projects
+#[tauri::command]
+pub async fn generate_analytics() -> Result<AnalyticsData, String> {
+    use chrono::{Duration, Utc};
+
+    let projects = project_cache::load_projects()
+        .map_err(|e| format!("Failed to load projects: {}", e))?;
+
+    let service = get_git_service()?;
+
+    let now = Utc::now();
+    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let week_start = today_start - Duration::days(7);
+    let month_start = today_start - Duration::days(30);
+    let year_start = today_start - Duration::days(365);
+
+    // Initialize counters
+    let mut total_branches = 0u32;
+    let mut total_stashes = 0u32;
+    let mut total_tags = 0u32;
+    let mut commits_today = 0u32;
+    let mut commits_this_week = 0u32;
+    let mut commits_this_month = 0u32;
+    let mut active_projects = 0usize;
+    let mut needs_attention = 0usize;
+
+    let mut timeline_entries: Vec<ActivityEntry> = Vec::new();
+    let mut health_indicators: Vec<HealthIndicator> = Vec::new();
+    let mut daily_contributions: HashMap<String, DailyContribution> = HashMap::new();
+    let mut project_commit_counts: HashMap<String, u32> = HashMap::new();
+
+    // Analyze each project
+    for (idx, project) in projects.iter().enumerate() {
+        // Skip projects without local paths
+        let local_path = match &project.local_path {
+            Some(path) => path,
+            None => continue,
+        };
+
+        // Check if project was recently synced (active)
+        if let Some(last_synced) = &project.last_synced {
+            if let Ok(last_sync_time) = chrono::DateTime::parse_from_rfc3339(last_synced) {
+                let last_sync_utc = last_sync_time.with_timezone(&Utc);
+                let days_since = (now - last_sync_utc).num_days();
+                if days_since <= 7 {
+                    active_projects += 1;
+                }
+            }
+        }
+
+        // Check if needs attention
+        if let Some(git_status) = &project.git_status {
+            if git_status.uncommitted_files > 0 || git_status.remote_branches.len() > 0 {
+                needs_attention += 1;
+            }
+        }
+
+        // Get commit history for analytics (last 90 days)
+        let since = (today_start - Duration::days(90)).format("%Y-%m-%d").to_string();
+        match service.get_analytics_commit_history(local_path, 100, Some(since.clone()), None, None) {
+            Ok(commits) => {
+                project_commit_counts.insert(project.id.clone(), commits.len() as u32);
+
+                for commit in commits {
+                    let commit_date = match chrono::DateTime::parse_from_rfc3339(&commit.date) {
+                        Ok(dt) => dt,
+                        Err(_) => continue,
+                    };
+
+                    // Count commits by date range
+                    if commit_date.naive_utc() >= today_start {
+                        commits_today += 1;
+                    }
+                    if commit_date.naive_utc() >= week_start {
+                        commits_this_week += 1;
+                    }
+                    if commit_date.naive_utc() >= month_start {
+                        commits_this_month += 1;
+                    }
+
+                    // Add to timeline
+                    timeline_entries.push(ActivityEntry {
+                        id: format!("{}-{}", project.id, commit.hash),
+                        project_id: project.id.clone(),
+                        project_name: project.name.clone(),
+                        project_color: format!("hsl({}, 70%, 50%)", (idx * 137) % 360),
+                        commit_hash: commit.hash,
+                        commit_message: commit.message,
+                        author: commit.author,
+                        email: commit.email,
+                        date: commit.date.clone(),
+                        branch: commit.branch,
+                        files_changed: commit.files_changed,
+                        additions: commit.additions,
+                        deletions: commit.deletions,
+                    });
+
+                    // Add to heatmap
+                    let date_key = commit.date.split('T').next().unwrap_or(&commit.date).to_string();
+                    let entry = daily_contributions.entry(date_key.clone()).or_insert(DailyContribution {
+                        date: date_key,
+                        count: 0,
+                        projects: Vec::new(),
+                        level: 0,
+                    });
+                    entry.count += 1;
+                    if !entry.projects.contains(&project.id) {
+                        entry.projects.push(project.id.clone());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to get commit history for {}: {}", project.name, e);
+            }
+        }
+
+        // Get aggregate stats
+        if let Ok(stats) = service.get_aggregate_stats(local_path) {
+            total_branches += stats.total_branches;
+            total_stashes += stats.total_stashes;
+            total_tags += stats.total_tags;
+        }
+
+        // Get health indicators
+        let days_since_last_commit = service.get_days_since_last_commit(local_path).ok().flatten();
+
+        let mut warnings = Vec::new();
+        let health_status = if let Some(days) = days_since_last_commit {
+            if days > 30 {
+                warnings.push(format!("No commits in {} days", days));
+                "critical"
+            } else if days > 14 {
+                warnings.push(format!("No commits in {} days", days));
+                "warning"
+            } else if days > 7 {
+                warnings.push(format!("No commits in {} days", days));
+                "attention"
+            } else {
+                "healthy"
+            }
+        } else {
+            warnings.push("No commits found".to_string());
+            "attention"
+        };
+
+        // Check for uncommitted changes
+        let uncommitted_duration = if let Some(git_status) = &project.git_status {
+            if git_status.uncommitted_files > 0 {
+                warnings.push(format!("{} uncommitted files", git_status.uncommitted_files));
+                Some(24) // Placeholder: 24 hours
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Get stale branches
+        let stale_branches = service.get_branch_staleness(local_path)
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|b| b.days_since_last_commit > 30)
+            .map(|b| StaleBranchInfo {
+                name: b.name,
+                days_since_last_commit: b.days_since_last_commit,
+                is_remote: b.is_remote,
+            })
+            .collect::<Vec<_>>();
+
+        if !stale_branches.is_empty() {
+            warnings.push(format!("{} stale branches", stale_branches.len()));
+        }
+
+        health_indicators.push(HealthIndicator {
+            project_id: project.id.clone(),
+            project_name: project.name.clone(),
+            days_since_last_commit,
+            uncommitted_changes_duration: uncommitted_duration,
+            stale_branches,
+            health_status: health_status.to_string(),
+            warnings,
+        });
+    }
+
+    // Sort timeline by date (most recent first)
+    timeline_entries.sort_by(|a, b| b.date.cmp(&a.date));
+
+    // Calculate contribution levels for heatmap
+    let max_commits = daily_contributions.values().map(|d| d.count).max().unwrap_or(1);
+    for contrib in daily_contributions.values_mut() {
+        contrib.level = if contrib.count == 0 {
+            0
+        } else if (contrib.count as f32 / max_commits as f32) < 0.25 {
+            1
+        } else if (contrib.count as f32 / max_commits as f32) < 0.5 {
+            2
+        } else if (contrib.count as f32 / max_commits as f32) < 0.75 {
+            3
+        } else {
+            4
+        };
+    }
+
+    // Calculate streaks
+    let mut current_streak = 0u32;
+    let mut longest_streak = 0u32;
+    let mut temp_streak = 0u32;
+    let mut date = now.date_naive();
+
+    for _ in 0..365 {
+        let date_key = date.format("%Y-%m-%d").to_string();
+        if daily_contributions.contains_key(&date_key) {
+            temp_streak += 1;
+            if date == now.date_naive() || current_streak > 0 {
+                current_streak = temp_streak;
+            }
+            longest_streak = longest_streak.max(temp_streak);
+        } else {
+            if current_streak > 0 {
+                current_streak = 0;
+            }
+            temp_streak = 0;
+        }
+        date = date.pred_opt().unwrap();
+    }
+
+    // Find most active project
+    let most_active_project = project_commit_counts
+        .iter()
+        .max_by_key(|(_, count)| *count)
+        .and_then(|(id, count)| {
+            projects.iter().find(|p| &p.id == id).map(|p| MostActiveProject {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                commit_count: *count,
+            })
+        });
+
+    // Find most productive day
+    let most_productive_day = daily_contributions
+        .values()
+        .max_by_key(|d| d.count)
+        .map(|d| MostProductiveDay {
+            date: d.date.clone(),
+            count: d.count,
+        });
+
+    let analytics = AnalyticsData {
+        overview: DashboardOverview {
+            total_projects: projects.len(),
+            active_projects,
+            needs_attention,
+            commits_today,
+            commits_this_week,
+            commits_this_month,
+            total_branches,
+            total_stashes,
+            total_tags,
+            most_active_project,
+        },
+        timeline: timeline_entries.into_iter().take(100).collect(),
+        health: health_indicators,
+        heatmap: ContributionHeatmap {
+            daily_contributions,
+            start_date: year_start.format("%Y-%m-%d").to_string(),
+            end_date: now.format("%Y-%m-%d").to_string(),
+            total_contributions: commits_this_month,
+            current_streak,
+            longest_streak,
+            most_productive_day,
+        },
+        last_updated: now.to_rfc3339(),
+        generated_at: now.to_rfc3339(),
+    };
+
+    Ok(analytics)
 }

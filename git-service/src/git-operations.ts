@@ -622,6 +622,232 @@ export class GitOperations {
       throw new Error(`Failed to get current branch: ${error}`);
     }
   }
+
+  // ==================== ANALYTICS FEATURES ====================
+
+  /**
+   * Get detailed commit history with file statistics for analytics
+   */
+  async getAnalyticsCommitHistory(params: {
+    limit?: number;
+    since?: string;  // ISO date string
+    until?: string;  // ISO date string
+    author?: string;
+  }): Promise<{
+    hash: string;
+    author: string;
+    email: string;
+    date: string;
+    message: string;
+    branch: string;
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+  }[]> {
+    await this.ensureGitRepo();
+    try {
+      const args: any = {
+        maxCount: params.limit || 100,
+      };
+
+      if (params.since) args.from = params.since;
+      if (params.until) args.to = params.until;
+      if (params.author) args['--author'] = params.author;
+
+      const log: LogResult = await this.git.log(args);
+      const commits = [];
+
+      for (const commit of log.all) {
+        // Get stats for each commit
+        let filesChanged = 0;
+        let additions = 0;
+        let deletions = 0;
+
+        try {
+          const diffSummary = await this.git.diffSummary([`${commit.hash}^`, commit.hash]);
+          filesChanged = diffSummary.files.length;
+          additions = diffSummary.insertions;
+          deletions = diffSummary.deletions;
+        } catch (error) {
+          // First commit or error getting stats, use 0s
+        }
+
+        commits.push({
+          hash: commit.hash,
+          author: commit.author_name,
+          email: commit.author_email,
+          date: commit.date,
+          message: commit.message,
+          branch: commit.refs || 'main',
+          filesChanged,
+          additions,
+          deletions,
+        });
+      }
+
+      return commits;
+    } catch (error) {
+      throw new Error(`Failed to get analytics commit history: ${error}`);
+    }
+  }
+
+  /**
+   * Get branch staleness information
+   */
+  async getBranchStaleness(): Promise<{
+    name: string;
+    daysSinceLastCommit: number;
+    isRemote: boolean;
+    lastCommitHash: string;
+    lastCommitDate: string;
+  }[]> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.fetch(['--all']);
+      const branches = await this.getBranches();
+      const staleness = [];
+
+      for (const branch of branches) {
+        try {
+          // Get last commit on this branch
+          const branchRef = branch.isRemote ? `remotes/origin/${branch.name}` : branch.name;
+          const log = await this.git.log({ maxCount: 1, [branchRef]: null });
+
+          if (log.latest) {
+            const lastCommitDate = new Date(log.latest.date);
+            const now = new Date();
+            const daysSince = Math.floor((now.getTime() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
+
+            staleness.push({
+              name: branch.name,
+              daysSinceLastCommit: daysSince,
+              isRemote: branch.isRemote,
+              lastCommitHash: log.latest.hash,
+              lastCommitDate: log.latest.date,
+            });
+          }
+        } catch (error) {
+          // Skip branches that can't be analyzed
+          console.error(`Failed to analyze branch ${branch.name}:`, error);
+        }
+      }
+
+      return staleness;
+    } catch (error) {
+      throw new Error(`Failed to get branch staleness: ${error}`);
+    }
+  }
+
+  /**
+   * Get commit counts grouped by date (for heatmap)
+   */
+  async getCommitCountsByDate(params: {
+    since: string;  // ISO date string
+    until?: string; // ISO date string
+    author?: string;
+  }): Promise<Record<string, number>> {
+    await this.ensureGitRepo();
+    try {
+      const args: any = {};
+
+      if (params.since) args.from = params.since;
+      if (params.until) args.to = params.until;
+      if (params.author) args['--author'] = params.author;
+
+      const log: LogResult = await this.git.log(args);
+      const dateCounts: Record<string, number> = {};
+
+      for (const commit of log.all) {
+        // Extract YYYY-MM-DD from the commit date
+        const date = commit.date.split('T')[0] || commit.date.substring(0, 10);
+        dateCounts[date] = (dateCounts[date] || 0) + 1;
+      }
+
+      return dateCounts;
+    } catch (error) {
+      throw new Error(`Failed to get commit counts by date: ${error}`);
+    }
+  }
+
+  /**
+   * Get days since last commit
+   */
+  async getDaysSinceLastCommit(): Promise<number | null> {
+    await this.ensureGitRepo();
+    try {
+      const log = await this.git.log({ maxCount: 1 });
+
+      if (log.latest) {
+        const lastCommitDate = new Date(log.latest.date);
+        const now = new Date();
+        return Math.floor((now.getTime() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
+      }
+
+      return null; // No commits
+    } catch (error) {
+      throw new Error(`Failed to get days since last commit: ${error}`);
+    }
+  }
+
+  /**
+   * Get aggregate statistics for the repository
+   */
+  async getAggregateStats(): Promise<{
+    totalCommits: number;
+    totalBranches: number;
+    totalTags: number;
+    totalStashes: number;
+    contributors: number;
+  }> {
+    await this.ensureGitRepo();
+    try {
+      // Get total commits
+      const log = await this.git.log();
+      const totalCommits = log.total;
+
+      // Get unique contributors
+      const uniqueAuthors = new Set(log.all.map(c => c.author_email));
+      const contributors = uniqueAuthors.size;
+
+      // Get branches
+      const branches = await this.getBranches();
+      const totalBranches = branches.length;
+
+      // Get tags
+      const tags = await this.listTags();
+      const totalTags = tags.length;
+
+      // Get stashes
+      const stashes = await this.listStashes();
+      const totalStashes = stashes.length;
+
+      return {
+        totalCommits,
+        totalBranches,
+        totalTags,
+        totalStashes,
+        contributors,
+      };
+    } catch (error) {
+      throw new Error(`Failed to get aggregate stats: ${error}`);
+    }
+  }
+
+  /**
+   * Get commit count for a date range
+   */
+  async getCommitCountForDateRange(since: string, until?: string): Promise<number> {
+    await this.ensureGitRepo();
+    try {
+      const args: any = { from: since };
+      if (until) args.to = until;
+
+      const log = await this.git.log(args);
+      return log.total;
+    } catch (error) {
+      return 0;
+    }
+  }
 }
 
 // Standalone Git operations (not tied to a specific repository)

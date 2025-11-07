@@ -382,6 +382,85 @@ impl GitService {
         let branch: String = serde_json::from_value(result)?;
         Ok(branch)
     }
+
+    // ==================== ANALYTICS FEATURES ====================
+
+    pub fn get_analytics_commit_history(
+        &self,
+        repo_path: &str,
+        limit: u32,
+        since: Option<String>,
+        until: Option<String>,
+        author: Option<String>,
+    ) -> Result<Vec<AnalyticsCommit>> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "params": {
+                "limit": limit,
+                "since": since,
+                "until": until,
+                "author": author
+            }
+        });
+        let result = self.execute("getAnalyticsCommitHistory", payload)?;
+        let commits: Vec<AnalyticsCommit> = serde_json::from_value(result)?;
+        Ok(commits)
+    }
+
+    pub fn get_branch_staleness(&self, repo_path: &str) -> Result<Vec<BranchStaleness>> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        let result = self.execute("getBranchStaleness", payload)?;
+        let staleness: Vec<BranchStaleness> = serde_json::from_value(result)?;
+        Ok(staleness)
+    }
+
+    pub fn get_commit_counts_by_date(
+        &self,
+        repo_path: &str,
+        since: String,
+        until: Option<String>,
+        author: Option<String>,
+    ) -> Result<std::collections::HashMap<String, u32>> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "since": since,
+            "until": until,
+            "author": author
+        });
+        let result = self.execute("getCommitCountsByDate", payload)?;
+        let counts: std::collections::HashMap<String, u32> = serde_json::from_value(result)?;
+        Ok(counts)
+    }
+
+    pub fn get_days_since_last_commit(&self, repo_path: &str) -> Result<Option<i32>> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        let result = self.execute("getDaysSinceLastCommit", payload)?;
+        let days: Option<i32> = serde_json::from_value(result)?;
+        Ok(days)
+    }
+
+    pub fn get_aggregate_stats(&self, repo_path: &str) -> Result<AggregateStats> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        let result = self.execute("getAggregateStats", payload)?;
+        let stats: AggregateStats = serde_json::from_value(result)?;
+        Ok(stats)
+    }
+
+    pub fn get_commit_count_for_date_range(
+        &self,
+        repo_path: &str,
+        since: String,
+        until: Option<String>,
+    ) -> Result<u32> {
+        let payload = serde_json::json!({
+            "repoPath": repo_path,
+            "since": since,
+            "until": until
+        });
+        let result = self.execute("getCommitCountForDateRange", payload)?;
+        let count: u32 = serde_json::from_value(result)?;
+        Ok(count)
+    }
 }
 
 impl Drop for GitService {
@@ -497,4 +576,39 @@ pub struct StashInfo {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TagInfo {
     pub name: String,
+}
+
+// Analytics Types
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsCommit {
+    pub hash: String,
+    pub author: String,
+    pub email: String,
+    pub date: String,
+    pub message: String,
+    pub branch: String,
+    pub files_changed: u32,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchStaleness {
+    pub name: String,
+    pub days_since_last_commit: i32,
+    pub is_remote: bool,
+    pub last_commit_hash: String,
+    pub last_commit_date: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateStats {
+    pub total_commits: u32,
+    pub total_branches: u32,
+    pub total_tags: u32,
+    pub total_stashes: u32,
+    pub contributors: u32,
 }

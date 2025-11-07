@@ -3,11 +3,26 @@ import { useAppStore } from '../stores/useAppStore';
 import { ProjectCard } from './ProjectCard';
 import { SettingsModal } from './SettingsModal';
 import { AddProjectModal } from './AddProjectModal';
-import { Plus, RefreshCw, Settings, Sun, Moon, CheckSquare, Square, Upload, Search, Filter } from 'lucide-react';
+import { AnalyticsDashboard } from './AnalyticsDashboard';
+import { Plus, RefreshCw, Settings, Sun, Moon, CheckSquare, Square, Upload, Search, Filter, BarChart3, FolderGit2 } from 'lucide-react';
 
 export function Dashboard() {
   console.log('[Dashboard] Rendering...');
-  const { projects, isLoading, loadProjects, selectedProjectIds, settings, toggleTheme, selectAll, clearSelection, syncSelected } = useAppStore();
+  const {
+    projects,
+    isLoading,
+    loadProjects,
+    selectedProjectIds,
+    settings,
+    toggleTheme,
+    selectAll,
+    clearSelection,
+    syncSelected,
+    syncSelectedParallel,
+    startBackgroundChecking,
+    stopBackgroundChecking,
+    refreshAllProjects,
+  } = useAppStore();
   console.log('[Dashboard] State:', { projects, isLoading, projectCount: projects?.length });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
@@ -16,6 +31,7 @@ export function Dashboard() {
   const [showArchived, setShowArchived] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [sortBy, setSortBy] = useState<'name' | 'favorite' | 'activity'>('favorite');
+  const [currentView, setCurrentView] = useState<'projects' | 'analytics'>('projects');
 
   const ThemeIcon = settings.ui.theme === 'dark' ? Moon : Sun;
   const hasSelection = selectedProjectIds.size > 0;
@@ -62,8 +78,30 @@ export function Dashboard() {
   useEffect(() => {
     console.log('[Dashboard] Loading projects on mount...');
     loadProjects();
+
+    // Start background status checking if enabled
+    if (settings.ui.refreshInterval > 0) {
+      console.log('[Dashboard] Starting background checking...');
+      startBackgroundChecking();
+    }
+
+    // Cleanup: stop background checking when component unmounts
+    return () => {
+      console.log('[Dashboard] Stopping background checking...');
+      stopBackgroundChecking();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only load once on mount
+
+  // Update background checking when refresh interval changes
+  useEffect(() => {
+    if (settings.ui.refreshInterval > 0) {
+      startBackgroundChecking();
+    } else {
+      stopBackgroundChecking();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.ui.refreshInterval]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -170,12 +208,42 @@ export function Dashboard() {
       <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-10">
         <div className="container mx-auto px-8 py-4">
           <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 dark:text-white">BitGit</h1>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                {filteredProjects.length} of {projects.length} projects
-                {selectedProjectIds.size > 0 && ` • ${selectedProjectIds.size} selected`}
-              </p>
+            <div className="flex items-center gap-4">
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900 dark:text-white">BitGit</h1>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                  {currentView === 'projects'
+                    ? `${filteredProjects.length} of ${projects.length} projects${selectedProjectIds.size > 0 ? ` • ${selectedProjectIds.size} selected` : ''}`
+                    : 'Insights & Analytics'
+                  }
+                </p>
+              </div>
+
+              {/* View Toggle */}
+              <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+                <button
+                  onClick={() => setCurrentView('projects')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+                    currentView === 'projects'
+                      ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                  }`}
+                >
+                  <FolderGit2 className="w-4 h-4" />
+                  Projects
+                </button>
+                <button
+                  onClick={() => setCurrentView('analytics')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+                    currentView === 'analytics'
+                      ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                  }`}
+                >
+                  <BarChart3 className="w-4 h-4" />
+                  Analytics
+                </button>
+              </div>
             </div>
 
             <div className="flex items-center gap-3">
@@ -217,7 +285,8 @@ export function Dashboard() {
         </div>
       </header>
 
-      {/* Search and Filter Bar */}
+      {/* Search and Filter Bar - Only show for projects view */}
+      {currentView === 'projects' && (
       <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-16 z-10">
         <div className="container mx-auto px-8 py-4">
           <div className="flex gap-4">
@@ -292,9 +361,10 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+      )}
 
-      {/* Batch Operations Toolbar */}
-      {hasSelection && (
+      {/* Batch Operations Toolbar - Only show for projects view */}
+      {currentView === 'projects' && hasSelection && (
         <div className="bg-teal-50 dark:bg-teal-900/20 border-b border-teal-200 dark:border-teal-800 sticky top-[136px] z-10">
           <div className="container mx-auto px-8 py-3">
             <div className="flex items-center justify-between">
@@ -343,7 +413,10 @@ export function Dashboard() {
       )}
 
       <main className="container mx-auto px-8 py-8">
-        {projects.length === 0 ? (
+        {/* Conditionally render Analytics Dashboard or Projects List */}
+        {currentView === 'analytics' ? (
+          <AnalyticsDashboard />
+        ) : projects.length === 0 ? (
           <EmptyState onAddProject={() => setIsAddProjectOpen(true)} />
         ) : filteredProjects.length === 0 ? (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-12 text-center">

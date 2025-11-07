@@ -182,6 +182,189 @@ export interface ProjectTemplate {
   additionalFiles?: { path: string; content: string }[];
 }
 
+// Priority 6: Performance & Reliability Types
+export interface QueuedOperation {
+  id: string;
+  projectId: string;
+  projectName: string;
+  action: SyncAction;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  attempts: number;
+  maxAttempts: number;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface OperationQueueState {
+  queue: QueuedOperation[];
+  isProcessing: boolean;
+  maxConcurrent: number;
+}
+
+export interface RetryConfig {
+  maxAttempts: number;
+  delayMs: number;
+  backoffMultiplier: number;
+}
+
+// ===== Priority 1: Dashboard Analytics & Insights Types =====
+
+// Dashboard Overview Panel
+export interface DashboardOverview {
+  totalProjects: number;
+  activeProjects: number;          // Recently synced
+  needsAttention: number;           // Has uncommitted changes or pending PRs
+
+  // Time-based commit counts
+  commitsToday: number;
+  commitsThisWeek: number;
+  commitsThisMonth: number;
+
+  // Aggregate stats
+  totalBranches: number;
+  totalStashes: number;
+  totalTags: number;
+
+  // Most active project
+  mostActiveProject: {
+    id: string;
+    name: string;
+    commitCount: number;
+  } | null;
+}
+
+// Activity Timeline Entry
+export interface ActivityEntry {
+  id: string;
+  projectId: string;
+  projectName: string;
+  projectColor: string;            // For visual grouping
+
+  // Commit details
+  commitHash: string;
+  commitMessage: string;
+  author: string;
+  email: string;
+  date: string;                    // ISO timestamp
+
+  // Additional context
+  branch: string;
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+}
+
+// Activity Timeline with filtering
+export interface ActivityTimeline {
+  entries: ActivityEntry[];
+  dateRange: {
+    start: string;
+    end: string;
+  };
+  totalCommits: number;
+  totalProjects: number;
+}
+
+// Repository Health Indicator
+export interface HealthIndicator {
+  projectId: string;
+  projectName: string;
+
+  // Health metrics
+  daysSinceLastCommit: number | null;
+  uncommittedChangesDuration: number | null;  // Hours since first change
+  staleBranches: StaleBranchInfo[];
+
+  // Severity levels
+  healthStatus: 'healthy' | 'attention' | 'warning' | 'critical';
+  warnings: string[];
+
+  // Dependencies (future enhancement)
+  outdatedDependencies?: number;
+}
+
+export interface StaleBranchInfo {
+  name: string;
+  daysSinceLastCommit: number;
+  isRemote: boolean;
+}
+
+// Contribution Heatmap
+export interface ContributionHeatmap {
+  // Map of date (YYYY-MM-DD) to contribution count
+  dailyContributions: Record<string, DailyContribution>;
+
+  // Date range
+  startDate: string;
+  endDate: string;
+
+  // Summary stats
+  totalContributions: number;
+  currentStreak: number;
+  longestStreak: number;
+
+  // Most productive day
+  mostProductiveDay: {
+    date: string;
+    count: number;
+  } | null;
+}
+
+export interface DailyContribution {
+  date: string;                    // YYYY-MM-DD
+  count: number;                   // Number of commits
+  projects: string[];              // Project IDs with activity
+  level: 0 | 1 | 2 | 3 | 4;       // Intensity level (0=none, 4=most)
+}
+
+// Combined Analytics Data
+export interface AnalyticsData {
+  overview: DashboardOverview;
+  timeline: ActivityTimeline;
+  health: HealthIndicator[];
+  heatmap: ContributionHeatmap;
+
+  // Metadata
+  lastUpdated: string;
+  generatedAt: string;
+}
+
+// Analytics Configuration
+export interface AnalyticsConfig {
+  // Timeline settings
+  timelineLimit: number;           // Max entries to fetch
+  timelineDays: number;            // Days to look back
+
+  // Health thresholds
+  healthThresholds: {
+    staleCommitDays: number;       // Days before considering stale
+    uncommittedHours: number;      // Hours before warning
+    staleBranchDays: number;       // Days before branch is stale
+  };
+
+  // Heatmap settings
+  heatmapMonths: number;           // Months to display
+
+  // Auto-refresh
+  autoRefresh: boolean;
+  refreshIntervalMinutes: number;
+}
+
+// Default analytics configuration
+export const DEFAULT_ANALYTICS_CONFIG: AnalyticsConfig = {
+  timelineLimit: 100,
+  timelineDays: 30,
+  healthThresholds: {
+    staleCommitDays: 7,
+    uncommittedHours: 24,
+    staleBranchDays: 30,
+  },
+  heatmapMonths: 12,
+  autoRefresh: true,
+  refreshIntervalMinutes: 15,
+};
+
 // Predefined templates
 export const PROJECT_TEMPLATES: ProjectTemplate[] = [
   {

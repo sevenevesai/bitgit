@@ -57,6 +57,42 @@ export interface TagInfo {
   name: string;
 }
 
+// Analytics types
+export interface AnalyticsCommitParams {
+  limit?: number;
+  since?: string;
+  until?: string;
+  author?: string;
+}
+
+export interface AnalyticsCommit {
+  hash: string;
+  author: string;
+  email: string;
+  date: string;
+  message: string;
+  branch: string;
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+}
+
+export interface BranchStaleness {
+  name: string;
+  daysSinceLastCommit: number;
+  isRemote: boolean;
+  lastCommitHash: string;
+  lastCommitDate: string;
+}
+
+export interface AggregateStats {
+  totalCommits: number;
+  totalBranches: number;
+  totalTags: number;
+  totalStashes: number;
+  contributors: number;
+}
+
 export type GitOperation =
   | { type: 'checkStatus'; repoPath: string }
   | { type: 'pushLocal'; repoPath: string }
@@ -81,4 +117,11 @@ export type GitOperation =
   | { type: 'pushAllTags'; repoPath: string }
   | { type: 'deleteTag'; repoPath: string; tagName: string }
   | { type: 'cherryPick'; repoPath: string; commitHash: string }
-  | { type: 'getCurrentBranch'; repoPath: string };
+  | { type: 'getCurrentBranch'; repoPath: string }
+  // Analytics operations
+  | { type: 'getAnalyticsCommitHistory'; repoPath: string; params: AnalyticsCommitParams }
+  | { type: 'getBranchStaleness'; repoPath: string }
+  | { type: 'getCommitCountsByDate'; repoPath: string; since: string; until?: string; author?: string }
+  | { type: 'getDaysSinceLastCommit'; repoPath: string }
+  | { type: 'getAggregateStats'; repoPath: string }
+  | { type: 'getCommitCountForDateRange'; repoPath: string; since: string; until?: string };
