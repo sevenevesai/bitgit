@@ -2,6 +2,41 @@ import { useEffect } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import { TrendingUp, Activity, AlertTriangle, Calendar, RefreshCw } from 'lucide-react';
 
+// Loading skeleton component for sections
+function SectionSkeleton({ title, rows = 3 }: { title: string; rows?: number }) {
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="h-6 w-32 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+        <RefreshCw className="w-4 h-4 animate-spin text-gray-400 dark:text-gray-600" />
+      </div>
+      <div className="space-y-3">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="h-16 bg-gray-100 dark:bg-gray-750 rounded animate-pulse" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Loading skeleton for stat cards
+function StatCardSkeleton() {
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="h-4 w-24 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+          <div className="h-8 w-16 bg-gray-300 dark:bg-gray-600 rounded animate-pulse mt-2" />
+        </div>
+        <div className="bg-gray-100 dark:bg-gray-700 p-3 rounded-lg">
+          <div className="w-6 h-6 bg-gray-300 dark:bg-gray-600 rounded animate-pulse" />
+        </div>
+      </div>
+      <div className="mt-4 h-3 w-32 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+    </div>
+  );
+}
+
 export function AnalyticsDashboard() {
   const { analytics, isLoadingAnalytics, loadAnalytics, refreshAnalytics } = useAppStore();
 
@@ -10,6 +45,7 @@ export function AnalyticsDashboard() {
     loadAnalytics();
   }, [loadAnalytics]);
 
+  // Show initial loading if no analytics data at all
   if (isLoadingAnalytics && !analytics) {
     return (
       <div className="p-8">
@@ -60,77 +96,86 @@ export function AnalyticsDashboard() {
       </div>
 
       {/* Overview Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Projects */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Projects</p>
-              <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{overview.totalProjects}</p>
-            </div>
-            <div className="bg-blue-100 dark:bg-blue-900/30 p-3 rounded-lg">
-              <TrendingUp className="w-6 h-6 text-blue-600 dark:text-blue-400" />
-            </div>
-          </div>
-          <div className="mt-4 flex items-center text-sm">
-            <span className="text-green-600 dark:text-green-400 font-medium">{overview.activeProjects}</span>
-            <span className="text-gray-600 dark:text-gray-400 ml-1">active this week</span>
-          </div>
+      {!overview || !heatmap ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCardSkeleton />
+          <StatCardSkeleton />
+          <StatCardSkeleton />
+          <StatCardSkeleton />
         </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Total Projects */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Total Projects</p>
+                <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{overview.totalProjects}</p>
+              </div>
+              <div className="bg-blue-100 dark:bg-blue-900/30 p-3 rounded-lg">
+                <TrendingUp className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+              </div>
+            </div>
+            <div className="mt-4 flex items-center text-sm">
+              <span className="text-green-600 dark:text-green-400 font-medium">{overview.activeProjects}</span>
+              <span className="text-gray-600 dark:text-gray-400 ml-1">active this week</span>
+            </div>
+          </div>
 
-        {/* Commits Today */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Commits Today</p>
-              <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{overview.commitsToday}</p>
+          {/* Commits Today */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Commits Today</p>
+                <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{overview.commitsToday}</p>
+              </div>
+              <div className="bg-green-100 dark:bg-green-900/30 p-3 rounded-lg">
+                <Activity className="w-6 h-6 text-green-600 dark:text-green-400" />
+              </div>
             </div>
-            <div className="bg-green-100 dark:bg-green-900/30 p-3 rounded-lg">
-              <Activity className="w-6 h-6 text-green-600 dark:text-green-400" />
+            <div className="mt-4 flex items-center text-sm">
+              <span className="text-gray-600 dark:text-gray-400">{overview.commitsThisWeek} this week</span>
+              <span className="text-gray-400 dark:text-gray-500 mx-1">•</span>
+              <span className="text-gray-600 dark:text-gray-400">{overview.commitsThisMonth} this month</span>
             </div>
           </div>
-          <div className="mt-4 flex items-center text-sm">
-            <span className="text-gray-600 dark:text-gray-400">{overview.commitsThisWeek} this week</span>
-            <span className="text-gray-400 dark:text-gray-500 mx-1">•</span>
-            <span className="text-gray-600 dark:text-gray-400">{overview.commitsThisMonth} this month</span>
-          </div>
-        </div>
 
-        {/* Needs Attention */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Needs Attention</p>
-              <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{overview.needsAttention}</p>
+          {/* Needs Attention */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Needs Attention</p>
+                <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{overview.needsAttention}</p>
+              </div>
+              <div className="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-lg">
+                <AlertTriangle className="w-6 h-6 text-orange-600 dark:text-orange-400" />
+              </div>
             </div>
-            <div className="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-lg">
-              <AlertTriangle className="w-6 h-6 text-orange-600 dark:text-orange-400" />
+            <div className="mt-4 text-sm text-gray-600 dark:text-gray-400">
+              Projects with uncommitted changes or pending branches
             </div>
           </div>
-          <div className="mt-4 text-sm text-gray-600 dark:text-gray-400">
-            Projects with uncommitted changes or pending branches
-          </div>
-        </div>
 
-        {/* Current Streak */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Current Streak</p>
-              <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{heatmap.currentStreak}</p>
+          {/* Current Streak */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Current Streak</p>
+                <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">{heatmap.currentStreak}</p>
+              </div>
+              <div className="bg-purple-100 dark:bg-purple-900/30 p-3 rounded-lg">
+                <Calendar className="w-6 h-6 text-purple-600 dark:text-purple-400" />
+              </div>
             </div>
-            <div className="bg-purple-100 dark:bg-purple-900/30 p-3 rounded-lg">
-              <Calendar className="w-6 h-6 text-purple-600 dark:text-purple-400" />
+            <div className="mt-4 flex items-center text-sm">
+              <span className="text-gray-600 dark:text-gray-400">Best: {heatmap.longestStreak} days</span>
             </div>
-          </div>
-          <div className="mt-4 flex items-center text-sm">
-            <span className="text-gray-600 dark:text-gray-400">Best: {heatmap.longestStreak} days</span>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Most Active Project */}
-      {overview.mostActiveProject && (
+      {overview && overview.mostActiveProject && (
         <div className="bg-gradient-to-r from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20 rounded-lg border border-teal-200 dark:border-teal-800 p-6">
           <div className="flex items-center gap-3">
             <div className="bg-teal-100 dark:bg-teal-900/30 p-3 rounded-lg">
@@ -150,10 +195,13 @@ export function AnalyticsDashboard() {
       )}
 
       {/* Recent Activity Timeline */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Recent Activity</h2>
-        <div className="space-y-4 max-h-96 overflow-y-auto">
-          {timeline.slice(0, 10).map((entry) => (
+      {!timeline || timeline.length === 0 ? (
+        <SectionSkeleton title="Recent Activity" rows={5} />
+      ) : (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Recent Activity</h2>
+          <div className="space-y-4 max-h-96 overflow-y-auto">
+            {timeline.slice(0, 10).map((entry) => (
             <div key={entry.id} className="flex items-start gap-4 pb-4 border-b border-gray-100 dark:border-gray-700 last:border-0">
               <div
                 className="w-2 h-2 rounded-full mt-2 flex-shrink-0"
@@ -194,15 +242,19 @@ export function AnalyticsDashboard() {
                 </div>
               </div>
             </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Repository Health */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Repository Health</h2>
-        <div className="space-y-3">
-          {health.map((indicator) => {
+      {!health || health.length === 0 ? (
+        <SectionSkeleton title="Repository Health" rows={3} />
+      ) : (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Repository Health</h2>
+          <div className="space-y-3">
+            {health.map((indicator) => {
             const healthColors = {
               healthy: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800',
               attention: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border-yellow-200 dark:border-yellow-800',
@@ -235,9 +287,10 @@ export function AnalyticsDashboard() {
                 </div>
               </div>
             );
-          })}
+            })}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

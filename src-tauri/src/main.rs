@@ -63,6 +63,10 @@ fn main() {
             increment_project_stats,
             // Analytics (Priority 1)
             generate_analytics,
+            generate_analytics_overview,
+            generate_analytics_timeline,
+            generate_analytics_health,
+            generate_analytics_heatmap,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
