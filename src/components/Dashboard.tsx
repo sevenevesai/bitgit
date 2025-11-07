@@ -33,7 +33,9 @@ export function Dashboard() {
   const [sortBy, setSortBy] = useState<'name' | 'favorite' | 'activity'>('favorite');
   const [currentView, setCurrentView] = useState<'projects' | 'analytics'>('projects');
 
-  const ThemeIcon = settings.ui.theme === 'dark' ? Moon : Sun;
+  // Check actual dark mode state from document class, not just settings
+  const isDarkMode = document.documentElement.classList.contains('dark');
+  const ThemeIcon = isDarkMode ? Sun : Moon;
   const hasSelection = selectedProjectIds.size > 0;
 
   // Filter and sort projects

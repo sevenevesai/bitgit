@@ -1020,6 +1020,7 @@ pub async fn increment_project_stats(
 
 /// Simplified analytics data structures for Tauri commands
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct AnalyticsData {
     pub overview: DashboardOverview,
     pub timeline: Vec<ActivityEntry>,
@@ -1030,6 +1031,7 @@ pub struct AnalyticsData {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct DashboardOverview {
     pub total_projects: usize,
     pub active_projects: usize,
@@ -1044,6 +1046,7 @@ pub struct DashboardOverview {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct MostActiveProject {
     pub id: String,
     pub name: String,
@@ -1051,6 +1054,7 @@ pub struct MostActiveProject {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ActivityEntry {
     pub id: String,
     pub project_id: String,
@@ -1068,6 +1072,7 @@ pub struct ActivityEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthIndicator {
     pub project_id: String,
     pub project_name: String,
@@ -1079,6 +1084,7 @@ pub struct HealthIndicator {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct StaleBranchInfo {
     pub name: String,
     pub days_since_last_commit: i32,
@@ -1086,6 +1092,7 @@ pub struct StaleBranchInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ContributionHeatmap {
     pub daily_contributions: HashMap<String, DailyContribution>,
     pub start_date: String,
@@ -1097,6 +1104,7 @@ pub struct ContributionHeatmap {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct DailyContribution {
     pub date: String,
     pub count: u32,
@@ -1105,6 +1113,7 @@ pub struct DailyContribution {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct MostProductiveDay {
     pub date: String,
     pub count: u32,
@@ -1141,12 +1150,17 @@ pub async fn generate_analytics() -> Result<AnalyticsData, String> {
     let mut daily_contributions: HashMap<String, DailyContribution> = HashMap::new();
     let mut project_commit_counts: HashMap<String, u32> = HashMap::new();
 
+    println!("[Analytics] Starting analysis of {} projects", projects.len());
+
     // Analyze each project
     for (idx, project) in projects.iter().enumerate() {
         // Skip projects without local paths
         let local_path = match &project.local_path {
             Some(path) => path,
-            None => continue,
+            None => {
+                println!("[Analytics] Skipping project {} (no local path)", project.name);
+                continue;
+            }
         };
 
         // Check if project was recently synced (active)
@@ -1169,14 +1183,19 @@ pub async fn generate_analytics() -> Result<AnalyticsData, String> {
 
         // Get commit history for analytics (last 90 days)
         let since = (today_start - Duration::days(90)).format("%Y-%m-%d").to_string();
+        println!("[Analytics] Fetching commits for {} since {}", project.name, since);
         match service.get_analytics_commit_history(local_path, 100, Some(since.clone()), None, None) {
             Ok(commits) => {
+                println!("[Analytics] Found {} commits for {}", commits.len(), project.name);
                 project_commit_counts.insert(project.id.clone(), commits.len() as u32);
 
                 for commit in commits {
                     let commit_date = match chrono::DateTime::parse_from_rfc3339(&commit.date) {
                         Ok(dt) => dt,
-                        Err(_) => continue,
+                        Err(e) => {
+                            println!("[Analytics] Failed to parse date '{}': {}", commit.date, e);
+                            continue;
+                        }
                     };
 
                     // Count commits by date range
@@ -1357,6 +1376,18 @@ pub async fn generate_analytics() -> Result<AnalyticsData, String> {
             date: d.date.clone(),
             count: d.count,
         });
+
+    println!("[Analytics] Summary:");
+    println!("  Total Projects: {}", projects.len());
+    println!("  Active Projects: {}", active_projects);
+    println!("  Needs Attention: {}", needs_attention);
+    println!("  Commits Today: {}", commits_today);
+    println!("  Commits This Week: {}", commits_this_week);
+    println!("  Commits This Month: {}", commits_this_month);
+    println!("  Total Branches: {}", total_branches);
+    println!("  Total Stashes: {}", total_stashes);
+    println!("  Total Tags: {}", total_tags);
+    println!("  Timeline Entries: {}", timeline_entries.len());
 
     let analytics = AnalyticsData {
         overview: DashboardOverview {

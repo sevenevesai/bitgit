@@ -166,7 +166,13 @@ export function AnalyticsDashboard() {
                       {entry.commitMessage}
                     </p>
                     <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                      {entry.projectName} • {entry.author}
+                      {entry.projectName}
+                      {entry.branch && (
+                        <>
+                          <span className="mx-1">•</span>
+                          <span className="font-mono text-xs">{entry.branch.replace('HEAD -> ', '').replace(/,.*$/, '').trim()}</span>
+                        </>
+                      )}
                     </p>
                   </div>
                   <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
