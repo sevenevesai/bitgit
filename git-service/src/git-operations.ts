@@ -650,8 +650,9 @@ export class GitOperations {
         maxCount: params.limit || 100,
       };
 
-      if (params.since) args.from = params.since;
-      if (params.until) args.to = params.until;
+      // Use git's --since and --until flags instead of from/to
+      if (params.since) args['--since'] = params.since;
+      if (params.until) args['--until'] = params.until;
       if (params.author) args['--author'] = params.author;
 
       const log: LogResult = await this.git.log(args);
@@ -750,8 +751,9 @@ export class GitOperations {
     try {
       const args: any = {};
 
-      if (params.since) args.from = params.since;
-      if (params.until) args.to = params.until;
+      // Use git's --since and --until flags
+      if (params.since) args['--since'] = params.since;
+      if (params.until) args['--until'] = params.until;
       if (params.author) args['--author'] = params.author;
 
       const log: LogResult = await this.git.log(args);
@@ -839,8 +841,8 @@ export class GitOperations {
   async getCommitCountForDateRange(since: string, until?: string): Promise<number> {
     await this.ensureGitRepo();
     try {
-      const args: any = { from: since };
-      if (until) args.to = until;
+      const args: any = { '--since': since };
+      if (until) args['--until'] = until;
 
       const log = await this.git.log(args);
       return log.total;

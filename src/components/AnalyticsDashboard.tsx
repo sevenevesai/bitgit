@@ -178,9 +178,13 @@ export function AnalyticsDashboard() {
                   <span className="text-green-600 dark:text-green-400">+{entry.additions}</span>
                   <span className="text-red-600 dark:text-red-400">-{entry.deletions}</span>
                   <span className="text-gray-400 dark:text-gray-500">•</span>
-                  <code className="text-xs bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">
-                    {entry.commitHash.substring(0, 7)}
-                  </code>
+                  {entry.commitHash ? (
+                    <code className="text-xs bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">
+                      {entry.commitHash.substring(0, 7)}
+                    </code>
+                  ) : (
+                    <span className="text-xs text-gray-400">N/A</span>
+                  )}
                 </div>
               </div>
             </div>
