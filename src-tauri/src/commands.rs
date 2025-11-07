@@ -1525,14 +1525,20 @@ pub async fn generate_analytics_overview() -> Result<DashboardOverview, String> 
 #[tauri::command]
 pub async fn generate_analytics_timeline() -> Result<Vec<ActivityEntry>, String> {
     use chrono::{Duration, Utc};
+    use std::time::Instant;
+
+    let start_time = Instant::now();
+    eprintln!("[Analytics Timeline] Starting generation...");
 
     let projects = project_cache::load_projects()
         .map_err(|e| format!("Failed to load projects: {}", e))?;
 
+    eprintln!("[Analytics Timeline] Loaded {} projects in {:?}", projects.len(), start_time.elapsed());
+
     let service = get_git_service()?;
     let now = Utc::now();
     let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let since = (today_start - Duration::days(90)).format("%Y-%m-%d").to_string();
+    let since = (today_start - Duration::days(30)).format("%Y-%m-%d").to_string(); // Reduced from 90 to 30 days
 
     let mut timeline_entries: Vec<ActivityEntry> = Vec::new();
 
@@ -1542,7 +1548,9 @@ pub async fn generate_analytics_timeline() -> Result<Vec<ActivityEntry>, String>
             None => continue,
         };
 
-        if let Ok(commits) = service.get_analytics_commit_history(local_path, 100, Some(since.clone()), None, None) {
+        let project_start = Instant::now();
+        if let Ok(commits) = service.get_analytics_commit_history(local_path, 30, Some(since.clone()), None, None) { // Reduced from 100 to 30 commits
+            eprintln!("[Analytics Timeline] Project '{}': fetched {} commits in {:?}", project.name, commits.len(), project_start.elapsed());
             for commit in commits {
                 timeline_entries.push(ActivityEntry {
                     id: format!("{}-{}", project.id, commit.hash),
@@ -1560,18 +1568,30 @@ pub async fn generate_analytics_timeline() -> Result<Vec<ActivityEntry>, String>
                     deletions: commit.deletions,
                 });
             }
+        } else {
+            eprintln!("[Analytics Timeline] Project '{}': failed to fetch commits (took {:?})", project.name, project_start.elapsed());
         }
     }
 
     timeline_entries.sort_by(|a, b| b.date.cmp(&a.date));
-    Ok(timeline_entries.into_iter().take(100).collect())
+    let result = timeline_entries.into_iter().take(50).collect(); // Reduced from 100 to 50
+
+    eprintln!("[Analytics Timeline] Total time: {:?}", start_time.elapsed());
+    Ok(result)
 }
 
 /// Generate health indicators
 #[tauri::command]
 pub async fn generate_analytics_health() -> Result<Vec<HealthIndicator>, String> {
+    use std::time::Instant;
+
+    let start_time = Instant::now();
+    eprintln!("[Analytics Health] Starting generation...");
+
     let projects = project_cache::load_projects()
         .map_err(|e| format!("Failed to load projects: {}", e))?;
+
+    eprintln!("[Analytics Health] Loaded {} projects", projects.len());
 
     let service = get_git_service()?;
     let mut health_indicators: Vec<HealthIndicator> = Vec::new();
@@ -1581,6 +1601,8 @@ pub async fn generate_analytics_health() -> Result<Vec<HealthIndicator>, String>
             Some(path) => path,
             None => continue,
         };
+
+        let project_start = Instant::now();
 
         let days_since_last_commit = service.get_days_since_last_commit(local_path).ok().flatten();
 
@@ -1630,6 +1652,8 @@ pub async fn generate_analytics_health() -> Result<Vec<HealthIndicator>, String>
             warnings.push(format!("{} stale branches", stale_branches.len()));
         }
 
+        eprintln!("[Analytics Health] Project '{}': analyzed in {:?}", project.name, project_start.elapsed());
+
         health_indicators.push(HealthIndicator {
             project_id: project.id.clone(),
             project_name: project.name.clone(),
@@ -1641,6 +1665,7 @@ pub async fn generate_analytics_health() -> Result<Vec<HealthIndicator>, String>
         });
     }
 
+    eprintln!("[Analytics Health] Total time: {:?}", start_time.elapsed());
     Ok(health_indicators)
 }
 
@@ -1648,14 +1673,20 @@ pub async fn generate_analytics_health() -> Result<Vec<HealthIndicator>, String>
 #[tauri::command]
 pub async fn generate_analytics_heatmap() -> Result<ContributionHeatmap, String> {
     use chrono::{Duration, Utc};
+    use std::time::Instant;
+
+    let start_time = Instant::now();
+    eprintln!("[Analytics Heatmap] Starting generation...");
 
     let projects = project_cache::load_projects()
         .map_err(|e| format!("Failed to load projects: {}", e))?;
 
+    eprintln!("[Analytics Heatmap] Loaded {} projects", projects.len());
+
     let service = get_git_service()?;
     let now = Utc::now();
     let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let year_start = today_start - Duration::days(365);
+    let year_start = today_start - Duration::days(90); // Reduced from 365 to 90 days
     let since = year_start.format("%Y-%m-%d").to_string();
 
     let mut daily_contributions: HashMap<String, DailyContribution> = HashMap::new();
@@ -1666,7 +1697,9 @@ pub async fn generate_analytics_heatmap() -> Result<ContributionHeatmap, String>
             None => continue,
         };
 
-        if let Ok(commits) = service.get_analytics_commit_history(local_path, 1000, Some(since.clone()), None, None) {
+        let project_start = Instant::now();
+        if let Ok(commits) = service.get_analytics_commit_history(local_path, 500, Some(since.clone()), None, None) { // Reduced from 1000 to 500
+            eprintln!("[Analytics Heatmap] Project '{}': fetched {} commits in {:?}", project.name, commits.len(), project_start.elapsed());
             for commit in commits {
                 let date_key = commit.date.split('T').next().unwrap_or(&commit.date).to_string();
                 let entry = daily_contributions.entry(date_key.clone()).or_insert(DailyContribution {
@@ -1680,6 +1713,8 @@ pub async fn generate_analytics_heatmap() -> Result<ContributionHeatmap, String>
                     entry.projects.push(project.id.clone());
                 }
             }
+        } else {
+            eprintln!("[Analytics Heatmap] Project '{}': failed to fetch commits (took {:?})", project.name, project_start.elapsed());
         }
     }
 
@@ -1705,7 +1740,7 @@ pub async fn generate_analytics_heatmap() -> Result<ContributionHeatmap, String>
     let mut temp_streak = 0u32;
     let mut date = now.date_naive();
 
-    for _ in 0..365 {
+    for _ in 0..90 { // Reduced from 365 to 90 days
         let date_key = date.format("%Y-%m-%d").to_string();
         if daily_contributions.contains_key(&date_key) {
             temp_streak += 1;
@@ -1731,6 +1766,8 @@ pub async fn generate_analytics_heatmap() -> Result<ContributionHeatmap, String>
         });
 
     let total_contributions: u32 = daily_contributions.values().map(|d| d.count).sum();
+
+    eprintln!("[Analytics Heatmap] Total time: {:?}", start_time.elapsed());
 
     Ok(ContributionHeatmap {
         daily_contributions,

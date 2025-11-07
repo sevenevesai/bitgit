@@ -20,10 +20,35 @@ interface IPCResponse {
 
 export class IPCServer {
   private githubToken?: string;
+  private isShuttingDown = false;
 
   constructor() {
+    this.setupErrorHandlers();
     this.setupInputListener();
     this.log('Git service IPC server started');
+  }
+
+  private setupErrorHandlers() {
+    // Handle broken pipe errors when parent process disconnects
+    process.stdout.on('error', (err: any) => {
+      if (err.code === 'EPIPE' && !this.isShuttingDown) {
+        this.isShuttingDown = true;
+        this.log('Parent process disconnected, shutting down gracefully');
+        process.exit(0);
+      }
+    });
+
+    // Handle uncaught exceptions
+    process.on('uncaughtException', (err: any) => {
+      if (err.code === 'EPIPE' && !this.isShuttingDown) {
+        this.isShuttingDown = true;
+        this.log('Broken pipe detected, shutting down gracefully');
+        process.exit(0);
+      } else {
+        this.log(`Uncaught exception: ${err.message}`);
+        process.exit(1);
+      }
+    });
   }
 
   private setupInputListener() {
@@ -336,8 +361,22 @@ export class IPCServer {
   }
 
   private sendResponse(response: IPCResponse) {
-    // Write JSON response to stdout
-    console.log(JSON.stringify(response));
+    if (this.isShuttingDown) {
+      return; // Don't try to send responses during shutdown
+    }
+
+    try {
+      // Write JSON response to stdout
+      console.log(JSON.stringify(response));
+    } catch (error: any) {
+      if (error.code === 'EPIPE') {
+        this.isShuttingDown = true;
+        this.log('Broken pipe when sending response, shutting down');
+        process.exit(0);
+      } else {
+        throw error;
+      }
+    }
   }
 
   private log(message: string) {
