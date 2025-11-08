@@ -767,13 +767,25 @@ export class GitOperations {
         const message = lines[i++].trim();
         const branch = lines[i++].trim() || 'main';
 
-        // Parse numstat lines (until empty line or next COMMIT_START)
+        // Skip any empty lines between commit metadata and numstat
+        while (i < lines.length && lines[i].trim() === '') {
+          i++;
+        }
+
+        // Parse numstat lines (until next COMMIT_START)
         let filesChanged = 0;
         let additions = 0;
         let deletions = 0;
 
-        while (i < lines.length && lines[i].trim() !== '' && lines[i].trim() !== 'COMMIT_START') {
+        while (i < lines.length && lines[i].trim() !== 'COMMIT_START') {
           const numstatLine = lines[i].trim();
+
+          // Skip empty lines within numstat section
+          if (numstatLine === '') {
+            i++;
+            continue;
+          }
+
           const parts = numstatLine.split('\t');
 
           if (parts.length >= 3) {
@@ -790,6 +802,8 @@ export class GitOperations {
           }
           i++;
         }
+
+        console.error(`[Git Analytics] Parsed commit ${hash.substring(0, 7)}: +${additions} -${deletions} (${filesChanged} files)`);
 
         commits.push({
           hash,
