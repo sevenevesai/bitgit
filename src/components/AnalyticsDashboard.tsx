@@ -3,7 +3,7 @@ import { useAppStore } from '../stores/useAppStore';
 import { TrendingUp, Activity, AlertTriangle, Calendar, RefreshCw } from 'lucide-react';
 
 // Loading skeleton component for sections
-function SectionSkeleton({ title, rows = 3 }: { title: string; rows?: number }) {
+function SectionSkeleton({ rows = 3 }: { rows?: number }) {
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div className="flex items-center justify-between mb-4">
@@ -195,13 +195,13 @@ export function AnalyticsDashboard() {
       )}
 
       {/* Recent Activity Timeline */}
-      {!timeline || timeline.length === 0 ? (
-        <SectionSkeleton title="Recent Activity" rows={5} />
+      {!timeline || timeline.entries.length === 0 ? (
+        <SectionSkeleton rows={5} />
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Recent Activity</h2>
           <div className="space-y-4 max-h-96 overflow-y-auto">
-            {timeline.slice(0, 10).map((entry) => (
+            {timeline.entries.slice(0, 10).map((entry) => (
             <div key={entry.id} className="flex items-start gap-4 pb-4 border-b border-gray-100 dark:border-gray-700 last:border-0">
               <div
                 className="w-2 h-2 rounded-full mt-2 flex-shrink-0"
@@ -249,7 +249,7 @@ export function AnalyticsDashboard() {
 
       {/* Repository Health */}
       {!health || health.length === 0 ? (
-        <SectionSkeleton title="Repository Health" rows={3} />
+        <SectionSkeleton rows={3} />
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Repository Health</h2>

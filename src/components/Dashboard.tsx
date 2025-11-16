@@ -18,10 +18,8 @@ export function Dashboard() {
     selectAll,
     clearSelection,
     syncSelected,
-    syncSelectedParallel,
     startBackgroundChecking,
     stopBackgroundChecking,
-    refreshAllProjects,
   } = useAppStore();
   console.log('[Dashboard] State:', { projects, isLoading, projectCount: projects?.length });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);

@@ -1,7 +1,20 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/tauri';
 import toast from 'react-hot-toast';
-import { Project, SyncAction, SyncResult, AppSettings, QueuedOperation, RetryConfig, AnalyticsData } from '../types';
+import {
+  Project,
+  SyncAction,
+  SyncResult,
+  AppSettings,
+  QueuedOperation,
+  RetryConfig,
+  AnalyticsData,
+  DashboardOverview,
+  ActivityEntry,
+  ActivityTimeline,
+  HealthIndicator,
+  ContributionHeatmap
+} from '../types';
 
 interface AppState {
   // State
@@ -275,9 +288,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
 
     try {
-      const result = retryConfig
-        ? await retryWithBackoff(executSync, retryConfig)
-        : await executSync();
+      await (retryConfig
+        ? retryWithBackoff(executSync, retryConfig)
+        : executSync());
 
       toast.success(`${actionName} completed successfully`, { id: loadingToast });
 
@@ -529,7 +542,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           : op
       ),
     }));
-    toast.info('Operation cancelled');
+    toast('Operation cancelled');
   },
 
   // Retry a failed operation
@@ -599,7 +612,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Initialize empty analytics structure
     const emptyAnalytics: AnalyticsData = {
       overview: null as any,
-      timeline: [],
+      timeline: {
+        entries: [],
+        dateRange: { start: timestamp, end: timestamp },
+        totalCommits: 0,
+        totalProjects: 0
+      },
       health: [],
       heatmap: null as any,
       lastUpdated: timestamp,
@@ -623,8 +641,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         return overview;
       });
 
-      const timelinePromise = invoke<ActivityEntry[]>('generate_analytics_timeline').then(timeline => {
-        console.log('[Store] Timeline loaded:', timeline.length, 'entries');
+      const timelinePromise = invoke<ActivityEntry[]>('generate_analytics_timeline').then(timelineEntries => {
+        console.log('[Store] Timeline loaded:', timelineEntries.length, 'entries');
+        const timeline: ActivityTimeline = {
+          entries: timelineEntries,
+          dateRange: { start: timestamp, end: timestamp },
+          totalCommits: timelineEntries.length,
+          totalProjects: new Set(timelineEntries.map(e => e.projectId)).size
+        };
         set((state) => ({
           analytics: {
             ...(state.analytics || emptyAnalytics),
@@ -676,20 +700,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     const loadingToast = toast.loading('Refreshing analytics...');
     set({ isLoadingAnalytics: true });
     try {
-      const [overview, timeline, health, heatmap] = await Promise.all([
+      const [overview, timelineEntries, health, heatmap] = await Promise.all([
         invoke<DashboardOverview>('generate_analytics_overview'),
         invoke<ActivityEntry[]>('generate_analytics_timeline'),
         invoke<HealthIndicator[]>('generate_analytics_health'),
         invoke<ContributionHeatmap>('generate_analytics_heatmap'),
       ]);
 
+      const timestamp = new Date().toISOString();
+      const timeline: ActivityTimeline = {
+        entries: timelineEntries,
+        dateRange: { start: timestamp, end: timestamp },
+        totalCommits: timelineEntries.length,
+        totalProjects: new Set(timelineEntries.map(e => e.projectId)).size
+      };
+
       const analytics: AnalyticsData = {
         overview,
         timeline,
         health,
         heatmap,
-        lastUpdated: new Date().toISOString(),
-        generatedAt: new Date().toISOString(),
+        lastUpdated: timestamp,
+        generatedAt: timestamp,
       };
 
       set({ analytics, isLoadingAnalytics: false });

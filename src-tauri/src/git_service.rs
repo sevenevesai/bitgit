@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct IPCCommand {
@@ -38,22 +40,36 @@ impl GitService {
     }
 
     fn start(&self) -> Result<()> {
-        // The working directory is src-tauri, so we need to go up one level
         let git_service_path = if cfg!(debug_assertions) {
             // Development mode: running from src-tauri directory
-            "../git-service/dist/index.js"
+            std::path::PathBuf::from("../git-service/dist/index.js")
         } else {
-            // Production mode: resources are bundled differently
-            "../git-service/dist/index.js"
+            // Production mode: Tauri bundles resources in _up_ directory
+            let exe_dir = std::env::current_exe()
+                .context("Failed to get executable path")?
+                .parent()
+                .context("Failed to get executable directory")?
+                .to_path_buf();
+            exe_dir.join("_up_").join("git-service").join("dist").join("index.js")
         };
 
-        let mut child = Command::new("node")
-            .arg(git_service_path)
+        eprintln!("[Rust] Starting Git service from: {}", git_service_path.display());
+
+        let mut cmd = Command::new("node");
+        cmd.arg(&git_service_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .context("Failed to spawn Git service process")?;
+            .stderr(Stdio::inherit());
+
+        // On Windows, hide the console window for the Node.js process
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut child = cmd.spawn()
+            .context("Failed to spawn Git service process. Ensure Node.js is installed.")?;
 
         // Test with a ping command and consume the response
         let stdin = child.stdin.as_mut().context("Failed to access stdin")?;
