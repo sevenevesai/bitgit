@@ -9,6 +9,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 // Global Git service instance (Arc allows multiple references without dropping)
 static GIT_SERVICE: Lazy<Mutex<Option<Arc<GitService>>>> = Lazy::new(|| Mutex::new(None));
 
@@ -513,9 +516,14 @@ pub async fn open_in_vscode(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(&["/C", "code", &path])
-            .spawn()
+        // Use cmd /C to properly resolve 'code' command from PATH
+        // but hide the console window with CREATE_NO_WINDOW flag
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let mut cmd = Command::new("cmd");
+        cmd.args(&["/C", "code", &path])
+            .creation_flags(CREATE_NO_WINDOW);
+
+        cmd.spawn()
             .map_err(|e| format!("Failed to open VS Code: {}. Make sure VS Code is installed and 'code' command is available in PATH.", e))?;
     }
 
