@@ -122,3 +122,39 @@ pub struct ProjectStatistics {
     pub last_sync_date: Option<String>,
     pub last_commit_date: Option<String>,
 }
+
+// Pre-sync validation types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreSyncValidation {
+    pub can_proceed: bool,
+    pub has_warnings: bool,
+    pub total_staged_size: u64,
+    pub total_staged_size_mb: f64,
+    pub issues: Vec<FileValidationIssue>,
+    pub suggested_gitignore: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileValidationIssue {
+    pub file_path: String,
+    pub severity: ValidationSeverity,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_mb: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gitignore_pattern: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ValidationSeverity {
+    Error,
+    Warning,
+    Info,
+}

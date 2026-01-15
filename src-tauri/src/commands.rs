@@ -631,6 +631,31 @@ pub async fn create_github_repository(
     Ok(project)
 }
 
+/// Validate files before sync to prevent push failures
+/// Checks for large files (>100MB GitHub limit) and problematic patterns
+#[tauri::command]
+pub async fn validate_before_sync(project_id: String) -> Result<PreSyncValidation, String> {
+    let projects = project_cache::load_projects()
+        .map_err(|e| format!("Failed to load projects: {}", e))?;
+
+    let project = projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+
+    let local_path = project
+        .local_path
+        .as_ref()
+        .ok_or_else(|| "Project has no local path".to_string())?;
+
+    let service = get_git_service()?;
+    let validation = service
+        .validate_before_sync(local_path)
+        .map_err(|e| format!("Validation failed: {}", e))?;
+
+    Ok(validation)
+}
+
 /// Sync a project (replacement for sync_repository that works with projects)
 #[tauri::command]
 pub async fn sync_project(project_id: String, action: SyncAction) -> Result<SyncResult, String> {

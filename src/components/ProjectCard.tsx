@@ -8,6 +8,7 @@ import { LinkLocalModal } from './LinkLocalModal';
 import { LinkGitHubModal } from './LinkGitHubModal';
 import { CreateRepoModal } from './CreateRepoModal';
 import { ProjectDetails } from './ProjectDetails';
+import { ValidationWarningModal, PreSyncValidation } from './ValidationWarningModal';
 import {
   GitBranch,
   GitCommit,
@@ -48,6 +49,9 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [descriptionText, setDescriptionText] = useState(project.description || '');
+  const [showValidationModal, setShowValidationModal] = useState(false);
+  const [pendingValidation, setPendingValidation] = useState<PreSyncValidation | null>(null);
+  const [pendingSyncAction, setPendingSyncAction] = useState<SyncAction | null>(null);
 
   const isSelected = selectedProjectIds.has(project.id);
   const isFavorite = project.favorite || false;
@@ -80,11 +84,57 @@ export function ProjectCard({ project }: ProjectCardProps) {
   };
 
   const handleSync = async (action: SyncAction) => {
-    setIsLoading(true);
-    try {
-      await syncProject(project.id, action);
-    } finally {
-      setIsLoading(false);
+    // Only validate for actions that push to GitHub
+    const needsValidation = action.type === 'push_local' || action.type === 'full_sync';
+
+    if (needsValidation && project.localPath) {
+      setIsLoading(true);
+      try {
+        // Run validation first
+        const validation = await invoke<PreSyncValidation>('validate_before_sync', {
+          projectId: project.id,
+        });
+
+        // If there are issues, show the modal
+        if (!validation.canProceed || validation.hasWarnings) {
+          setPendingValidation(validation);
+          setPendingSyncAction(action);
+          setShowValidationModal(true);
+          setIsLoading(false);
+          return;
+        }
+
+        // No issues, proceed directly
+        await syncProject(project.id, action);
+      } catch (error: any) {
+        console.error('Validation failed:', error);
+        // If validation fails, still allow sync (graceful degradation)
+        await syncProject(project.id, action);
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
+      // For merge/pull operations, no validation needed
+      setIsLoading(true);
+      try {
+        await syncProject(project.id, action);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const handleProceedWithSync = async () => {
+    setShowValidationModal(false);
+    if (pendingSyncAction) {
+      setIsLoading(true);
+      try {
+        await syncProject(project.id, pendingSyncAction);
+      } finally {
+        setIsLoading(false);
+        setPendingSyncAction(null);
+        setPendingValidation(null);
+      }
     }
   };
 
@@ -743,6 +793,19 @@ export function ProjectCard({ project }: ProjectCardProps) {
         onCreate={handleCreateGitHubRepo}
         projectName={project.name}
       />
+      {pendingValidation && (
+        <ValidationWarningModal
+          isOpen={showValidationModal}
+          onClose={() => {
+            setShowValidationModal(false);
+            setPendingSyncAction(null);
+            setPendingValidation(null);
+          }}
+          onProceed={handleProceedWithSync}
+          validation={pendingValidation}
+          projectPath={project.localPath || ''}
+        />
+      )}
     </div>
   );
 }

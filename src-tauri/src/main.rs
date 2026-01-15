@@ -35,6 +35,7 @@ fn main() {
             open_in_vscode,
             clone_repository,
             create_github_repository,
+            validate_before_sync,
             sync_project,
             // Advanced Git features
             git_get_branches,

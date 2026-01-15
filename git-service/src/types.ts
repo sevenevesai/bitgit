@@ -93,8 +93,31 @@ export interface AggregateStats {
   contributors: number;
 }
 
+// Pre-sync validation types
+export type ValidationSeverity = 'error' | 'warning' | 'info';
+
+export interface FileValidationIssue {
+  filePath: string;
+  severity: ValidationSeverity;
+  reason: string;
+  sizeBytes?: number;
+  sizeMB?: number;
+  suggestion?: string;
+  gitignorePattern?: string;
+}
+
+export interface PreSyncValidation {
+  canProceed: boolean;          // false if there are errors that will definitely fail
+  hasWarnings: boolean;         // true if there are warnings but can proceed
+  totalStagedSize: number;      // total size of staged changes in bytes
+  totalStagedSizeMB: number;    // total size in MB for display
+  issues: FileValidationIssue[];
+  suggestedGitignore: string[]; // patterns to add to .gitignore
+}
+
 export type GitOperation =
   | { type: 'checkStatus'; repoPath: string }
+  | { type: 'validateBeforeSync'; repoPath: string }
   | { type: 'pushLocal'; repoPath: string }
   | { type: 'mergeBranches'; repoPath: string; branches: string[] }
   | { type: 'pullBranches'; repoPath: string; branches: string[] }

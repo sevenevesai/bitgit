@@ -1,5 +1,7 @@
 import simpleGit, { SimpleGit, StatusResult, LogResult, DiffResult } from 'simple-git';
-import { StatusInfo, SyncResult, BranchInfo, CommitInfo, StashInfo, TagInfo, DiffInfo } from './types.js';
+import { StatusInfo, SyncResult, BranchInfo, CommitInfo, StashInfo, TagInfo, DiffInfo, PreSyncValidation, FileValidationIssue } from './types.js';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class GitOperations {
   private git: SimpleGit;
@@ -101,6 +103,180 @@ export class GitOperations {
       };
     } catch (error) {
       throw new Error(`Failed to check status: ${error}`);
+    }
+  }
+
+  // ==================== PRE-SYNC VALIDATION ====================
+
+  // GitHub file size limits
+  private static readonly SIZE_LIMIT_ERROR = 100 * 1024 * 1024;  // 100MB - push will fail
+  private static readonly SIZE_LIMIT_WARNING = 50 * 1024 * 1024; // 50MB - GitHub warns
+  private static readonly SIZE_LIMIT_INFO = 10 * 1024 * 1024;    // 10MB - flag for awareness
+
+  // Patterns for files that typically shouldn't be in git
+  private static readonly PROBLEMATIC_PATTERNS: Array<{
+    pattern: RegExp;
+    reason: string;
+    suggestion: string;
+    gitignorePattern: string;
+  }> = [
+    // Databases
+    { pattern: /\.sqlite3?$/i, reason: 'SQLite database file', suggestion: 'Database files should not be in git - they contain binary data that changes frequently', gitignorePattern: '*.sqlite3' },
+    { pattern: /\.db$/i, reason: 'Database file', suggestion: 'Database files should not be in git', gitignorePattern: '*.db' },
+    { pattern: /\.mdb$/i, reason: 'Access database file', suggestion: 'Database files should not be in git', gitignorePattern: '*.mdb' },
+
+    // Logs
+    { pattern: /\.log$/i, reason: 'Log file', suggestion: 'Log files are generated and should not be tracked', gitignorePattern: '*.log' },
+    { pattern: /logs?\//i, reason: 'Log directory', suggestion: 'Log directories should be gitignored', gitignorePattern: 'logs/' },
+
+    // Dependencies (these can be huge)
+    { pattern: /node_modules\//i, reason: 'Node.js dependencies', suggestion: 'Run "npm install" to restore - never commit node_modules', gitignorePattern: 'node_modules/' },
+    { pattern: /\.pnp\.cjs$/i, reason: 'Yarn PnP file', suggestion: 'Yarn PnP files can be large', gitignorePattern: '.pnp.cjs' },
+    { pattern: /vendor\//i, reason: 'Vendor dependencies', suggestion: 'Vendor directories typically contain dependencies', gitignorePattern: 'vendor/' },
+    { pattern: /\.venv\//i, reason: 'Python virtual environment', suggestion: 'Virtual environments should be gitignored', gitignorePattern: '.venv/' },
+    { pattern: /venv\//i, reason: 'Python virtual environment', suggestion: 'Virtual environments should be gitignored', gitignorePattern: 'venv/' },
+    { pattern: /__pycache__\//i, reason: 'Python bytecode cache', suggestion: 'Python cache should be gitignored', gitignorePattern: '__pycache__/' },
+
+    // Build outputs
+    { pattern: /dist\//i, reason: 'Build output directory', suggestion: 'Build outputs are generated and should be gitignored', gitignorePattern: 'dist/' },
+    { pattern: /build\//i, reason: 'Build output directory', suggestion: 'Build outputs should be gitignored unless intentional', gitignorePattern: 'build/' },
+    { pattern: /target\//i, reason: 'Rust/Maven build output', suggestion: 'Build outputs should be gitignored', gitignorePattern: 'target/' },
+    { pattern: /\.next\//i, reason: 'Next.js build cache', suggestion: 'Next.js build cache should be gitignored', gitignorePattern: '.next/' },
+    { pattern: /\.nuxt\//i, reason: 'Nuxt build cache', suggestion: 'Nuxt build cache should be gitignored', gitignorePattern: '.nuxt/' },
+
+    // Large media files
+    { pattern: /\.(mp4|mov|avi|mkv|webm)$/i, reason: 'Video file', suggestion: 'Large video files should use Git LFS or external storage', gitignorePattern: '*.mp4' },
+    { pattern: /\.(zip|tar|gz|rar|7z)$/i, reason: 'Archive file', suggestion: 'Large archives should not be in git', gitignorePattern: '*.zip' },
+    { pattern: /\.(iso|dmg|img)$/i, reason: 'Disk image', suggestion: 'Disk images should not be in git', gitignorePattern: '*.iso' },
+
+    // IDE and OS files
+    { pattern: /\.DS_Store$/i, reason: 'macOS metadata', suggestion: 'OS-specific files should be gitignored', gitignorePattern: '.DS_Store' },
+    { pattern: /Thumbs\.db$/i, reason: 'Windows thumbnail cache', suggestion: 'OS-specific files should be gitignored', gitignorePattern: 'Thumbs.db' },
+    { pattern: /\.idea\//i, reason: 'JetBrains IDE config', suggestion: 'IDE configs are often user-specific', gitignorePattern: '.idea/' },
+
+    // Environment and secrets
+    { pattern: /\.env\.local$/i, reason: 'Local environment file', suggestion: 'Environment files may contain secrets', gitignorePattern: '.env.local' },
+    { pattern: /\.env\.\w+$/i, reason: 'Environment file', suggestion: 'Environment files may contain secrets', gitignorePattern: '.env.*' },
+
+    // Temporary files
+    { pattern: /\.tmp$/i, reason: 'Temporary file', suggestion: 'Temporary files should not be tracked', gitignorePattern: '*.tmp' },
+    { pattern: /\.temp$/i, reason: 'Temporary file', suggestion: 'Temporary files should not be tracked', gitignorePattern: '*.temp' },
+    { pattern: /\.swp$/i, reason: 'Vim swap file', suggestion: 'Editor swap files should be gitignored', gitignorePattern: '*.swp' },
+    { pattern: /~$/i, reason: 'Backup file', suggestion: 'Backup files should be gitignored', gitignorePattern: '*~' },
+  ];
+
+  /**
+   * Validate files before sync to catch issues that would cause push failures
+   * This runs BEFORE attempting any git operations to prevent stuck states
+   */
+  async validateBeforeSync(): Promise<PreSyncValidation> {
+    await this.ensureGitRepo();
+
+    const issues: FileValidationIssue[] = [];
+    const suggestedGitignore = new Set<string>();
+    let totalSize = 0;
+    let hasErrors = false;
+    let hasWarnings = false;
+
+    try {
+      const status = await this.git.status();
+      const allFiles = [
+        ...status.files.map(f => f.path),
+        ...status.not_added,
+      ];
+
+      console.error(`[Validation] Checking ${allFiles.length} files before sync`);
+
+      for (const filePath of allFiles) {
+        const fullPath = path.join(this.repoPath, filePath);
+
+        // Check if file exists (might be deleted)
+        if (!fs.existsSync(fullPath)) continue;
+
+        const stats = fs.statSync(fullPath);
+
+        // Skip directories
+        if (stats.isDirectory()) continue;
+
+        const fileSize = stats.size;
+        totalSize += fileSize;
+        const fileSizeMB = fileSize / (1024 * 1024);
+
+        // Check file size against GitHub limits
+        if (fileSize >= GitOperations.SIZE_LIMIT_ERROR) {
+          issues.push({
+            filePath,
+            severity: 'error',
+            reason: `File exceeds GitHub's 100MB limit (${fileSizeMB.toFixed(1)}MB)`,
+            sizeBytes: fileSize,
+            sizeMB: fileSizeMB,
+            suggestion: 'This file WILL fail to push. Add to .gitignore or use Git LFS for large files.',
+            gitignorePattern: filePath,
+          });
+          hasErrors = true;
+          suggestedGitignore.add(filePath);
+        } else if (fileSize >= GitOperations.SIZE_LIMIT_WARNING) {
+          issues.push({
+            filePath,
+            severity: 'warning',
+            reason: `Large file (${fileSizeMB.toFixed(1)}MB) - GitHub warns above 50MB`,
+            sizeBytes: fileSize,
+            sizeMB: fileSizeMB,
+            suggestion: 'Consider using Git LFS for files this large.',
+          });
+          hasWarnings = true;
+        } else if (fileSize >= GitOperations.SIZE_LIMIT_INFO) {
+          issues.push({
+            filePath,
+            severity: 'info',
+            reason: `Notable file size (${fileSizeMB.toFixed(1)}MB)`,
+            sizeBytes: fileSize,
+            sizeMB: fileSizeMB,
+          });
+        }
+
+        // Check against problematic patterns
+        for (const pattern of GitOperations.PROBLEMATIC_PATTERNS) {
+          if (pattern.pattern.test(filePath)) {
+            // Don't duplicate if we already flagged for size
+            const existingIssue = issues.find(i => i.filePath === filePath && i.severity === 'error');
+            if (!existingIssue) {
+              issues.push({
+                filePath,
+                severity: 'warning',
+                reason: pattern.reason,
+                sizeBytes: fileSize,
+                sizeMB: fileSizeMB,
+                suggestion: pattern.suggestion,
+                gitignorePattern: pattern.gitignorePattern,
+              });
+              hasWarnings = true;
+            }
+            suggestedGitignore.add(pattern.gitignorePattern);
+            break; // Only match first pattern per file
+          }
+        }
+      }
+
+      // Sort issues: errors first, then warnings, then info
+      issues.sort((a, b) => {
+        const severityOrder = { error: 0, warning: 1, info: 2 };
+        return severityOrder[a.severity] - severityOrder[b.severity];
+      });
+
+      const totalSizeMB = totalSize / (1024 * 1024);
+      console.error(`[Validation] Complete: ${issues.length} issues, ${totalSizeMB.toFixed(1)}MB total`);
+
+      return {
+        canProceed: !hasErrors,
+        hasWarnings,
+        totalStagedSize: totalSize,
+        totalStagedSizeMB: totalSizeMB,
+        issues,
+        suggestedGitignore: Array.from(suggestedGitignore),
+      };
+    } catch (error) {
+      throw new Error(`Failed to validate files: ${error}`);
     }
   }
 

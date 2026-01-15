@@ -95,6 +95,13 @@ export class IPCServer {
           return { id: command.id, success: true, data: status };
         }
 
+        case 'validateBeforeSync': {
+          const { repoPath } = command.payload;
+          const git = new GitOperations(repoPath);
+          const validation = await git.validateBeforeSync();
+          return { id: command.id, success: true, data: validation };
+        }
+
         case 'pushLocal': {
           const { repoPath, remoteUrl } = command.payload;
           const git = new GitOperations(repoPath);

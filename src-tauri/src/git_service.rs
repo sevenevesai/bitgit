@@ -145,6 +145,13 @@ impl GitService {
         Ok(status)
     }
 
+    pub fn validate_before_sync(&self, repo_path: &str) -> Result<crate::models::PreSyncValidation> {
+        let payload = serde_json::json!({ "repoPath": repo_path });
+        let result = self.execute("validateBeforeSync", payload)?;
+        let validation: crate::models::PreSyncValidation = serde_json::from_value(result)?;
+        Ok(validation)
+    }
+
     pub fn push_local(&self, repo_path: &str, remote_url: Option<&str>) -> Result<PushResult> {
         let mut payload = serde_json::json!({ "repoPath": repo_path });
         if let Some(url) = remote_url {
