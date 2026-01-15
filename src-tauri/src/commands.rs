@@ -97,11 +97,15 @@ pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResul
     let remote_url = repo.github_url.as_deref();
 
     match action {
-        SyncAction::PushLocal => {
-            let result = service.push_local(local_path, remote_url)
-                .map_err(|e| format!("Push failed: {}", e))?;
+        SyncAction::PushLocal { commit_message, commit_description } => {
+            let result = service.push_local(
+                local_path,
+                remote_url,
+                commit_message.as_deref(),
+                commit_description.as_deref(),
+            ).map_err(|e| format!("Push failed: {}", e))?;
 
-            let new_status = service.check_status(local_path)
+            let _new_status = service.check_status(local_path)
                 .map_err(|e| format!("Failed to check status: {}", e))?;
 
             Ok(SyncResult {
@@ -148,9 +152,13 @@ pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResul
                 },
             })
         }
-        SyncAction::FullSync => {
-            let result = service.full_sync(local_path, remote_url)
-                .map_err(|e| format!("Full sync failed: {}", e))?;
+        SyncAction::FullSync { commit_message, commit_description } => {
+            let result = service.full_sync(
+                local_path,
+                remote_url,
+                commit_message.as_deref(),
+                commit_description.as_deref(),
+            ).map_err(|e| format!("Full sync failed: {}", e))?;
 
             Ok(SyncResult {
                 success: result.success,
@@ -679,9 +687,13 @@ pub async fn sync_project(project_id: String, action: SyncAction) -> Result<Sync
     let remote_url = project.github_url.as_deref();
 
     match action {
-        SyncAction::PushLocal => {
-            let result = service.push_local(local_path, remote_url)
-                .map_err(|e| format!("Push failed: {}", e))?;
+        SyncAction::PushLocal { commit_message, commit_description } => {
+            let result = service.push_local(
+                local_path,
+                remote_url,
+                commit_message.as_deref(),
+                commit_description.as_deref(),
+            ).map_err(|e| format!("Push failed: {}", e))?;
 
             Ok(SyncResult {
                 success: true,
@@ -727,9 +739,13 @@ pub async fn sync_project(project_id: String, action: SyncAction) -> Result<Sync
                 },
             })
         }
-        SyncAction::FullSync => {
-            let result = service.full_sync(local_path, remote_url)
-                .map_err(|e| format!("Full sync failed: {}", e))?;
+        SyncAction::FullSync { commit_message, commit_description } => {
+            let result = service.full_sync(
+                local_path,
+                remote_url,
+                commit_message.as_deref(),
+                commit_description.as_deref(),
+            ).map_err(|e| format!("Full sync failed: {}", e))?;
 
             Ok(SyncResult {
                 success: result.success,

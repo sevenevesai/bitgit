@@ -152,10 +152,22 @@ impl GitService {
         Ok(validation)
     }
 
-    pub fn push_local(&self, repo_path: &str, remote_url: Option<&str>) -> Result<PushResult> {
+    pub fn push_local(
+        &self,
+        repo_path: &str,
+        remote_url: Option<&str>,
+        commit_message: Option<&str>,
+        commit_description: Option<&str>,
+    ) -> Result<PushResult> {
         let mut payload = serde_json::json!({ "repoPath": repo_path });
         if let Some(url) = remote_url {
             payload["remoteUrl"] = serde_json::json!(url);
+        }
+        if let Some(msg) = commit_message {
+            payload["commitMessage"] = serde_json::json!(msg);
+        }
+        if let Some(desc) = commit_description {
+            payload["commitDescription"] = serde_json::json!(desc);
         }
         let result = self.execute("pushLocal", payload)?;
         let push_result: PushResult = serde_json::from_value(result)?;
@@ -188,10 +200,22 @@ impl GitService {
         Ok(pulled.pulled)
     }
 
-    pub fn full_sync(&self, repo_path: &str, remote_url: Option<&str>) -> Result<FullSyncResult> {
+    pub fn full_sync(
+        &self,
+        repo_path: &str,
+        remote_url: Option<&str>,
+        commit_message: Option<&str>,
+        commit_description: Option<&str>,
+    ) -> Result<FullSyncResult> {
         let mut payload = serde_json::json!({ "repoPath": repo_path });
         if let Some(url) = remote_url {
             payload["remoteUrl"] = serde_json::json!(url);
+        }
+        if let Some(msg) = commit_message {
+            payload["commitMessage"] = serde_json::json!(msg);
+        }
+        if let Some(desc) = commit_description {
+            payload["commitDescription"] = serde_json::json!(desc);
         }
         let result = self.execute("fullSync", payload)?;
         let sync_result: FullSyncResult = serde_json::from_value(result)?;

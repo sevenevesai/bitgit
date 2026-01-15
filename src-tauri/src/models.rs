@@ -86,10 +86,20 @@ pub enum SyncStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SyncAction {
-    PushLocal,
+    PushLocal {
+        #[serde(default, rename = "commitMessage")]
+        commit_message: Option<String>,
+        #[serde(default, rename = "commitDescription")]
+        commit_description: Option<String>,
+    },
     MergeBranches { branches: Vec<String> },
     PullBranches { branches: Vec<String> },
-    FullSync,
+    FullSync {
+        #[serde(default, rename = "commitMessage")]
+        commit_message: Option<String>,
+        #[serde(default, rename = "commitDescription")]
+        commit_description: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

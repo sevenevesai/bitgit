@@ -9,6 +9,7 @@ import { LinkGitHubModal } from './LinkGitHubModal';
 import { CreateRepoModal } from './CreateRepoModal';
 import { ProjectDetails } from './ProjectDetails';
 import { ValidationWarningModal, PreSyncValidation } from './ValidationWarningModal';
+import { CommitModal } from './CommitModal';
 import {
   GitBranch,
   GitCommit,
@@ -52,6 +53,8 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const [showValidationModal, setShowValidationModal] = useState(false);
   const [pendingValidation, setPendingValidation] = useState<PreSyncValidation | null>(null);
   const [pendingSyncAction, setPendingSyncAction] = useState<SyncAction | null>(null);
+  const [showCommitModal, setShowCommitModal] = useState(false);
+  const [isCommitting, setIsCommitting] = useState(false);
 
   const isSelected = selectedProjectIds.has(project.id);
   const isFavorite = project.favorite || false;
@@ -135,6 +138,51 @@ export function ProjectCard({ project }: ProjectCardProps) {
         setPendingSyncAction(null);
         setPendingValidation(null);
       }
+    }
+  };
+
+  // Show commit modal when user clicks Push Local
+  const handleShowCommitModal = () => {
+    setShowCommitModal(true);
+  };
+
+  // Handle commit from the modal
+  const handleCommit = async (message: string, description?: string) => {
+    setIsCommitting(true);
+    const action: SyncAction = {
+      type: 'push_local',
+      commitMessage: message,
+      commitDescription: description,
+    };
+
+    try {
+      // Run validation first if we have a local path
+      if (project.localPath) {
+        const validation = await invoke<PreSyncValidation>('validate_before_sync', {
+          projectId: project.id,
+        });
+
+        // If there are issues, show the validation modal
+        if (!validation.canProceed || validation.hasWarnings) {
+          setShowCommitModal(false);
+          setPendingValidation(validation);
+          setPendingSyncAction(action);
+          setShowValidationModal(true);
+          setIsCommitting(false);
+          return;
+        }
+      }
+
+      // No validation issues, proceed with sync
+      setShowCommitModal(false);
+      await syncProject(project.id, action);
+    } catch (error: any) {
+      console.error('Commit failed:', error);
+      // If validation fails, still allow sync (graceful degradation)
+      setShowCommitModal(false);
+      await syncProject(project.id, action);
+    } finally {
+      setIsCommitting(false);
     }
   };
 
@@ -525,12 +573,12 @@ export function ProjectCard({ project }: ProjectCardProps) {
         return (
           <div className="flex gap-2">
             <button
-              onClick={() => handleSync({ type: 'push_local' })}
-              disabled={!hasLocalChanges || isLoading}
+              onClick={handleShowCommitModal}
+              disabled={!hasLocalChanges || isLoading || isCommitting}
               className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               title="Commit and push local changes"
             >
-              {isLoading ? (
+              {isLoading || isCommitting ? (
                 <RefreshCw className="w-4 h-4 animate-spin" />
               ) : (
                 <Upload className="w-4 h-4" />
@@ -806,6 +854,14 @@ export function ProjectCard({ project }: ProjectCardProps) {
           projectPath={project.localPath || ''}
         />
       )}
+      <CommitModal
+        isOpen={showCommitModal}
+        onClose={() => setShowCommitModal(false)}
+        onCommit={handleCommit}
+        changedFiles={project.gitStatus?.modifiedFiles || []}
+        projectName={project.name}
+        isLoading={isCommitting}
+      />
     </div>
   );
 }

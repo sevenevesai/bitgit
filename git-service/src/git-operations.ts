@@ -280,7 +280,11 @@ export class GitOperations {
     }
   }
 
-  async pushLocal(remoteUrl?: string): Promise<{ committed: number; pushed: boolean }> {
+  async pushLocal(
+    remoteUrl?: string,
+    commitMessage?: string,
+    commitDescription?: string
+  ): Promise<{ committed: number; pushed: boolean }> {
     // Ensure this is a git repository
     await this.ensureGitRepo();
 
@@ -321,8 +325,11 @@ export class GitOperations {
       // Stage all changes
       await this.git.add('.');
 
-      // Commit with timestamp
-      const message = `Auto-sync: ${new Date().toISOString()}`;
+      // Build commit message: use custom or default to auto-sync timestamp
+      let message = commitMessage || `Auto-sync: ${new Date().toISOString()}`;
+      if (commitDescription) {
+        message = `${message}\n\n${commitDescription}`;
+      }
       await this.git.commit(message);
 
       // Push to current branch
@@ -492,7 +499,11 @@ export class GitOperations {
     }
   }
 
-  async fullSync(remoteUrl?: string): Promise<SyncResult> {
+  async fullSync(
+    remoteUrl?: string,
+    commitMessage?: string,
+    commitDescription?: string
+  ): Promise<SyncResult> {
     // Ensure this is a git repository
     await this.ensureGitRepo();
 
@@ -531,7 +542,7 @@ export class GitOperations {
       const status = await this.git.status();
       if (status.files.length > 0) {
         try {
-          const pushResult = await this.pushLocal();
+          const pushResult = await this.pushLocal(remoteUrl, commitMessage, commitDescription);
           result.committed = pushResult.committed;
         } catch (error: any) {
           result.errors?.push(`Push failed: ${error.message}`);

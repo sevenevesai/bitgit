@@ -103,9 +103,9 @@ export class IPCServer {
         }
 
         case 'pushLocal': {
-          const { repoPath, remoteUrl } = command.payload;
+          const { repoPath, remoteUrl, commitMessage, commitDescription } = command.payload;
           const git = new GitOperations(repoPath);
-          const result = await git.pushLocal(remoteUrl);
+          const result = await git.pushLocal(remoteUrl, commitMessage, commitDescription);
           return { id: command.id, success: true, data: result };
         }
 
@@ -124,9 +124,9 @@ export class IPCServer {
         }
 
         case 'fullSync': {
-          const { repoPath, remoteUrl } = command.payload;
+          const { repoPath, remoteUrl, commitMessage, commitDescription } = command.payload;
           const git = new GitOperations(repoPath);
-          const result = await git.fullSync(remoteUrl);
+          const result = await git.fullSync(remoteUrl, commitMessage, commitDescription);
           return { id: command.id, success: true, data: result };
         }
 

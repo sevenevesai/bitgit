@@ -82,10 +82,10 @@ export interface OperationLog {
 }
 
 export type SyncAction =
-  | { type: 'push_local' }
+  | { type: 'push_local'; commitMessage?: string; commitDescription?: string }
   | { type: 'merge_branches'; branches: string[] }
   | { type: 'pull_branches'; branches: string[] }
-  | { type: 'full_sync' };
+  | { type: 'full_sync'; commitMessage?: string; commitDescription?: string };
 
 export interface SyncResult {
   success: boolean;
