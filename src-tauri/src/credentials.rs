@@ -144,7 +144,7 @@ impl CredentialManager {
         {
             let entry = keyring::Entry::new(KEYRING_SERVICE, username)
                 .context("Failed to create keyring entry")?;
-            entry.delete_credential()
+            entry.delete_password()
                 .context("Failed to delete token from keyring")
         }
     }
