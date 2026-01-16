@@ -7,7 +7,84 @@ export class GitOperations {
   private git: SimpleGit;
   private repoPath: string;
 
+  /**
+   * Validates that a repository path is safe to use.
+   * Prevents path traversal attacks and ensures the path is valid.
+   */
+  private static validateRepoPath(repoPath: string): void {
+    // Check for path traversal attempts
+    if (repoPath.includes('..')) {
+      throw new Error('Invalid repository path: path traversal not allowed');
+    }
+
+    // Ensure path is absolute (starts with drive letter on Windows or / on Unix)
+    const isAbsolute = /^[a-zA-Z]:[\\/]/.test(repoPath) || repoPath.startsWith('/');
+    if (!isAbsolute) {
+      throw new Error('Invalid repository path: must be an absolute path');
+    }
+
+    // Check path exists and is a directory
+    if (!fs.existsSync(repoPath)) {
+      throw new Error(`Repository path does not exist: ${repoPath}`);
+    }
+
+    const stats = fs.statSync(repoPath);
+    if (!stats.isDirectory()) {
+      throw new Error(`Repository path is not a directory: ${repoPath}`);
+    }
+  }
+
+  /**
+   * Validates a git ref name (branch, tag) against git naming rules.
+   * Prevents command injection through malformed ref names.
+   */
+  private static validateRefName(refName: string, type: 'branch' | 'tag'): void {
+    if (!refName || refName.trim().length === 0) {
+      throw new Error(`Invalid ${type} name: cannot be empty`);
+    }
+
+    // Git ref naming rules - disallow dangerous patterns
+    const invalidPatterns = [
+      /^-/, // Cannot start with hyphen
+      /\.\.$/, // Cannot end with ..
+      /\.lock$/, // Cannot end with .lock
+      /[\x00-\x1f\x7f]/, // No control characters
+      /[~^:?*\[\]\\]/, // No special git characters
+      /\s/, // No whitespace
+      /^@$/, // Cannot be just @
+      /\/\//, // No double slashes
+      /^\//, // Cannot start with slash
+      /\/$/, // Cannot end with slash
+    ];
+
+    for (const pattern of invalidPatterns) {
+      if (pattern.test(refName)) {
+        throw new Error(`Invalid ${type} name: contains forbidden characters or patterns`);
+      }
+    }
+
+    // Max length check
+    if (refName.length > 250) {
+      throw new Error(`Invalid ${type} name: too long (max 250 characters)`);
+    }
+  }
+
+  /**
+   * Validates a commit hash format.
+   */
+  private static validateCommitHash(hash: string): void {
+    if (!hash || hash.trim().length === 0) {
+      throw new Error('Invalid commit hash: cannot be empty');
+    }
+
+    // Commit hash should be hex characters only, 7-40 chars
+    if (!/^[a-fA-F0-9]{7,40}$/.test(hash)) {
+      throw new Error('Invalid commit hash: must be 7-40 hexadecimal characters');
+    }
+  }
+
   constructor(repoPath: string) {
+    GitOperations.validateRepoPath(repoPath);
     this.repoPath = repoPath;
     this.git = simpleGit(repoPath);
   }
@@ -611,6 +688,7 @@ export class GitOperations {
    * Create a new branch
    */
   async createBranch(branchName: string, checkout: boolean = false): Promise<void> {
+    GitOperations.validateRefName(branchName, 'branch');
     await this.ensureGitRepo();
     try {
       if (checkout) {
@@ -787,6 +865,7 @@ export class GitOperations {
    * Tag management
    */
   async createTag(tagName: string, message?: string): Promise<void> {
+    GitOperations.validateRefName(tagName, 'tag');
     await this.ensureGitRepo();
     try {
       if (message) {
@@ -844,6 +923,7 @@ export class GitOperations {
    * Cherry-pick a commit
    */
   async cherryPick(commitHash: string): Promise<void> {
+    GitOperations.validateCommitHash(commitHash);
     await this.ensureGitRepo();
     try {
       await this.git.raw(['cherry-pick', commitHash]);

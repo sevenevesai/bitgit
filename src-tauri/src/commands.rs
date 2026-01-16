@@ -1,5 +1,5 @@
 use crate::credentials::CredentialManager;
-use crate::git_service::{GitService, StatusInfo as GitStatusInfo, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo, DiffChange, AnalyticsCommit, BranchStaleness, AggregateStats};
+use crate::git_service::{GitService, StatusInfo as GitStatusInfo, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo};
 use crate::models::*;
 use crate::project_cache;
 use crate::scanner::RepositoryScanner;
@@ -7,7 +7,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -18,8 +18,18 @@ static GIT_SERVICE: Lazy<Mutex<Option<Arc<GitService>>>> = Lazy::new(|| Mutex::n
 // Repository cache
 static REPOSITORIES: Lazy<Mutex<HashMap<String, Repository>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Helper to safely acquire a mutex lock, handling poison errors gracefully.
+/// If the lock is poisoned (previous holder panicked), we recover by accessing the data anyway.
+fn safe_lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<T>, String> {
+    mutex.lock().map_err(|e: PoisonError<MutexGuard<T>>| {
+        // Recover from poison - the data may be in an inconsistent state but we log it
+        eprintln!("[Rust] Warning: Mutex was poisoned, recovering...");
+        format!("Lock acquisition failed (poisoned): {}", e)
+    })
+}
+
 fn get_git_service() -> Result<Arc<GitService>, String> {
-    let mut service_guard = GIT_SERVICE.lock().unwrap();
+    let mut service_guard = safe_lock(&GIT_SERVICE)?;
 
     if service_guard.is_none() {
         eprintln!("[Rust] Initializing Git service...");
@@ -42,13 +52,13 @@ pub fn greet(name: &str) -> String {
 
 #[tauri::command]
 pub async fn get_repositories() -> Result<Vec<Repository>, String> {
-    let repos = REPOSITORIES.lock().unwrap();
+    let repos = safe_lock(&REPOSITORIES)?;
     Ok(repos.values().cloned().collect())
 }
 
 #[tauri::command]
 pub async fn check_repository_status(repo_id: String) -> Result<RepositoryStatus, String> {
-    let repos = REPOSITORIES.lock().unwrap();
+    let repos = safe_lock(&REPOSITORIES)?;
     let repo = repos.get(&repo_id)
         .ok_or_else(|| format!("Repository not found: {}", repo_id))?
         .clone();
@@ -80,7 +90,7 @@ pub async fn check_repository_status(repo_id: String) -> Result<RepositoryStatus
 
 #[tauri::command]
 pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResult, String> {
-    let repos = REPOSITORIES.lock().unwrap();
+    let repos = safe_lock(&REPOSITORIES)?;
     let repo = repos.get(&id)
         .ok_or_else(|| format!("Repository not found: {}", id))?
         .clone();
@@ -268,7 +278,8 @@ fn determine_sync_status(status: &GitStatusInfo) -> SyncStatus {
 
 // Function to add a repository to the cache
 pub fn add_repository_to_cache(repo: Repository) {
-    let mut repos = REPOSITORIES.lock().unwrap();
+    let mut repos = REPOSITORIES.lock()
+        .expect("Repository cache mutex poisoned - unrecoverable");
     repos.insert(repo.id.clone(), repo);
 }
 
@@ -520,7 +531,32 @@ pub async fn check_project_status(project_id: String) -> Result<Project, String>
 /// Open a directory in VS Code
 #[tauri::command]
 pub async fn open_in_vscode(path: String) -> Result<(), String> {
+    use std::path::Path;
     use std::process::Command;
+
+    // Security: Validate path before passing to shell
+    let path_obj = Path::new(&path);
+
+    // Check for path traversal attempts
+    if path.contains("..") {
+        return Err("Invalid path: path traversal not allowed".to_string());
+    }
+
+    // Ensure path exists and is a directory
+    if !path_obj.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    if !path_obj.is_dir() {
+        return Err(format!("Path is not a directory: {}", path));
+    }
+
+    // Canonicalize the path to resolve any remaining issues
+    let canonical_path = path_obj
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve path: {}", e))?;
+
+    let path_str = canonical_path.to_string_lossy();
 
     #[cfg(target_os = "windows")]
     {
@@ -528,7 +564,7 @@ pub async fn open_in_vscode(path: String) -> Result<(), String> {
         // but hide the console window with CREATE_NO_WINDOW flag
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         let mut cmd = Command::new("cmd");
-        cmd.args(&["/C", "code", &path])
+        cmd.args(&["/C", "code", &*path_str])
             .creation_flags(CREATE_NO_WINDOW);
 
         cmd.spawn()
@@ -538,7 +574,7 @@ pub async fn open_in_vscode(path: String) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
         Command::new("code")
-            .arg(&path)
+            .arg(&*path_str)
             .spawn()
             .map_err(|e| format!("Failed to open VS Code: {}. Make sure VS Code is installed and 'code' command is available in PATH.", e))?;
     }

@@ -1,6 +1,6 @@
 [package]
 name = "bitgit"
-version = "0.1.0"
+version = "1.0.0"
 description = "A GitHub Repository Manager"
 authors = ["BitGit Team"]
 license = ""
@@ -32,6 +32,9 @@ windows = { version = "0.52", features = [
     "Security_Credentials",
     "Security_Credentials_UI"
 ] }
+
+[target.'cfg(not(windows))'.dependencies]
+keyring = "2"
 
 [features]
 default = ["custom-protocol"]

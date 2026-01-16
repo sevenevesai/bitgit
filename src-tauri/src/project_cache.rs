@@ -167,7 +167,7 @@ pub fn load_projects() -> Result<Vec<Project>> {
 /// Restore backup file as the main cache file
 fn restore_from_backup(
     cache_path: &PathBuf,
-    backup_path: &PathBuf,
+    _backup_path: &PathBuf,
     projects: &[Project],
 ) -> Result<()> {
     // Re-save the recovered projects properly (this creates a fresh valid main file)

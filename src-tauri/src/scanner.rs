@@ -1,5 +1,4 @@
-use crate::models::*;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -54,6 +53,7 @@ impl RepositoryScanner {
             .any(|pattern| path_str.contains(pattern))
     }
 
+    #[allow(dead_code)]
     pub fn get_repo_info(path: &Path) -> Result<RepositoryInfo> {
         let name = path
             .file_name()
@@ -141,6 +141,7 @@ impl RepositoryScanner {
     }
 }
 
+#[allow(dead_code)]
 pub struct RepositoryInfo {
     pub name: String,
     pub local_path: String,

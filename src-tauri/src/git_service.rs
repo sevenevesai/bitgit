@@ -87,21 +87,23 @@ impl GitService {
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
         reader.read_line(&mut line)?;
-        eprintln!("[Rust] Git service ping response: {}", line.trim());
 
-        *self.child.lock().unwrap() = Some(child);
+        *self.child.lock()
+            .expect("Git service child mutex poisoned") = Some(child);
         eprintln!("[Rust] Git service started successfully");
         Ok(())
     }
 
     fn get_next_id(&self) -> String {
-        let mut counter = self.command_counter.lock().unwrap();
+        let mut counter = self.command_counter.lock()
+            .expect("Command counter mutex poisoned");
         *counter += 1;
         format!("cmd_{}", *counter)
     }
 
     pub fn execute(&self, command_type: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
-        let mut child_guard = self.child.lock().unwrap();
+        let mut child_guard = self.child.lock()
+            .expect("Git service child mutex poisoned");
         let child = child_guard.as_mut().context("Git service not running")?;
 
         let command = IPCCommand {
@@ -122,8 +124,7 @@ impl GitService {
         let mut line = String::new();
         reader.read_line(&mut line)?;
 
-        eprintln!("[Rust] Git service raw response: '{}'", line.trim());
-        eprintln!("[Rust] Git service response length: {}", line.len());
+        // Debug logging removed for production - response may contain sensitive data
 
         let response: IPCResponse = serde_json::from_str(&line)
             .context(format!("Failed to parse Git service response: '{}'", line.trim()))?;
@@ -222,6 +223,7 @@ impl GitService {
         Ok(sync_result)
     }
 
+    #[allow(dead_code)]
     pub fn set_github_token(&self, token: &str) -> Result<()> {
         let payload = serde_json::json!({ "token": token });
         self.execute("setGithubToken", payload)?;
@@ -473,6 +475,7 @@ impl GitService {
         Ok(staleness)
     }
 
+    #[allow(dead_code)]
     pub fn get_commit_counts_by_date(
         &self,
         repo_path: &str,
@@ -505,6 +508,7 @@ impl GitService {
         Ok(stats)
     }
 
+    #[allow(dead_code)]
     pub fn get_commit_count_for_date_range(
         &self,
         repo_path: &str,
@@ -524,10 +528,14 @@ impl GitService {
 
 impl Drop for GitService {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            eprintln!("[Rust] Shutting down Git service");
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Ok(mut guard) = self.child.lock() {
+            if let Some(mut child) = guard.take() {
+                eprintln!("[Rust] Shutting down Git service");
+                // Close stdin to signal EOF for graceful shutdown
+                drop(child.stdin.take());
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
     }
 }

@@ -97,12 +97,12 @@ const retryWithBackoff = async <T>(
   fn: () => Promise<T>,
   config: RetryConfig = { maxAttempts: 3, delayMs: 1000, backoffMultiplier: 2 }
 ): Promise<T> => {
-  let lastError: any;
+  let lastError: Error | unknown;
 
   for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
     try {
       return await fn();
-    } catch (error) {
+    } catch (error: unknown) {
       lastError = error;
       if (attempt < config.maxAttempts) {
         const delayTime = config.delayMs * Math.pow(config.backoffMultiplier, attempt - 1);
@@ -116,30 +116,21 @@ const retryWithBackoff = async <T>(
 };
 
 // Helper function for parallel execution with concurrency limit
-const parallelLimit = async <T>(
+const parallelLimit = async <T, R>(
   items: T[],
   limit: number,
-  fn: (item: T) => Promise<any>
-): Promise<PromiseSettledResult<any>[]> => {
-  const results: PromiseSettledResult<any>[] = [];
-  const executing: Promise<any>[] = [];
+  fn: (item: T) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> => {
+  const results: PromiseSettledResult<R>[] = [];
 
-  for (const item of items) {
-    const promise = fn(item).then(
-      (value) => ({ status: 'fulfilled' as const, value }),
-      (reason) => ({ status: 'rejected' as const, reason })
-    );
-
-    results.push(promise as any);
-    executing.push(promise);
-
-    if (executing.length >= limit) {
-      await Promise.race(executing);
-      executing.splice(executing.findIndex(p => results.includes(p as any)), 1);
-    }
+  // Process items in chunks to maintain concurrency limit
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    const chunkResults = await Promise.allSettled(chunk.map(fn));
+    results.push(...chunkResults);
   }
 
-  return Promise.all(results);
+  return results;
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -186,6 +177,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
 
       toast.success(`Project "${name}" created`);
+
+      // Automatically check git status if project is fully configured
+      if (project.githubUrl && project.localPath) {
+        // Use setTimeout to let the UI update first, then check status
+        setTimeout(() => {
+          get().refreshProject(project.id).catch((err) => {
+            console.error('Failed to auto-refresh project status:', err);
+          });
+        }, 100);
+      }
+
       return project;
     } catch (error: any) {
       console.error('Failed to create project:', error);

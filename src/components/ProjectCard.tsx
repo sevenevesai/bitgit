@@ -33,10 +33,34 @@ import {
   Edit2,
   Save,
   X,
+  ExternalLink,
 } from 'lucide-react';
 
 interface ProjectCardProps {
   project: Project;
+}
+
+// Helper function to format relative time (e.g., "2 hours ago")
+function formatRelativeTime(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSeconds = Math.floor(diffMs / 1000);
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  const diffHours = Math.floor(diffMinutes / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffSeconds < 60) {
+    return 'just now';
+  } else if (diffMinutes < 60) {
+    return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} ago`;
+  } else if (diffHours < 24) {
+    return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+  } else if (diffDays < 7) {
+    return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+  } else {
+    return date.toLocaleDateString();
+  }
 }
 
 export function ProjectCard({ project }: ProjectCardProps) {
@@ -604,28 +628,28 @@ export function ProjectCard({ project }: ProjectCardProps) {
               onClick={() => handleSync({ type: 'merge_branches', branches: project.gitStatus?.remoteBranches || [] })}
               disabled={!hasRemoteBranches || isLoading}
               className="flex items-center gap-2 px-4 py-2 text-white bg-orange-600 rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Merge and delete remote branches (final cleanup)"
+              title="Merge remote branches and clean up (finalize completed work)"
             >
               {isLoading ? (
                 <RefreshCw className="w-4 h-4 animate-spin" />
               ) : (
                 <GitMerge className="w-4 h-4" />
               )}
-              Merge & Delete
+              Finish Branch
             </button>
 
             <button
               onClick={() => handleSync({ type: 'full_sync' })}
               disabled={isLoading}
               className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Full sync: push local + merge remote"
+              title="Sync everything: commit, push local changes, and merge remote branches"
             >
               {isLoading ? (
                 <RefreshCw className="w-4 h-4 animate-spin" />
               ) : (
                 <RefreshCw className="w-4 h-4" />
               )}
-              Full Sync
+              Sync All
             </button>
 
             <button
@@ -785,6 +809,15 @@ export function ProjectCard({ project }: ProjectCardProps) {
             <Github className="w-4 h-4" />
             <span className="font-medium">GitHub:</span>
             <span className="text-gray-600 dark:text-gray-400">{project.githubOwner}/{project.githubRepo}</span>
+            <a
+              href={project.githubUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-1 text-teal-600 dark:text-teal-400 hover:text-teal-700 dark:hover:text-teal-300 transition-colors"
+              title="Open on GitHub"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
           </div>
         )}
         {project.localPath && (
@@ -792,6 +825,15 @@ export function ProjectCard({ project }: ProjectCardProps) {
             <FolderGit className="w-4 h-4" />
             <span className="font-medium">Local:</span>
             <span className="text-gray-600 dark:text-gray-400 truncate">{project.localPath}</span>
+          </div>
+        )}
+
+        {/* Last synced timestamp */}
+        {project.lastSynced && (
+          <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+            <Clock className="w-4 h-4" />
+            <span className="font-medium">Last synced:</span>
+            <span>{formatRelativeTime(project.lastSynced)}</span>
           </div>
         )}
 

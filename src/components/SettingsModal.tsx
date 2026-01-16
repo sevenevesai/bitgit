@@ -29,9 +29,19 @@ export function SettingsModal({ isOpen, onClose, onRepositoriesAdded }: Settings
 
   // Load and validate stored credentials when modal opens
   useEffect(() => {
+    let isMounted = true;
+
     if (isOpen) {
-      loadAndValidateCredentials();
+      loadAndValidateCredentials().catch(err => {
+        if (isMounted) {
+          console.error('Failed to load credentials:', err);
+        }
+      });
     }
+
+    return () => {
+      isMounted = false;
+    };
   }, [isOpen]);
 
   const loadAndValidateCredentials = async () => {

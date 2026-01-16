@@ -252,7 +252,7 @@ function BranchesTab({ branches, project, onRefresh }: { branches: BranchInfo[];
           onChange={(e) => setNewBranchName(e.target.value)}
           placeholder="New branch name..."
           className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-          onKeyPress={(e) => e.key === 'Enter' && handleCreateBranch()}
+          onKeyDown={(e) => e.key === 'Enter' && handleCreateBranch()}
         />
         <button
           onClick={handleCreateBranch}

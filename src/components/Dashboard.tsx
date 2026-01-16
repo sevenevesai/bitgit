@@ -345,7 +345,7 @@ export function Dashboard() {
               }`}
               title="Show archived projects"
             >
-              📦 {showArchived ? 'With Archived' : 'No Archived'}
+              {showArchived ? 'With Archived' : 'No Archived'}
             </button>
 
             {/* Sort dropdown */}

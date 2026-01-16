@@ -7,7 +7,7 @@
   },
   "package": {
     "productName": "BitGit",
-    "version": "0.1.0"
+    "version": "1.0.0"
   },
   "tauri": {
     "allowlist": {
@@ -31,8 +31,11 @@
     },
     "bundle": {
       "active": true,
-      "targets": ["msi"],
+      "targets": "all",
       "identifier": "com.bitgit.app",
+      "category": "DeveloperTool",
+      "shortDescription": "Git repository manager for quick syncing",
+      "longDescription": "BitGit is a desktop app for managing multiple Git repositories with GitHub integration. Built for developers who want quick, reliable syncing without terminal juggling.",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -45,20 +48,24 @@
         "digestAlgorithm": "sha256",
         "timestampUrl": "",
         "wix": {
-          "language": "en-US",
-          "template": null,
-          "fragmentPaths": [],
-          "componentRefs": [],
-          "componentGroupRefs": [],
-          "featureRefs": [],
-          "featureGroupRefs": [],
-          "mergeRefs": [],
-          "skipWebviewInstall": false,
-          "license": null,
-          "enableElevatedUpdateTask": false,
-          "bannerPath": null,
-          "dialogImagePath": null
+          "language": "en-US"
+        },
+        "nsis": {
+          "installMode": "currentUser"
         }
+      },
+      "macOS": {
+        "entitlements": null,
+        "exceptionDomain": null,
+        "frameworks": [],
+        "minimumSystemVersion": "10.13",
+        "signingIdentity": null
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "deb": {
+        "depends": []
       },
       "resources": [
         "../git-service/dist",

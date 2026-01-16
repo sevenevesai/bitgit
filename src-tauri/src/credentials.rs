@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use windows::Security::Credentials::{PasswordCredential, PasswordVault};
 
 const CREDENTIAL_RESOURCE: &str = "BitGit_GitHub_Token";
+#[cfg(not(target_os = "windows"))]
+const KEYRING_SERVICE: &str = "bitgit";
 
 fn get_config_dir() -> Result<PathBuf> {
     let config_dir = dirs::config_dir()
@@ -44,14 +46,14 @@ impl CredentialManager {
     }
 
     pub fn save_token(&self, username: &str, token: &str) -> Result<()> {
+        // Validate token format
+        if !token.starts_with("ghp_") && !token.starts_with("github_pat_") {
+            return Err(anyhow::anyhow!("Invalid GitHub token format"));
+        }
+
         #[cfg(target_os = "windows")]
         {
             use windows::core::HSTRING;
-
-            // Validate token format
-            if !token.starts_with("ghp_") && !token.starts_with("github_pat_") {
-                return Err(anyhow::anyhow!("Invalid GitHub token format"));
-            }
 
             let resource = HSTRING::from(CREDENTIAL_RESOURCE);
             let user = HSTRING::from(username);
@@ -73,19 +75,22 @@ impl CredentialManager {
 
             self.vault.Add(&credential)
                 .context("Failed to add credential to vault")?;
-
-            // Save username to file for later retrieval
-            let username_file = get_username_file()?;
-            fs::write(username_file, username)
-                .context("Failed to save username to config")?;
-
-            Ok(())
         }
 
         #[cfg(not(target_os = "windows"))]
         {
-            Err(anyhow::anyhow!("Credential storage only supported on Windows"))
+            let entry = keyring::Entry::new(KEYRING_SERVICE, username)
+                .context("Failed to create keyring entry")?;
+            entry.set_password(token)
+                .context("Failed to save token to keyring")?;
         }
+
+        // Save username to file for later retrieval
+        let username_file = get_username_file()?;
+        fs::write(username_file, username)
+            .context("Failed to save username to config")?;
+
+        Ok(())
     }
 
     pub fn get_token(&self, username: &str) -> Result<String> {
@@ -110,10 +115,14 @@ impl CredentialManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            Err(anyhow::anyhow!("Credential storage only supported on Windows"))
+            let entry = keyring::Entry::new(KEYRING_SERVICE, username)
+                .context("Failed to create keyring entry")?;
+            entry.get_password()
+                .context("Failed to retrieve token from keyring")
         }
     }
 
+    #[allow(dead_code)]
     pub fn delete_token(&self, username: &str) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
@@ -133,7 +142,10 @@ impl CredentialManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            Err(anyhow::anyhow!("Credential storage only supported on Windows"))
+            let entry = keyring::Entry::new(KEYRING_SERVICE, username)
+                .context("Failed to create keyring entry")?;
+            entry.delete_credential()
+                .context("Failed to delete token from keyring")
         }
     }
 
@@ -150,7 +162,11 @@ impl CredentialManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            false
+            if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, username) {
+                entry.get_password().is_ok()
+            } else {
+                false
+            }
         }
     }
 
