@@ -1,4 +1,0 @@
-{
-  "name": "BitGit",
-  "description": "A modern, minimalist Git client for solo developers built with Rust and Tauri."
-}
