@@ -13,7 +13,10 @@ import {
   ActivityEntry,
   ActivityTimeline,
   HealthIndicator,
-  ContributionHeatmap
+  ContributionHeatmap,
+  EditorConfig,
+  EditorPreset,
+  EditorAvailability,
 } from '../types';
 
 interface AppState {
@@ -55,6 +58,11 @@ interface AppState {
   saveGitHubToken: (username: string, token: string) => Promise<void>;
   toggleTheme: () => void;
 
+  // Editor settings actions
+  loadEditorSettings: () => Promise<void>;
+  saveEditorSettings: (preset: EditorPreset, customCommand?: string) => Promise<void>;
+  detectInstalledEditors: () => Promise<EditorAvailability>;
+
   // Batch operations
   syncSelected: (action: SyncAction) => Promise<void>;
 
@@ -87,6 +95,10 @@ const defaultSettings: AppSettings = {
     theme: 'system',
     refreshInterval: 5 * 60 * 1000, // 5 minutes default
     showNotifications: true,
+    editor: {
+      preset: 'vscode',
+      customCommand: undefined,
+    },
   },
 };
 
@@ -371,6 +383,50 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
       };
     });
+  },
+
+  // Load editor settings from disk
+  loadEditorSettings: async () => {
+    try {
+      const editorConfig = await invoke<EditorConfig>('load_editor_settings');
+      set((state) => ({
+        settings: {
+          ...state.settings,
+          ui: { ...state.settings.ui, editor: editorConfig },
+        },
+      }));
+    } catch (error) {
+      console.error('Failed to load editor settings:', error);
+      // Keep default settings on error
+    }
+  },
+
+  // Save editor settings to disk
+  saveEditorSettings: async (preset: EditorPreset, customCommand?: string) => {
+    try {
+      await invoke('save_editor_settings', { preset, customCommand: customCommand || null });
+      set((state) => ({
+        settings: {
+          ...state.settings,
+          ui: { ...state.settings.ui, editor: { preset, customCommand } },
+        },
+      }));
+      toast.success('Editor preference saved');
+    } catch (error) {
+      console.error('Failed to save editor settings:', error);
+      toast.error('Failed to save editor preference');
+      throw error;
+    }
+  },
+
+  // Detect which editors are installed
+  detectInstalledEditors: async () => {
+    try {
+      return await invoke<EditorAvailability>('detect_installed_editors');
+    } catch (error) {
+      console.error('Failed to detect editors:', error);
+      return { vscode: false, cursor: false, sublime: false };
+    }
   },
 
   // Save GitHub token securely

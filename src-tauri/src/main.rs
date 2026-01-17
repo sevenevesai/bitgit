@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_settings;
 mod commands;
 mod credentials;
 mod git_service;
@@ -32,7 +33,10 @@ fn main() {
             delete_project,
             check_project_status,
             // Project actions
-            open_in_vscode,
+            open_in_editor,
+            detect_installed_editors,
+            save_editor_settings,
+            load_editor_settings,
             clone_repository,
             create_github_repository,
             validate_before_sync,

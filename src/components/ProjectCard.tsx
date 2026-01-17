@@ -65,7 +65,7 @@ function formatRelativeTime(dateString: string): string {
 
 export function ProjectCard({ project }: ProjectCardProps) {
   console.log('[ProjectCard] Rendering:', project.name, project);
-  const { syncProject, toggleSelection, selectedProjectIds, deleteProject, updateProject, refreshProject } = useAppStore();
+  const { syncProject, toggleSelection, selectedProjectIds, deleteProject, updateProject, refreshProject, settings } = useAppStore();
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showLinkLocalModal, setShowLinkLocalModal] = useState(false);
@@ -272,17 +272,26 @@ export function ProjectCard({ project }: ProjectCardProps) {
     setIsEditingDescription(false);
   };
 
-  const handleOpenVSCode = async () => {
+  const handleOpenInEditor = async () => {
     if (!project.localPath) {
       toast.error('No local path configured');
       return;
     }
 
+    const editorConfig = settings.ui.editor;
+    const editorName = editorConfig.preset === 'custom'
+      ? 'editor'
+      : editorConfig.preset.charAt(0).toUpperCase() + editorConfig.preset.slice(1);
+
     try {
-      await invoke('open_in_vscode', { path: project.localPath });
-      toast.success('Opening in VS Code...');
+      await invoke('open_in_editor', {
+        path: project.localPath,
+        editorPreset: editorConfig.preset,
+        customCommand: editorConfig.customCommand || null,
+      });
+      toast.success(`Opening in ${editorName}...`);
     } catch (error: any) {
-      toast.error(`Failed to open VS Code: ${error}`);
+      toast.error(`Failed to open ${editorName}: ${error}`);
     }
   };
 
@@ -653,9 +662,9 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </button>
 
             <button
-              onClick={handleOpenVSCode}
+              onClick={handleOpenInEditor}
               className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-              title="Open in VS Code"
+              title={`Open in ${settings.ui.editor.preset === 'custom' ? 'Editor' : settings.ui.editor.preset.charAt(0).toUpperCase() + settings.ui.editor.preset.slice(1)}`}
             >
               <Code className="w-4 h-4" />
             </button>

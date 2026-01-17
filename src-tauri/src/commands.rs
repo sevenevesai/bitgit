@@ -1,3 +1,4 @@
+use crate::app_settings::{self, EditorConfig, EditorPreset};
 use crate::credentials::CredentialManager;
 use crate::git_service::{GitService, StatusInfo as GitStatusInfo, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo};
 use crate::models::*;
@@ -528,11 +529,224 @@ pub async fn check_project_status(project_id: String) -> Result<Project, String>
     Ok(project)
 }
 
-/// Open a directory in VS Code
-#[tauri::command]
-pub async fn open_in_vscode(path: String) -> Result<(), String> {
-    use std::path::Path;
+/// Result of editor availability detection
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorAvailability {
+    pub vscode: bool,
+    pub cursor: bool,
+    pub sublime: bool,
+}
+
+/// Check if a command is available in PATH
+fn check_command_available(command: &str) -> bool {
     use std::process::Command;
+
+    #[cfg(target_os = "windows")]
+    {
+        // Use 'where' command on Windows to check if command exists in PATH
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        Command::new("cmd")
+            .args(&["/C", "where", command])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Use 'which' command on Unix systems
+        Command::new("which")
+            .arg(command)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+}
+
+/// Check if Sublime Text is available (has special path handling)
+fn check_sublime_available() -> bool {
+    // First check if 'subl' is in PATH
+    if check_command_available("subl") {
+        return true;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Check common Windows install paths
+        let common_paths = [
+            r"C:\Program Files\Sublime Text\subl.exe",
+            r"C:\Program Files\Sublime Text 3\subl.exe",
+            r"C:\Program Files (x86)\Sublime Text\subl.exe",
+            r"C:\Program Files (x86)\Sublime Text 3\subl.exe",
+        ];
+        return common_paths
+            .iter()
+            .any(|p| std::path::Path::new(p).exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Check for Sublime Text.app in Applications
+        return std::path::Path::new("/Applications/Sublime Text.app").exists();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Also check sublime_text command on Linux
+        return check_command_available("sublime_text");
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        false
+    }
+}
+
+/// Detect which editors are installed on the system
+#[tauri::command]
+pub async fn detect_installed_editors() -> Result<EditorAvailability, String> {
+    Ok(EditorAvailability {
+        vscode: check_command_available("code"),
+        cursor: check_command_available("cursor"),
+        sublime: check_sublime_available(),
+    })
+}
+
+/// Get the command and arguments for an editor preset
+fn get_editor_command(
+    preset: &str,
+    custom_command: Option<&str>,
+    path: &str,
+) -> Result<(String, Vec<String>), String> {
+    match preset {
+        "vscode" => Ok(("code".to_string(), vec![path.to_string()])),
+        "cursor" => Ok(("cursor".to_string(), vec![path.to_string()])),
+        "sublime" => {
+            // Try subl first, then check common install paths on Windows
+            if check_command_available("subl") {
+                return Ok(("subl".to_string(), vec![path.to_string()]));
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                let common_paths = [
+                    r"C:\Program Files\Sublime Text\subl.exe",
+                    r"C:\Program Files\Sublime Text 3\subl.exe",
+                    r"C:\Program Files (x86)\Sublime Text\subl.exe",
+                    r"C:\Program Files (x86)\Sublime Text 3\subl.exe",
+                ];
+                for p in common_paths {
+                    if std::path::Path::new(p).exists() {
+                        return Ok((p.to_string(), vec![path.to_string()]));
+                    }
+                }
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                let subl_path = "/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl";
+                if std::path::Path::new(subl_path).exists() {
+                    return Ok((subl_path.to_string(), vec![path.to_string()]));
+                }
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                if check_command_available("sublime_text") {
+                    return Ok(("sublime_text".to_string(), vec![path.to_string()]));
+                }
+            }
+
+            Err("Sublime Text not found. Please install it or add 'subl' to your PATH.".to_string())
+        }
+        "custom" => {
+            let cmd = custom_command.ok_or("Custom editor command not specified")?;
+            if cmd.trim().is_empty() {
+                return Err("Custom editor command is empty".to_string());
+            }
+
+            // Parse custom command - might include flags (e.g., "nvim --listen")
+            let parts: Vec<&str> = cmd.split_whitespace().collect();
+            if parts.is_empty() {
+                return Err("Invalid custom command".to_string());
+            }
+
+            let command = parts[0].to_string();
+            let mut args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+            args.push(path.to_string());
+
+            Ok((command, args))
+        }
+        _ => Err(format!("Unknown editor preset: {}", preset)),
+    }
+}
+
+/// Execute an editor command
+fn execute_editor_command(command: &str, args: &[String]) -> Result<(), String> {
+    use std::process::Command;
+
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        // Check if command is an absolute path or needs PATH resolution
+        let is_absolute = std::path::Path::new(command).is_absolute();
+
+        if is_absolute {
+            // Direct execution for absolute paths
+            Command::new(command)
+                .args(args)
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .map_err(|e| {
+                    format!(
+                        "Failed to open editor: {}. Make sure '{}' exists.",
+                        e, command
+                    )
+                })?;
+        } else {
+            // Use cmd /C to resolve commands from PATH
+            let mut cmd = Command::new("cmd");
+            let mut cmd_args = vec!["/C".to_string(), command.to_string()];
+            cmd_args.extend(args.iter().cloned());
+
+            cmd.args(&cmd_args).creation_flags(CREATE_NO_WINDOW);
+
+            cmd.spawn().map_err(|e| {
+                format!(
+                    "Failed to open editor: {}. Make sure '{}' is installed and available in PATH.",
+                    e, command
+                )
+            })?;
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new(command)
+            .args(args)
+            .spawn()
+            .map_err(|e| {
+                format!(
+                    "Failed to open editor: {}. Make sure '{}' is installed and available in PATH.",
+                    e, command
+                )
+            })?;
+    }
+
+    Ok(())
+}
+
+/// Open a directory in the configured editor
+#[tauri::command]
+pub async fn open_in_editor(
+    path: String,
+    editor_preset: String,
+    custom_command: Option<String>,
+) -> Result<(), String> {
+    use std::path::Path;
 
     // Security: Validate path before passing to shell
     let path_obj = Path::new(&path);
@@ -556,30 +770,46 @@ pub async fn open_in_vscode(path: String) -> Result<(), String> {
         .canonicalize()
         .map_err(|e| format!("Failed to resolve path: {}", e))?;
 
-    let path_str = canonical_path.to_string_lossy();
+    let mut path_str = canonical_path.to_string_lossy().to_string();
 
+    // On Windows, canonicalize() returns paths with \\?\ prefix which confuses editors
+    // Strip this prefix for cleaner paths
     #[cfg(target_os = "windows")]
     {
-        // Use cmd /C to properly resolve 'code' command from PATH
-        // but hide the console window with CREATE_NO_WINDOW flag
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let mut cmd = Command::new("cmd");
-        cmd.args(&["/C", "code", &*path_str])
-            .creation_flags(CREATE_NO_WINDOW);
-
-        cmd.spawn()
-            .map_err(|e| format!("Failed to open VS Code: {}. Make sure VS Code is installed and 'code' command is available in PATH.", e))?;
+        if path_str.starts_with(r"\\?\") {
+            path_str = path_str[4..].to_string();
+        }
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new("code")
-            .arg(&*path_str)
-            .spawn()
-            .map_err(|e| format!("Failed to open VS Code: {}. Make sure VS Code is installed and 'code' command is available in PATH.", e))?;
-    }
+    // Get the command for the selected editor
+    let (command, args) = get_editor_command(&editor_preset, custom_command.as_deref(), &path_str)?;
 
-    Ok(())
+    // Execute the editor command
+    execute_editor_command(&command, &args)
+}
+
+/// Save editor settings
+#[tauri::command]
+pub async fn save_editor_settings(
+    preset: String,
+    custom_command: Option<String>,
+) -> Result<(), String> {
+    let editor_preset = match preset.as_str() {
+        "vscode" => EditorPreset::Vscode,
+        "cursor" => EditorPreset::Cursor,
+        "sublime" => EditorPreset::Sublime,
+        "custom" => EditorPreset::Custom,
+        _ => return Err(format!("Unknown editor preset: {}", preset)),
+    };
+
+    app_settings::save_editor_config(editor_preset, custom_command)
+        .map_err(|e| format!("Failed to save editor settings: {}", e))
+}
+
+/// Load editor settings
+#[tauri::command]
+pub async fn load_editor_settings() -> Result<EditorConfig, String> {
+    app_settings::get_editor_config().map_err(|e| format!("Failed to load editor settings: {}", e))
 }
 
 /// Clone a GitHub repository to a local directory

@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { open } from '@tauri-apps/api/dialog';
 import toast from 'react-hot-toast';
-import { X, Github, Folder, Search, CheckCircle, XCircle, AlertCircle, ExternalLink, Loader2, Info, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, Github, Folder, Search, CheckCircle, XCircle, AlertCircle, ExternalLink, Loader2, Info, ChevronDown, ChevronUp, Code, Terminal } from 'lucide-react';
+import { EditorPreset, EditorConfig, EditorAvailability } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -27,7 +28,14 @@ export function SettingsModal({ isOpen, onClose, onRepositoriesAdded }: Settings
   const [tokenStatus, setTokenStatus] = useState<TokenStatus>('none');
   const [showScopeGuide, setShowScopeGuide] = useState(false);
 
-  // Load and validate stored credentials when modal opens
+  // Editor settings state
+  const [editorPreset, setEditorPreset] = useState<EditorPreset>('vscode');
+  const [customCommand, setCustomCommand] = useState('');
+  const [editorAvailability, setEditorAvailability] = useState<EditorAvailability | null>(null);
+  const [isLoadingEditors, setIsLoadingEditors] = useState(false);
+  const [isSavingEditor, setIsSavingEditor] = useState(false);
+
+  // Load and validate stored credentials and editor settings when modal opens
   useEffect(() => {
     let isMounted = true;
 
@@ -37,12 +45,62 @@ export function SettingsModal({ isOpen, onClose, onRepositoriesAdded }: Settings
           console.error('Failed to load credentials:', err);
         }
       });
+
+      // Load editor settings and detect installed editors
+      loadEditorSettings().catch(err => {
+        if (isMounted) {
+          console.error('Failed to load editor settings:', err);
+        }
+      });
+      detectEditors().catch(err => {
+        if (isMounted) {
+          console.error('Failed to detect editors:', err);
+        }
+      });
     }
 
     return () => {
       isMounted = false;
     };
   }, [isOpen]);
+
+  const loadEditorSettings = async () => {
+    try {
+      const config = await invoke<EditorConfig>('load_editor_settings');
+      setEditorPreset(config.preset as EditorPreset);
+      setCustomCommand(config.customCommand || '');
+    } catch (error) {
+      console.error('Failed to load editor settings:', error);
+    }
+  };
+
+  const detectEditors = async () => {
+    setIsLoadingEditors(true);
+    try {
+      const availability = await invoke<EditorAvailability>('detect_installed_editors');
+      setEditorAvailability(availability);
+    } catch (error) {
+      console.error('Failed to detect editors:', error);
+    } finally {
+      setIsLoadingEditors(false);
+    }
+  };
+
+  const handleSaveEditorSettings = async () => {
+    setIsSavingEditor(true);
+    try {
+      await invoke('save_editor_settings', {
+        preset: editorPreset,
+        customCommand: editorPreset === 'custom' ? customCommand : null,
+      });
+      toast.success('Editor preference saved');
+    } catch (error) {
+      console.error('Failed to save editor settings:', error);
+      toast.error('Failed to save editor preference');
+    } finally {
+      setIsSavingEditor(false);
+    }
+  };
 
   const loadAndValidateCredentials = async () => {
     setTokenStatus('checking');
@@ -407,6 +465,172 @@ export function SettingsModal({ isOpen, onClose, onRepositoriesAdded }: Settings
                   </p>
                 </div>
               )}
+            </div>
+          </section>
+
+          {/* Code Editor Section */}
+          <section>
+            <div className="flex items-center gap-2 mb-4">
+              <Code className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Code Editor</h3>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Choose which editor to use when opening projects.
+              </p>
+
+              {/* Editor Options */}
+              <div className="space-y-2">
+                {/* VS Code */}
+                <label
+                  className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                    editorPreset === 'vscode'
+                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
+                      : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="editor"
+                    value="vscode"
+                    checked={editorPreset === 'vscode'}
+                    onChange={(e) => setEditorPreset(e.target.value as EditorPreset)}
+                    className="text-teal-600"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900 dark:text-white">VS Code</span>
+                      {isLoadingEditors ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                      ) : editorAvailability && (
+                        editorAvailability.vscode ? (
+                          <CheckCircle className="w-4 h-4 text-green-500" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-red-400" />
+                        )
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">code</span>
+                  </div>
+                </label>
+
+                {/* Cursor */}
+                <label
+                  className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                    editorPreset === 'cursor'
+                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
+                      : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="editor"
+                    value="cursor"
+                    checked={editorPreset === 'cursor'}
+                    onChange={(e) => setEditorPreset(e.target.value as EditorPreset)}
+                    className="text-teal-600"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900 dark:text-white">Cursor</span>
+                      {isLoadingEditors ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                      ) : editorAvailability && (
+                        editorAvailability.cursor ? (
+                          <CheckCircle className="w-4 h-4 text-green-500" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-red-400" />
+                        )
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">cursor</span>
+                  </div>
+                </label>
+
+                {/* Sublime Text */}
+                <label
+                  className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                    editorPreset === 'sublime'
+                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
+                      : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="editor"
+                    value="sublime"
+                    checked={editorPreset === 'sublime'}
+                    onChange={(e) => setEditorPreset(e.target.value as EditorPreset)}
+                    className="text-teal-600"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900 dark:text-white">Sublime Text</span>
+                      {isLoadingEditors ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                      ) : editorAvailability && (
+                        editorAvailability.sublime ? (
+                          <CheckCircle className="w-4 h-4 text-green-500" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-red-400" />
+                        )
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">subl</span>
+                  </div>
+                </label>
+
+                {/* Custom */}
+                <label
+                  className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${
+                    editorPreset === 'custom'
+                      ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20'
+                      : 'border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="editor"
+                    value="custom"
+                    checked={editorPreset === 'custom'}
+                    onChange={(e) => setEditorPreset(e.target.value as EditorPreset)}
+                    className="text-teal-600"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <Terminal className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                      <span className="font-medium text-gray-900 dark:text-white">Custom Command</span>
+                    </div>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">Use your own editor command</span>
+                  </div>
+                </label>
+
+                {/* Custom Command Input */}
+                {editorPreset === 'custom' && (
+                  <div className="ml-8 mt-2">
+                    <input
+                      type="text"
+                      value={customCommand}
+                      onChange={(e) => setCustomCommand(e.target.value)}
+                      placeholder="e.g., nvim, neovide --multigrid, /path/to/editor"
+                      className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                    />
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Enter the command to open your editor. The project path will be appended.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Save Button */}
+              <button
+                onClick={handleSaveEditorSettings}
+                disabled={isSavingEditor || (editorPreset === 'custom' && !customCommand.trim())}
+                className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors"
+              >
+                {isSavingEditor ? 'Saving...' : 'Save Editor Preference'}
+              </button>
             </div>
           </section>
         </div>

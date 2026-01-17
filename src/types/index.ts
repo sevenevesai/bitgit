@@ -121,6 +121,21 @@ export interface UISettings {
   theme: 'light' | 'dark' | 'system';
   refreshInterval: number;
   showNotifications: boolean;
+  editor: EditorConfig;
+}
+
+// Editor configuration types
+export type EditorPreset = 'vscode' | 'cursor' | 'sublime' | 'custom';
+
+export interface EditorConfig {
+  preset: EditorPreset;
+  customCommand?: string;
+}
+
+export interface EditorAvailability {
+  vscode: boolean;
+  cursor: boolean;
+  sublime: boolean;
 }
 
 // Advanced Git Features Types

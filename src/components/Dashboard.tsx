@@ -12,6 +12,7 @@ export function Dashboard() {
     projects,
     isLoading,
     loadProjects,
+    loadEditorSettings,
     selectedProjectIds,
     settings,
     toggleTheme,
@@ -76,8 +77,9 @@ export function Dashboard() {
     });
 
   useEffect(() => {
-    console.log('[Dashboard] Loading projects on mount...');
+    console.log('[Dashboard] Loading projects and settings on mount...');
     loadProjects();
+    loadEditorSettings();
 
     // Start background status checking if enabled
     if (settings.ui.refreshInterval > 0) {
