@@ -1,0 +1,29 @@
+{
+  "releases": [
+    {
+      "version": "1.0.1",
+      "date": "2026-01-17",
+      "notes": [
+        "Configurable code editor in Settings (VS Code, Cursor, Sublime Text, Custom)",
+        "Auto-detection shows installed editors with green/red indicators",
+        "Custom command support for any editor (nvim, neovide, etc)",
+        "Editor preference persists between sessions",
+        "Fixed Windows path prefix issue when opening editors"
+      ]
+    },
+    {
+      "version": "1.0.0",
+      "date": "2026-01-16",
+      "notes": [
+        "Initial production release",
+        "Project management with GitHub integration",
+        "Git sync operations (push, pull, merge, full sync)",
+        "Pre-sync validation with gitignore suggestions",
+        "GitHub token management with secure OS credential storage",
+        "Repository scanning from directories",
+        "Advanced git features (branches, stashes, tags, cherry-pick)",
+        "Analytics dashboard with commit history and heatmap"
+      ]
+    }
+  ]
+}

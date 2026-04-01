@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.id }}
+      release_upload_url: ${{ steps.create-release.outputs.upload_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create-release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: BitGit ${{ steps.get_version.outputs.VERSION }}
+          body: |
+            ## BitGit ${{ steps.get_version.outputs.VERSION }}
+
+            ### Installation
+
+            **Windows:** Download and run `BitGit_${{ steps.get_version.outputs.VERSION }}_x64-setup.exe` (NSIS installer) or `BitGit_${{ steps.get_version.outputs.VERSION }}_x64_en-US.msi` (MSI installer)
+
+            **macOS:** Download `BitGit_${{ steps.get_version.outputs.VERSION }}_x64.dmg`, open it, and drag BitGit to your Applications folder
+
+            **Linux:** Download `BitGit_${{ steps.get_version.outputs.VERSION }}_amd64.deb` (Debian/Ubuntu) or `BitGit_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage` (universal)
+
+            ### What's New
+            - Security hardening: path validation, input sanitization
+            - Cross-platform credential storage
+            - Improved UX with friendlier button labels
+            - Last synced timestamps on project cards
+            - Direct GitHub links on projects
+
+          draft: false
+          prerelease: false
+
+  build-tauri:
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: '--target x86_64-apple-darwin'
+          - platform: 'macos-latest'
+            args: '--target aarch64-apple-darwin'
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'x86_64-apple-darwin,aarch64-apple-darwin' || '' }}
+
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install git-service dependencies
+        run: |
+          cd git-service
+          npm ci
+
+      - name: Build git-service
+        run: |
+          cd git-service
+          npm run build
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+  publish-release:
+    needs: [create-release, build-tauri]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Publish release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false

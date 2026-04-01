@@ -1,0 +1,1382 @@
+import simpleGit, { SimpleGit, StatusResult, LogResult, DiffResult } from 'simple-git';
+import { StatusInfo, SyncResult, BranchInfo, CommitInfo, StashInfo, TagInfo, DiffInfo, PreSyncValidation, FileValidationIssue } from './types.js';
+import * as fs from 'fs';
+import * as path from 'path';
+
+export class GitOperations {
+  private git: SimpleGit;
+  private repoPath: string;
+
+  /**
+   * Validates that a repository path is safe to use.
+   * Prevents path traversal attacks and ensures the path is valid.
+   */
+  private static validateRepoPath(repoPath: string): void {
+    // Check for path traversal attempts
+    if (repoPath.includes('..')) {
+      throw new Error('Invalid repository path: path traversal not allowed');
+    }
+
+    // Ensure path is absolute (starts with drive letter on Windows or / on Unix)
+    const isAbsolute = /^[a-zA-Z]:[\\/]/.test(repoPath) || repoPath.startsWith('/');
+    if (!isAbsolute) {
+      throw new Error('Invalid repository path: must be an absolute path');
+    }
+
+    // Check path exists and is a directory
+    if (!fs.existsSync(repoPath)) {
+      throw new Error(`Repository path does not exist: ${repoPath}`);
+    }
+
+    const stats = fs.statSync(repoPath);
+    if (!stats.isDirectory()) {
+      throw new Error(`Repository path is not a directory: ${repoPath}`);
+    }
+  }
+
+  /**
+   * Validates a git ref name (branch, tag) against git naming rules.
+   * Prevents command injection through malformed ref names.
+   */
+  private static validateRefName(refName: string, type: 'branch' | 'tag'): void {
+    if (!refName || refName.trim().length === 0) {
+      throw new Error(`Invalid ${type} name: cannot be empty`);
+    }
+
+    // Git ref naming rules - disallow dangerous patterns
+    const invalidPatterns = [
+      /^-/, // Cannot start with hyphen
+      /\.\.$/, // Cannot end with ..
+      /\.lock$/, // Cannot end with .lock
+      /[\x00-\x1f\x7f]/, // No control characters
+      /[~^:?*\[\]\\]/, // No special git characters
+      /\s/, // No whitespace
+      /^@$/, // Cannot be just @
+      /\/\//, // No double slashes
+      /^\//, // Cannot start with slash
+      /\/$/, // Cannot end with slash
+    ];
+
+    for (const pattern of invalidPatterns) {
+      if (pattern.test(refName)) {
+        throw new Error(`Invalid ${type} name: contains forbidden characters or patterns`);
+      }
+    }
+
+    // Max length check
+    if (refName.length > 250) {
+      throw new Error(`Invalid ${type} name: too long (max 250 characters)`);
+    }
+  }
+
+  /**
+   * Validates a commit hash format.
+   */
+  private static validateCommitHash(hash: string): void {
+    if (!hash || hash.trim().length === 0) {
+      throw new Error('Invalid commit hash: cannot be empty');
+    }
+
+    // Commit hash should be hex characters only, 7-40 chars
+    if (!/^[a-fA-F0-9]{7,40}$/.test(hash)) {
+      throw new Error('Invalid commit hash: must be 7-40 hexadecimal characters');
+    }
+  }
+
+  constructor(repoPath: string) {
+    GitOperations.validateRepoPath(repoPath);
+    this.repoPath = repoPath;
+    this.git = simpleGit(repoPath);
+  }
+
+  /**
+   * Ensures the directory is initialized as a git repository.
+   * If .git doesn't exist, initializes it with main branch.
+   * Returns true if initialization was needed, false if already a repo.
+   */
+  async ensureGitRepo(): Promise<boolean> {
+    try {
+      // Try to get status - if this succeeds, it's already a git repo
+      await this.git.status();
+      return false; // Already initialized
+    } catch (error) {
+      // Not a git repo, initialize it
+      console.error(`[Git] Directory ${this.repoPath} is not a git repository, initializing...`);
+      await this.git.init(['-b', 'main']);
+      console.error(`[Git] Initialized git repository at ${this.repoPath}`);
+      return true; // Just initialized
+    }
+  }
+
+  /**
+   * Ensures the remote 'origin' is configured with the given URL.
+   * If the remote doesn't exist, adds it. If it exists with wrong URL, updates it.
+   */
+  async ensureRemote(remoteUrl: string): Promise<void> {
+    try {
+      const remotes = await this.git.getRemotes(true);
+      const origin = remotes.find(r => r.name === 'origin');
+
+      if (!origin) {
+        // Remote doesn't exist, add it
+        console.error(`[Git] Adding origin remote: ${remoteUrl}`);
+        await this.git.addRemote('origin', remoteUrl);
+      } else if (origin.refs.fetch !== remoteUrl && origin.refs.push !== remoteUrl) {
+        // Remote exists but with wrong URL, update it
+        console.error(`[Git] Updating origin remote to: ${remoteUrl}`);
+        await this.git.remote(['set-url', 'origin', remoteUrl]);
+      } else {
+        console.error(`[Git] Origin remote already configured correctly`);
+      }
+    } catch (error) {
+      throw new Error(`Failed to ensure remote: ${error}`);
+    }
+  }
+
+  async checkStatus(): Promise<StatusInfo> {
+    // Ensure this is a git repository before checking status
+    await this.ensureGitRepo();
+    try {
+      // Try to fetch and prune, but don't fail if it doesn't work
+      try {
+        await this.git.fetch(['--prune', 'origin']);
+      } catch (fetchError) {
+        console.error('Warning: Fetch failed, continuing with local status check:', fetchError);
+        // Continue anyway - we can still check local status
+      }
+
+      const status: StatusResult = await this.git.status();
+
+      // Get remote branches, but don't fail if it doesn't work
+      let remoteBranches: string[] = [];
+      try {
+        const branches = await this.git.branch(['-r']);
+        remoteBranches = Object.keys(branches.branches)
+          .filter((b) => b.startsWith('origin/'))
+          .map((b) => b.replace('origin/', ''))
+          .filter((b) => !['main', 'master', 'HEAD'].includes(b));
+      } catch (branchError) {
+        console.error('Warning: Failed to get remote branches:', branchError);
+        // Continue with empty array
+      }
+
+      console.error('[Git Status Check]', {
+        path: this.repoPath,
+        files: status.files.length,
+        modified: status.modified.length,
+        created: status.created.length,
+        deleted: status.deleted.length,
+        not_added: status.not_added.length,
+        ahead: status.ahead,
+        behind: status.behind,
+      });
+
+      return {
+        uncommittedFiles: status.files.length,
+        untrackedFiles: status.not_added.length,
+        modifiedFiles: status.files.map((f) => f.path),
+        unpushedCommits: status.ahead,
+        remoteBranches,
+      };
+    } catch (error) {
+      throw new Error(`Failed to check status: ${error}`);
+    }
+  }
+
+  // ==================== PRE-SYNC VALIDATION ====================
+
+  // GitHub file size limits
+  private static readonly SIZE_LIMIT_ERROR = 100 * 1024 * 1024;  // 100MB - push will fail
+  private static readonly SIZE_LIMIT_WARNING = 50 * 1024 * 1024; // 50MB - GitHub warns
+  private static readonly SIZE_LIMIT_INFO = 10 * 1024 * 1024;    // 10MB - flag for awareness
+
+  // Patterns for files that typically shouldn't be in git
+  private static readonly PROBLEMATIC_PATTERNS: Array<{
+    pattern: RegExp;
+    reason: string;
+    suggestion: string;
+    gitignorePattern: string;
+  }> = [
+    // Databases
+    { pattern: /\.sqlite3?$/i, reason: 'SQLite database file', suggestion: 'Database files should not be in git - they contain binary data that changes frequently', gitignorePattern: '*.sqlite3' },
+    { pattern: /\.db$/i, reason: 'Database file', suggestion: 'Database files should not be in git', gitignorePattern: '*.db' },
+    { pattern: /\.mdb$/i, reason: 'Access database file', suggestion: 'Database files should not be in git', gitignorePattern: '*.mdb' },
+
+    // Logs
+    { pattern: /\.log$/i, reason: 'Log file', suggestion: 'Log files are generated and should not be tracked', gitignorePattern: '*.log' },
+    { pattern: /logs?\//i, reason: 'Log directory', suggestion: 'Log directories should be gitignored', gitignorePattern: 'logs/' },
+
+    // Dependencies (these can be huge)
+    { pattern: /node_modules\//i, reason: 'Node.js dependencies', suggestion: 'Run "npm install" to restore - never commit node_modules', gitignorePattern: 'node_modules/' },
+    { pattern: /\.pnp\.cjs$/i, reason: 'Yarn PnP file', suggestion: 'Yarn PnP files can be large', gitignorePattern: '.pnp.cjs' },
+    { pattern: /vendor\//i, reason: 'Vendor dependencies', suggestion: 'Vendor directories typically contain dependencies', gitignorePattern: 'vendor/' },
+    { pattern: /\.venv\//i, reason: 'Python virtual environment', suggestion: 'Virtual environments should be gitignored', gitignorePattern: '.venv/' },
+    { pattern: /venv\//i, reason: 'Python virtual environment', suggestion: 'Virtual environments should be gitignored', gitignorePattern: 'venv/' },
+    { pattern: /__pycache__\//i, reason: 'Python bytecode cache', suggestion: 'Python cache should be gitignored', gitignorePattern: '__pycache__/' },
+
+    // Build outputs
+    { pattern: /dist\//i, reason: 'Build output directory', suggestion: 'Build outputs are generated and should be gitignored', gitignorePattern: 'dist/' },
+    { pattern: /build\//i, reason: 'Build output directory', suggestion: 'Build outputs should be gitignored unless intentional', gitignorePattern: 'build/' },
+    { pattern: /target\//i, reason: 'Rust/Maven build output', suggestion: 'Build outputs should be gitignored', gitignorePattern: 'target/' },
+    { pattern: /\.next\//i, reason: 'Next.js build cache', suggestion: 'Next.js build cache should be gitignored', gitignorePattern: '.next/' },
+    { pattern: /\.nuxt\//i, reason: 'Nuxt build cache', suggestion: 'Nuxt build cache should be gitignored', gitignorePattern: '.nuxt/' },
+
+    // Large media files
+    { pattern: /\.(mp4|mov|avi|mkv|webm)$/i, reason: 'Video file', suggestion: 'Large video files should use Git LFS or external storage', gitignorePattern: '*.mp4' },
+    { pattern: /\.(zip|tar|gz|rar|7z)$/i, reason: 'Archive file', suggestion: 'Large archives should not be in git', gitignorePattern: '*.zip' },
+    { pattern: /\.(iso|dmg|img)$/i, reason: 'Disk image', suggestion: 'Disk images should not be in git', gitignorePattern: '*.iso' },
+
+    // IDE and OS files
+    { pattern: /\.DS_Store$/i, reason: 'macOS metadata', suggestion: 'OS-specific files should be gitignored', gitignorePattern: '.DS_Store' },
+    { pattern: /Thumbs\.db$/i, reason: 'Windows thumbnail cache', suggestion: 'OS-specific files should be gitignored', gitignorePattern: 'Thumbs.db' },
+    { pattern: /\.idea\//i, reason: 'JetBrains IDE config', suggestion: 'IDE configs are often user-specific', gitignorePattern: '.idea/' },
+
+    // Environment and secrets
+    { pattern: /\.env\.local$/i, reason: 'Local environment file', suggestion: 'Environment files may contain secrets', gitignorePattern: '.env.local' },
+    { pattern: /\.env\.\w+$/i, reason: 'Environment file', suggestion: 'Environment files may contain secrets', gitignorePattern: '.env.*' },
+
+    // Temporary files
+    { pattern: /\.tmp$/i, reason: 'Temporary file', suggestion: 'Temporary files should not be tracked', gitignorePattern: '*.tmp' },
+    { pattern: /\.temp$/i, reason: 'Temporary file', suggestion: 'Temporary files should not be tracked', gitignorePattern: '*.temp' },
+    { pattern: /\.swp$/i, reason: 'Vim swap file', suggestion: 'Editor swap files should be gitignored', gitignorePattern: '*.swp' },
+    { pattern: /~$/i, reason: 'Backup file', suggestion: 'Backup files should be gitignored', gitignorePattern: '*~' },
+  ];
+
+  /**
+   * Validate files before sync to catch issues that would cause push failures
+   * This runs BEFORE attempting any git operations to prevent stuck states
+   */
+  async validateBeforeSync(): Promise<PreSyncValidation> {
+    await this.ensureGitRepo();
+
+    const issues: FileValidationIssue[] = [];
+    const suggestedGitignore = new Set<string>();
+    let totalSize = 0;
+    let hasErrors = false;
+    let hasWarnings = false;
+
+    try {
+      const status = await this.git.status();
+      const allFiles = [
+        ...status.files.map(f => f.path),
+        ...status.not_added,
+      ];
+
+      console.error(`[Validation] Checking ${allFiles.length} files before sync`);
+
+      for (const filePath of allFiles) {
+        const fullPath = path.join(this.repoPath, filePath);
+
+        // Check if file exists (might be deleted)
+        if (!fs.existsSync(fullPath)) continue;
+
+        const stats = fs.statSync(fullPath);
+
+        // Skip directories
+        if (stats.isDirectory()) continue;
+
+        const fileSize = stats.size;
+        totalSize += fileSize;
+        const fileSizeMB = fileSize / (1024 * 1024);
+
+        // Check file size against GitHub limits
+        if (fileSize >= GitOperations.SIZE_LIMIT_ERROR) {
+          issues.push({
+            filePath,
+            severity: 'error',
+            reason: `File exceeds GitHub's 100MB limit (${fileSizeMB.toFixed(1)}MB)`,
+            sizeBytes: fileSize,
+            sizeMB: fileSizeMB,
+            suggestion: 'This file WILL fail to push. Add to .gitignore or use Git LFS for large files.',
+            gitignorePattern: filePath,
+          });
+          hasErrors = true;
+          suggestedGitignore.add(filePath);
+        } else if (fileSize >= GitOperations.SIZE_LIMIT_WARNING) {
+          issues.push({
+            filePath,
+            severity: 'warning',
+            reason: `Large file (${fileSizeMB.toFixed(1)}MB) - GitHub warns above 50MB`,
+            sizeBytes: fileSize,
+            sizeMB: fileSizeMB,
+            suggestion: 'Consider using Git LFS for files this large.',
+          });
+          hasWarnings = true;
+        } else if (fileSize >= GitOperations.SIZE_LIMIT_INFO) {
+          issues.push({
+            filePath,
+            severity: 'info',
+            reason: `Notable file size (${fileSizeMB.toFixed(1)}MB)`,
+            sizeBytes: fileSize,
+            sizeMB: fileSizeMB,
+          });
+        }
+
+        // Check against problematic patterns
+        for (const pattern of GitOperations.PROBLEMATIC_PATTERNS) {
+          if (pattern.pattern.test(filePath)) {
+            // Don't duplicate if we already flagged for size
+            const existingIssue = issues.find(i => i.filePath === filePath && i.severity === 'error');
+            if (!existingIssue) {
+              issues.push({
+                filePath,
+                severity: 'warning',
+                reason: pattern.reason,
+                sizeBytes: fileSize,
+                sizeMB: fileSizeMB,
+                suggestion: pattern.suggestion,
+                gitignorePattern: pattern.gitignorePattern,
+              });
+              hasWarnings = true;
+            }
+            suggestedGitignore.add(pattern.gitignorePattern);
+            break; // Only match first pattern per file
+          }
+        }
+      }
+
+      // Sort issues: errors first, then warnings, then info
+      issues.sort((a, b) => {
+        const severityOrder = { error: 0, warning: 1, info: 2 };
+        return severityOrder[a.severity] - severityOrder[b.severity];
+      });
+
+      const totalSizeMB = totalSize / (1024 * 1024);
+      console.error(`[Validation] Complete: ${issues.length} issues, ${totalSizeMB.toFixed(1)}MB total`);
+
+      return {
+        canProceed: !hasErrors,
+        hasWarnings,
+        totalStagedSize: totalSize,
+        totalStagedSizeMB: totalSizeMB,
+        issues,
+        suggestedGitignore: Array.from(suggestedGitignore),
+      };
+    } catch (error) {
+      throw new Error(`Failed to validate files: ${error}`);
+    }
+  }
+
+  async pushLocal(
+    remoteUrl?: string,
+    commitMessage?: string,
+    commitDescription?: string
+  ): Promise<{ committed: number; pushed: boolean }> {
+    // Ensure this is a git repository
+    await this.ensureGitRepo();
+
+    // Ensure remote is configured if URL provided
+    if (remoteUrl) {
+      await this.ensureRemote(remoteUrl);
+    }
+
+    try {
+      const status = await this.git.status();
+      const currentBranch = status.current || 'main';
+
+      // If no changes to commit, check if we need to make an initial commit
+      if (status.files.length === 0) {
+        // Check if there are any commits at all
+        try {
+          await this.git.log({ maxCount: 1 });
+          // Has commits, no changes
+          return { committed: 0, pushed: false };
+        } catch (error) {
+          // No commits yet - create initial commit if there are files
+          console.error('[Git] No commits yet, checking for files...');
+          // No files to commit
+          return { committed: 0, pushed: false };
+        }
+      }
+
+      // Pull latest changes from remote ONLY if there are no local changes
+      // This avoids the "cannot pull with unstaged changes" error
+      if (currentBranch && status.files.length === 0) {
+        try {
+          await this.git.pull('origin', currentBranch, ['--rebase']);
+        } catch (pullError) {
+          console.error(`Warning: Pull failed, continuing with push: ${pullError}`);
+        }
+      }
+
+      // Stage all changes
+      await this.git.add('.');
+
+      // Build commit message: use custom or default to auto-sync timestamp
+      let message = commitMessage || `Auto-sync: ${new Date().toISOString()}`;
+      if (commitDescription) {
+        message = `${message}\n\n${commitDescription}`;
+      }
+      await this.git.commit(message);
+
+      // Push to current branch
+      await this.git.push('origin', currentBranch);
+
+      return { committed: status.files.length, pushed: true };
+    } catch (error) {
+      throw new Error(`Failed to push local changes: ${error}`);
+    }
+  }
+
+  async mergeBranches(branches: string[], remoteUrl?: string): Promise<string[]> {
+    // Ensure this is a git repository
+    await this.ensureGitRepo();
+
+    // Ensure remote is configured if URL provided
+    if (remoteUrl) {
+      await this.ensureRemote(remoteUrl);
+    }
+
+    const merged: string[] = [];
+
+    // Get current branch and ensure we're on main/master before starting
+    const initialStatus = await this.git.status();
+    const mainBranch = initialStatus.current || 'main';
+
+    // Only proceed if we're starting from main/master
+    if (mainBranch !== 'main' && mainBranch !== 'master') {
+      throw new Error(`Must be on main/master branch to merge. Currently on: ${mainBranch}`);
+    }
+
+    try {
+      // Fetch all remotes and prune stale branches
+      await this.git.fetch(['--prune', 'origin']);
+
+      for (const branch of branches) {
+        try {
+          console.error(`[Git] Starting merge of branch: ${branch}`);
+
+          // Fetch the remote branch
+          await this.git.fetch(['origin', branch]);
+
+          // Merge the remote branch directly (no need to checkout)
+          await this.git.merge([`origin/${branch}`, '--no-ff', '-m', `Merge branch '${branch}'`]);
+
+          console.error(`[Git] Merged ${branch} successfully`);
+
+          // Push updated main
+          await this.git.push('origin', mainBranch);
+          console.error(`[Git] Pushed main branch`);
+
+          // Delete remote branch
+          await this.git.push(['origin', '--delete', branch]);
+          console.error(`[Git] Deleted remote branch ${branch}`);
+
+          // Delete local branch if it exists
+          try {
+            await this.git.branch(['-d', branch]);
+          } catch (e) {
+            // Branch might not exist locally, that's OK
+          }
+
+          merged.push(branch);
+        } catch (error) {
+          console.error(`[Git] Failed to merge ${branch}:`, error);
+          // If merge failed, try to abort it to clean up
+          try {
+            await this.git.merge(['--abort']);
+            console.error(`[Git] Aborted failed merge of ${branch}`);
+          } catch (abortError) {
+            // Merge might not have been in progress
+          }
+          // Continue with other branches
+        }
+      }
+
+      return merged;
+    } catch (error) {
+      // Ensure we're back on main branch if anything went wrong
+      try {
+        const currentStatus = await this.git.status();
+        if (currentStatus.current !== mainBranch) {
+          await this.git.checkout(mainBranch);
+          console.error(`[Git] Returned to ${mainBranch} after error`);
+        }
+      } catch (checkoutError) {
+        console.error(`[Git] Failed to return to main branch:`, checkoutError);
+      }
+      throw new Error(`Failed to merge branches: ${error}`);
+    }
+  }
+
+  /**
+   * Pull updates from remote branches without deleting them.
+   * Use this for iterative work (e.g., pulling from Claude Code web sessions).
+   * The branches remain alive for future pulls.
+   */
+  async pullBranches(branches: string[], remoteUrl?: string): Promise<string[]> {
+    // Ensure this is a git repository
+    await this.ensureGitRepo();
+
+    // Ensure remote is configured if URL provided
+    if (remoteUrl) {
+      await this.ensureRemote(remoteUrl);
+    }
+
+    const pulled: string[] = [];
+
+    // Get current branch and ensure we're on main/master before starting
+    const initialStatus = await this.git.status();
+    const mainBranch = initialStatus.current || 'main';
+
+    // Only proceed if we're starting from main/master
+    if (mainBranch !== 'main' && mainBranch !== 'master') {
+      throw new Error(`Must be on main/master branch to pull. Currently on: ${mainBranch}`);
+    }
+
+    try {
+      // Fetch all remotes and prune stale branches
+      await this.git.fetch(['--prune', 'origin']);
+
+      for (const branch of branches) {
+        try {
+          console.error(`[Git] Starting pull of branch: ${branch}`);
+
+          // Fetch the remote branch
+          await this.git.fetch(['origin', branch]);
+
+          // Merge the remote branch directly (no need to checkout)
+          await this.git.merge([`origin/${branch}`, '--no-ff', '-m', `Pull updates from branch '${branch}'`]);
+
+          console.error(`[Git] Pulled ${branch} successfully`);
+
+          // Push updated main
+          await this.git.push('origin', mainBranch);
+          console.error(`[Git] Pushed main branch`);
+
+          // NOTE: Branch is NOT deleted - it stays alive for future pulls
+
+          pulled.push(branch);
+        } catch (error) {
+          console.error(`[Git] Failed to pull ${branch}:`, error);
+          // If merge failed, try to abort it to clean up
+          try {
+            await this.git.merge(['--abort']);
+            console.error(`[Git] Aborted failed pull of ${branch}`);
+          } catch (abortError) {
+            // Merge might not have been in progress
+          }
+          // Continue with other branches
+        }
+      }
+
+      return pulled;
+    } catch (error) {
+      // Ensure we're back on main branch if anything went wrong
+      try {
+        const currentStatus = await this.git.status();
+        if (currentStatus.current !== mainBranch) {
+          await this.git.checkout(mainBranch);
+          console.error(`[Git] Returned to ${mainBranch} after error`);
+        }
+      } catch (checkoutError) {
+        console.error(`[Git] Failed to return to main branch:`, checkoutError);
+      }
+      throw new Error(`Failed to pull branches: ${error}`);
+    }
+  }
+
+  async fullSync(
+    remoteUrl?: string,
+    commitMessage?: string,
+    commitDescription?: string
+  ): Promise<SyncResult> {
+    // Ensure this is a git repository
+    await this.ensureGitRepo();
+
+    // Ensure remote is configured if URL provided
+    if (remoteUrl) {
+      await this.ensureRemote(remoteUrl);
+    }
+
+    const result: SyncResult = {
+      success: true,
+      message: 'Full sync completed',
+      committed: 0,
+      merged: [],
+      errors: [],
+    };
+
+    try {
+      // Step 0: Fetch and prune to get latest remote state
+      await this.git.fetch(['--prune', 'origin']);
+
+      // Check if there are local changes first
+      const initialStatus = await this.git.status();
+      const currentBranch = initialStatus.current || 'main';
+
+      // Only pull if there are NO local changes
+      // This avoids "cannot pull with unstaged changes" error
+      if (currentBranch && initialStatus.files.length === 0) {
+        try {
+          await this.git.pull('origin', currentBranch, ['--rebase']);
+        } catch (pullError) {
+          console.error(`Warning: Pull failed during full sync: ${pullError}`);
+        }
+      }
+
+      // Step 1: Check if there are local changes (after potential pull)
+      const status = await this.git.status();
+      if (status.files.length > 0) {
+        try {
+          const pushResult = await this.pushLocal(remoteUrl, commitMessage, commitDescription);
+          result.committed = pushResult.committed;
+        } catch (error: any) {
+          result.errors?.push(`Push failed: ${error.message}`);
+          result.success = false;
+        }
+      }
+
+      // Step 2: Check for remote branches
+      const statusInfo = await this.checkStatus();
+      if (statusInfo.remoteBranches.length > 0) {
+        try {
+          const merged = await this.mergeBranches(statusInfo.remoteBranches);
+          result.merged = merged;
+        } catch (error: any) {
+          result.errors?.push(`Merge failed: ${error.message}`);
+          result.success = false;
+        }
+      }
+
+      if (result.errors && result.errors.length > 0) {
+        result.message = 'Full sync completed with errors';
+      }
+    } catch (error: any) {
+      result.success = false;
+      result.message = `Full sync failed: ${error.message}`;
+      result.errors?.push(error.message);
+    }
+
+    return result;
+  }
+
+  // ==================== ADVANCED GIT FEATURES ====================
+
+  /**
+   * Get all branches (local and remote)
+   */
+  async getBranches(): Promise<BranchInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      const branchSummary = await this.git.branch(['-a', '-v']);
+      const branches: BranchInfo[] = [];
+
+      for (const [name, info] of Object.entries(branchSummary.branches)) {
+        const isRemote = name.startsWith('remotes/');
+        const cleanName = isRemote ? name.replace('remotes/origin/', '') : name;
+
+        // Skip HEAD references
+        if (cleanName.includes('HEAD')) continue;
+
+        branches.push({
+          name: cleanName,
+          current: info.current,
+          commit: info.commit,
+          label: info.label,
+          isRemote,
+        });
+      }
+
+      return branches;
+    } catch (error) {
+      throw new Error(`Failed to get branches: ${error}`);
+    }
+  }
+
+  /**
+   * Create a new branch
+   */
+  async createBranch(branchName: string, checkout: boolean = false): Promise<void> {
+    GitOperations.validateRefName(branchName, 'branch');
+    await this.ensureGitRepo();
+    try {
+      if (checkout) {
+        await this.git.checkoutLocalBranch(branchName);
+      } else {
+        await this.git.branch([branchName]);
+      }
+    } catch (error) {
+      throw new Error(`Failed to create branch: ${error}`);
+    }
+  }
+
+  /**
+   * Switch to a different branch
+   */
+  async switchBranch(branchName: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.checkout(branchName);
+    } catch (error) {
+      throw new Error(`Failed to switch branch: ${error}`);
+    }
+  }
+
+  /**
+   * Delete a branch
+   */
+  async deleteBranch(branchName: string, force: boolean = false): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      const flag = force ? '-D' : '-d';
+      await this.git.branch([flag, branchName]);
+    } catch (error) {
+      throw new Error(`Failed to delete branch: ${error}`);
+    }
+  }
+
+  /**
+   * Get commit history with limit
+   */
+  async getCommitHistory(limit: number = 50): Promise<CommitInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      const log: LogResult = await this.git.log({ maxCount: limit });
+
+      return log.all.map(commit => ({
+        hash: commit.hash,
+        author: commit.author_name,
+        email: commit.author_email,
+        date: commit.date,
+        message: commit.message,
+        body: commit.body,
+        refs: commit.refs,
+      }));
+    } catch (error) {
+      throw new Error(`Failed to get commit history: ${error}`);
+    }
+  }
+
+  /**
+   * Get file diff for specific files or all changed files
+   */
+  async getDiff(filePath?: string): Promise<DiffInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      let diffResult: string;
+
+      if (filePath) {
+        diffResult = await this.git.diff([filePath]);
+      } else {
+        diffResult = await this.git.diff();
+      }
+
+      // Parse diff output into structured format
+      const diffs: DiffInfo[] = [];
+      const fileBlocks = diffResult.split('diff --git');
+
+      for (const block of fileBlocks) {
+        if (!block.trim()) continue;
+
+        const lines = block.split('\n');
+        const fileMatch = lines[0].match(/a\/(.*) b\/(.*)/);
+
+        if (fileMatch) {
+          const fileName = fileMatch[2];
+          const changes: { line: number; type: 'add' | 'remove' | 'context'; content: string }[] = [];
+          let currentLine = 0;
+
+          for (const line of lines.slice(1)) {
+            if (line.startsWith('@@')) {
+              const lineMatch = line.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/);
+              if (lineMatch) {
+                currentLine = parseInt(lineMatch[2]);
+              }
+            } else if (line.startsWith('+') && !line.startsWith('+++')) {
+              changes.push({ line: currentLine++, type: 'add', content: line.substring(1) });
+            } else if (line.startsWith('-') && !line.startsWith('---')) {
+              changes.push({ line: currentLine, type: 'remove', content: line.substring(1) });
+            } else if (line.startsWith(' ')) {
+              changes.push({ line: currentLine++, type: 'context', content: line.substring(1) });
+            }
+          }
+
+          diffs.push({ fileName, changes });
+        }
+      }
+
+      return diffs;
+    } catch (error) {
+      throw new Error(`Failed to get diff: ${error}`);
+    }
+  }
+
+  /**
+   * Stash management
+   */
+  async createStash(message?: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      if (message) {
+        await this.git.stash(['save', message]);
+      } else {
+        await this.git.stash();
+      }
+    } catch (error) {
+      throw new Error(`Failed to create stash: ${error}`);
+    }
+  }
+
+  async listStashes(): Promise<StashInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      const stashList = await this.git.stashList();
+
+      return stashList.all.map((stash, index) => ({
+        index,
+        hash: stash.hash,
+        message: stash.message,
+        date: stash.date,
+      }));
+    } catch (error) {
+      throw new Error(`Failed to list stashes: ${error}`);
+    }
+  }
+
+  async applyStash(index: number): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.stash(['apply', `stash@{${index}}`]);
+    } catch (error) {
+      throw new Error(`Failed to apply stash: ${error}`);
+    }
+  }
+
+  async popStash(): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.stash(['pop']);
+    } catch (error) {
+      throw new Error(`Failed to pop stash: ${error}`);
+    }
+  }
+
+  async dropStash(index: number): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.stash(['drop', `stash@{${index}}`]);
+    } catch (error) {
+      throw new Error(`Failed to drop stash: ${error}`);
+    }
+  }
+
+  /**
+   * Tag management
+   */
+  async createTag(tagName: string, message?: string): Promise<void> {
+    GitOperations.validateRefName(tagName, 'tag');
+    await this.ensureGitRepo();
+    try {
+      if (message) {
+        await this.git.tag(['-a', tagName, '-m', message]);
+      } else {
+        await this.git.tag([tagName]);
+      }
+    } catch (error) {
+      throw new Error(`Failed to create tag: ${error}`);
+    }
+  }
+
+  async listTags(): Promise<TagInfo[]> {
+    await this.ensureGitRepo();
+    try {
+      const tags = await this.git.tags();
+
+      return tags.all.map(tag => ({
+        name: tag,
+        // We could enhance this with more tag info if needed
+      }));
+    } catch (error) {
+      throw new Error(`Failed to list tags: ${error}`);
+    }
+  }
+
+  async pushTag(tagName: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.push(['origin', tagName]);
+    } catch (error) {
+      throw new Error(`Failed to push tag: ${error}`);
+    }
+  }
+
+  async pushAllTags(): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.push(['--tags']);
+    } catch (error) {
+      throw new Error(`Failed to push tags: ${error}`);
+    }
+  }
+
+  async deleteTag(tagName: string): Promise<void> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.tag(['-d', tagName]);
+    } catch (error) {
+      throw new Error(`Failed to delete tag: ${error}`);
+    }
+  }
+
+  /**
+   * Cherry-pick a commit
+   */
+  async cherryPick(commitHash: string): Promise<void> {
+    GitOperations.validateCommitHash(commitHash);
+    await this.ensureGitRepo();
+    try {
+      await this.git.raw(['cherry-pick', commitHash]);
+    } catch (error) {
+      throw new Error(`Failed to cherry-pick commit: ${error}`);
+    }
+  }
+
+  /**
+   * Get current branch name
+   */
+  async getCurrentBranch(): Promise<string> {
+    await this.ensureGitRepo();
+    try {
+      const status = await this.git.status();
+      return status.current || 'main';
+    } catch (error) {
+      throw new Error(`Failed to get current branch: ${error}`);
+    }
+  }
+
+  // ==================== ANALYTICS FEATURES ====================
+
+  /**
+   * Get detailed commit history with file statistics for analytics
+   * OPTIMIZED: Uses git log --numstat for 100x performance improvement
+   */
+  async getAnalyticsCommitHistory(params: {
+    limit?: number;
+    since?: string;  // ISO date string
+    until?: string;  // ISO date string
+    author?: string;
+  }): Promise<{
+    hash: string;
+    author: string;
+    email: string;
+    date: string;
+    message: string;
+    branch: string;
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+  }[]> {
+    await this.ensureGitRepo();
+    try {
+      // Build git log command with --numstat for file statistics in ONE command
+      const args = [
+        'log',
+        '--numstat',
+        '--pretty=format:COMMIT_START%n%H%n%an%n%ae%n%aI%n%s%n%D',
+        `--max-count=${params.limit || 100}`,
+      ];
+
+      if (params.since) args.push(`--since=${params.since}`);
+      if (params.until) args.push(`--until=${params.until}`);
+      if (params.author) args.push(`--author=${params.author}`);
+
+      console.error('[Git Analytics] Running optimized git log --numstat command');
+      const startTime = Date.now();
+
+      // Execute single git command (instead of N separate diff commands!)
+      const output: string = await this.git.raw(args);
+
+      console.error(`[Git Analytics] Git command completed in ${Date.now() - startTime}ms`);
+
+      // Parse the output
+      const commits = this.parseGitLogNumstat(output);
+
+      console.error(`[Git Analytics] Parsed ${commits.length} commits`);
+      return commits;
+    } catch (error) {
+      throw new Error(`Failed to get analytics commit history: ${error}`);
+    }
+  }
+
+  /**
+   * Parse git log --numstat output into commit objects
+   */
+  private parseGitLogNumstat(output: string): Array<{
+    hash: string;
+    author: string;
+    email: string;
+    date: string;
+    message: string;
+    branch: string;
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+  }> {
+    const commits = [];
+    const lines = output.split('\n');
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i].trim();
+
+      // Look for commit start marker
+      if (line === 'COMMIT_START') {
+        i++;
+
+        // Parse commit metadata (6 lines after marker)
+        if (i + 5 >= lines.length) break;
+
+        const hash = lines[i++].trim();
+        const author = lines[i++].trim();
+        const email = lines[i++].trim();
+        const date = lines[i++].trim();
+        const message = lines[i++].trim();
+        const branch = lines[i++].trim() || 'main';
+
+        // Skip any empty lines between commit metadata and numstat
+        while (i < lines.length && lines[i].trim() === '') {
+          i++;
+        }
+
+        // Parse numstat lines (until next COMMIT_START)
+        let filesChanged = 0;
+        let additions = 0;
+        let deletions = 0;
+
+        while (i < lines.length && lines[i].trim() !== 'COMMIT_START') {
+          const numstatLine = lines[i].trim();
+
+          // Skip empty lines within numstat section
+          if (numstatLine === '') {
+            i++;
+            continue;
+          }
+
+          const parts = numstatLine.split('\t');
+
+          if (parts.length >= 3) {
+            // Format: additions deletions filename
+            const adds = parseInt(parts[0]) || 0;
+            const dels = parseInt(parts[1]) || 0;
+
+            // Skip binary files (marked with -)
+            if (!isNaN(adds) && !isNaN(dels)) {
+              additions += adds;
+              deletions += dels;
+              filesChanged++;
+            }
+          }
+          i++;
+        }
+
+        console.error(`[Git Analytics] Parsed commit ${hash.substring(0, 7)}: +${additions} -${deletions} (${filesChanged} files)`);
+
+        commits.push({
+          hash,
+          author,
+          email,
+          date,
+          message,
+          branch,
+          filesChanged,
+          additions,
+          deletions,
+        });
+      } else {
+        i++;
+      }
+    }
+
+    return commits;
+  }
+
+  /**
+   * Get branch staleness information
+   */
+  async getBranchStaleness(): Promise<{
+    name: string;
+    daysSinceLastCommit: number;
+    isRemote: boolean;
+    lastCommitHash: string;
+    lastCommitDate: string;
+  }[]> {
+    await this.ensureGitRepo();
+    try {
+      await this.git.fetch(['--all']);
+      const branches = await this.getBranches();
+      const staleness = [];
+
+      for (const branch of branches) {
+        try {
+          // Get last commit on this branch
+          const branchRef = branch.isRemote ? `remotes/origin/${branch.name}` : branch.name;
+          const log = await this.git.log({ maxCount: 1, [branchRef]: null });
+
+          if (log.latest) {
+            const lastCommitDate = new Date(log.latest.date);
+            const now = new Date();
+            const daysSince = Math.floor((now.getTime() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
+
+            staleness.push({
+              name: branch.name,
+              daysSinceLastCommit: daysSince,
+              isRemote: branch.isRemote,
+              lastCommitHash: log.latest.hash,
+              lastCommitDate: log.latest.date,
+            });
+          }
+        } catch (error) {
+          // Skip branches that can't be analyzed
+          console.error(`Failed to analyze branch ${branch.name}:`, error);
+        }
+      }
+
+      return staleness;
+    } catch (error) {
+      throw new Error(`Failed to get branch staleness: ${error}`);
+    }
+  }
+
+  /**
+   * Get commit counts grouped by date (for heatmap)
+   */
+  async getCommitCountsByDate(params: {
+    since: string;  // ISO date string
+    until?: string; // ISO date string
+    author?: string;
+  }): Promise<Record<string, number>> {
+    await this.ensureGitRepo();
+    try {
+      const args: any = {};
+
+      // Use git's --since and --until flags
+      if (params.since) args['--since'] = params.since;
+      if (params.until) args['--until'] = params.until;
+      if (params.author) args['--author'] = params.author;
+
+      const log: LogResult = await this.git.log(args);
+      const dateCounts: Record<string, number> = {};
+
+      for (const commit of log.all) {
+        // Extract YYYY-MM-DD from the commit date
+        const date = commit.date.split('T')[0] || commit.date.substring(0, 10);
+        dateCounts[date] = (dateCounts[date] || 0) + 1;
+      }
+
+      return dateCounts;
+    } catch (error) {
+      throw new Error(`Failed to get commit counts by date: ${error}`);
+    }
+  }
+
+  /**
+   * Get days since last commit
+   */
+  async getDaysSinceLastCommit(): Promise<number | null> {
+    await this.ensureGitRepo();
+    try {
+      const log = await this.git.log({ maxCount: 1 });
+
+      if (log.latest) {
+        const lastCommitDate = new Date(log.latest.date);
+        const now = new Date();
+        return Math.floor((now.getTime() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
+      }
+
+      return null; // No commits
+    } catch (error) {
+      throw new Error(`Failed to get days since last commit: ${error}`);
+    }
+  }
+
+  /**
+   * Get aggregate statistics for the repository
+   */
+  async getAggregateStats(): Promise<{
+    totalCommits: number;
+    totalBranches: number;
+    totalTags: number;
+    totalStashes: number;
+    contributors: number;
+  }> {
+    await this.ensureGitRepo();
+    try {
+      // Get total commits
+      const log = await this.git.log();
+      const totalCommits = log.total;
+
+      // Get unique contributors
+      const uniqueAuthors = new Set(log.all.map(c => c.author_email));
+      const contributors = uniqueAuthors.size;
+
+      // Get branches
+      const branches = await this.getBranches();
+      const totalBranches = branches.length;
+
+      // Get tags
+      const tags = await this.listTags();
+      const totalTags = tags.length;
+
+      // Get stashes
+      const stashes = await this.listStashes();
+      const totalStashes = stashes.length;
+
+      return {
+        totalCommits,
+        totalBranches,
+        totalTags,
+        totalStashes,
+        contributors,
+      };
+    } catch (error) {
+      throw new Error(`Failed to get aggregate stats: ${error}`);
+    }
+  }
+
+  /**
+   * Get commit count for a date range
+   */
+  async getCommitCountForDateRange(since: string, until?: string): Promise<number> {
+    await this.ensureGitRepo();
+    try {
+      const args: any = { '--since': since };
+      if (until) args['--until'] = until;
+
+      const log = await this.git.log(args);
+      return log.total;
+    } catch (error) {
+      return 0;
+    }
+  }
+}
+
+// Standalone Git operations (not tied to a specific repository)
+
+export async function cloneRepository(githubUrl: string, localPath: string): Promise<void> {
+  try {
+    const git = simpleGit();
+    await git.clone(githubUrl, localPath);
+  } catch (error) {
+    throw new Error(`Failed to clone repository: ${error}`);
+  }
+}
+
+export async function initRepository(localPath: string): Promise<void> {
+  try {
+    const git = simpleGit(localPath);
+    let isNewRepo = false;
+
+    // Check if already a git repository
+    try {
+      await git.status();
+      // Already a git repo
+    } catch (e) {
+      // Not a git repo, initialize with main branch
+      await git.init(['-b', 'main']);
+      isNewRepo = true;
+    }
+
+    // Check if there are any commits
+    let hasCommits = false;
+    try {
+      await git.log(['-n', '1']);
+      hasCommits = true;
+    } catch (e) {
+      // No commits yet
+      hasCommits = false;
+    }
+
+    // If no commits, create initial commit
+    if (!hasCommits) {
+      const status = await git.status();
+
+      // If there are files to commit
+      if (status.files.length > 0 || status.not_added.length > 0) {
+        // Stage all files
+        await git.add('.');
+        await git.commit('Initial commit');
+      } else {
+        // No files exist, create a README
+        const fs = await import('fs/promises');
+        const path = await import('path');
+        const readmePath = path.join(localPath, 'README.md');
+
+        await fs.writeFile(readmePath, '# Project\n\nInitialized with BitGit\n');
+        await git.add('README.md');
+        await git.commit('Initial commit');
+      }
+
+      // Ensure we're on main branch (for older git versions that might use master)
+      try {
+        const currentBranch = (await git.status()).current;
+        if (currentBranch !== 'main') {
+          await git.branch(['-M', 'main']);
+        }
+      } catch (e) {
+        // Branch rename might fail, but that's ok
+      }
+    }
+  } catch (error) {
+    throw new Error(`Failed to initialize repository: ${error}`);
+  }
+}
+
+export async function addRemote(localPath: string, remoteName: string, remoteUrl: string): Promise<void> {
+  try {
+    const git = simpleGit(localPath);
+
+    // Check if remote already exists
+    const remotes = await git.getRemotes(false);
+    const remoteExists = remotes.some(r => r.name === remoteName);
+
+    if (remoteExists) {
+      // Update existing remote
+      await git.remote(['set-url', remoteName, remoteUrl]);
+    } else {
+      // Add new remote
+      await git.addRemote(remoteName, remoteUrl);
+    }
+  } catch (error) {
+    throw new Error(`Failed to add remote: ${error}`);
+  }
+}
+
+export async function pushToRemote(localPath: string, remoteName: string, branch: string): Promise<void> {
+  try {
+    const git = simpleGit(localPath);
+
+    // Check current branch
+    const status = await git.status();
+    const currentBranch = status.current;
+
+    if (!currentBranch) {
+      throw new Error('Repository has no current branch. Make sure there is at least one commit.');
+    }
+
+    // If we're not on the target branch
+    if (currentBranch !== branch) {
+      // Check if target branch exists locally
+      const branches = await git.branchLocal();
+
+      if (branches.all.includes(branch)) {
+        // Branch exists, checkout
+        await git.checkout(branch);
+      } else {
+        // Branch doesn't exist, rename current branch or create new one
+        if (currentBranch === 'master' && branch === 'main') {
+          // Special case: rename master to main
+          await git.branch(['-M', 'main']);
+        } else {
+          // Create new branch from current HEAD
+          await git.checkoutLocalBranch(branch);
+        }
+      }
+    }
+
+    // Push with set-upstream
+    await git.push(['-u', remoteName, branch]);
+  } catch (error) {
+    throw new Error(`Failed to push to remote: ${error}`);
+  }
+}

@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+git-service/node_modules/
+
+# Build outputs
+dist/
+git-service/dist/
+src-tauri/target/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Tauri
+src-tauri/target/
+src-tauri/WixTools/
+
+# Environment
+.env
+.env.local
+
+# Code signing certificates (SECURITY: Never commit!)
+scripts/*.pfx
+scripts/*.p12
+scripts/cert-thumbprint.txt
+
+# Windows reserved names
+NUL
+CON
+PRN
+AUX

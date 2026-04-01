@@ -1,0 +1,41 @@
+[package]
+name = "bitgit"
+version = "1.0.0"
+description = "A GitHub Repository Manager"
+authors = ["BitGit Team"]
+license = "MIT"
+repository = ""
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.5", features = [
+    "shell-open",
+    "dialog-all",
+    "fs-read-dir",
+    "fs-read-file",
+    "path-all"
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0"
+walkdir = "2.4"
+once_cell = "1.19"
+chrono = "0.4"
+dirs = "5.0"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.52", features = [
+    "Security_Credentials",
+    "Security_Credentials_UI"
+] }
+
+[target.'cfg(not(windows))'.dependencies]
+keyring = "2"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
