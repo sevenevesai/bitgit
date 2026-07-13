@@ -1,5 +1,7 @@
 # BitGit
 
+**Website:** https://seveneves.ai/bitgit/
+
 **A modern, high-performance Git repository manager for developers who work with multiple projects.**
 
 ![BitGit](bitgit-icon-square.png)
