@@ -60,7 +60,7 @@ export class IPCServer {
         this.log('Broken pipe detected, shutting down gracefully');
         process.exit(0);
       } else {
-        this.log(`Uncaught exception: ${err.message}`);
+        this.log(`Uncaught exception: ${errorText(err)}`);
         process.exit(1);
       }
     });
