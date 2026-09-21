@@ -4,10 +4,14 @@
   "description": "Git operations service for BitGit",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "bitgit-recovery": "dist/recovery-cli.js"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "recovery": "node dist/recovery-cli.js"
   },
   "dependencies": {
     "simple-git": "^3.21.0",
