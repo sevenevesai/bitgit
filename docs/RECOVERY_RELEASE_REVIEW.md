@@ -143,3 +143,19 @@ Gates: `npm run build` and the service build exit 0; `cargo check` exit 0. Harne
   is correct, but the error disappears with the banner, without explanation.
 - **Limit:** a crash-left `.gitignore.lock` in the project root makes later edits fail with a
   visible error until it is removed by hand.
+
+## Final follow-up on 9347942 (2026-09-21)
+
+Checks the R1-R4 observations above on `review/recovery-complete` at 9347942. It uses the same
+harness and the same evidence limits: real components, stand-in Tauri boundary, real Rust
+validator and engine. It is not Tauri IPC proof. Service rebuilt before the run. One focused
+pass (`final.mjs`): 10/10 checks. An earlier attempt stopped at a harness setup error before R1.
+
+| ID | Verdict | Evidence |
+|---|---|---|
+| R1 | Resolved | A 20,874,602-byte receipt plus an escape-heavy result: titled "The check needs attention", with no "did not run". It reports "exited with code 0", "could not be recorded" and an existing kept copy path; the command's marker file exists. Evidence is unchanged (106 entries), `metadataError` is absent, and recover still works. |
+| R2 | Resolved | A lock failure, then corrupt settings, then Retry: the summary shows only the settings problem, with no obsolete error or retry time, and no ticks run. |
+| R3 | Resolved | After Reload, a failed chosen file stays chosen and blocked. A successful retry of the `all` scope, or unchoosing it, clears the block. A new open starts with nothing chosen and no carried error. |
+| R4 | Resolved | External rollback then a UI undo gives `repairRollback` err then `state` ok. The banner is gone and a dismissible "Last undo attempt" shows the engine message. After dismissal, Save is enabled. |
+
+No new defect observed. The frozen F1-F6 and R findings above remain as recorded.
