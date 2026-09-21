@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import {
   StatusInfo, SyncResult, SyncOutcome, PublishOptions, BranchInfo, CommitInfo, StashInfo, TagInfo,
   DiffInfo, DiffScope, FileChangeInfo, FileChangeKind, PreSyncValidation, FileValidationIssue, ValidationSeverity,
+  AnalyticsCommit, AnalyticsSnapshot, AnalyticsSnapshotParams, AnalyticsSnapshotResult, BranchStaleness,
 } from './types.js';
 import { exclusionReason, MAX_FILE_BYTES } from './recovery-policy.js';
 import * as fs from 'fs';
@@ -11,6 +12,8 @@ import * as path from 'path';
 const NETWORK_TIMEOUT_MS = 10 * 60 * 1000; // pushes
 const FETCH_TIMEOUT_MS = 2 * 60 * 1000;
 const STATUS_FETCH_TIMEOUT_MS = 30 * 1000; // status must stay responsive when the remote is unreachable
+const ANALYTICS_TIMEOUT_MS = 30 * 1000; // per git command; one pathological repository must not stall the dashboard
+const ANALYTICS_PARALLEL_REPOS = 6;
 const BLOB_CHUNK_BYTES = 32 * 1024 * 1024; // bounds memory while scanning outgoing blobs
 const TAG_PUSH_BATCH = 100; // refspecs per push, so a long tag list cannot overflow the command line
 const DIFF_PREVIEW_MAX_BYTES = 1024 * 1024;
@@ -1655,75 +1658,50 @@ export class GitOperations {
     }
   }
 
-  // ==================== ANALYTICS FEATURES ====================
+  // ==================== ANALYTICS ====================
 
-  /**
-   * Get detailed commit history with file statistics for analytics
-   * OPTIMIZED: Uses git log --numstat for 100x performance improvement
-   */
-  async getAnalyticsCommitHistory(params: {
-    limit?: number;
-    since?: string;  // ISO date string
-    until?: string;  // ISO date string
-    author?: string;
-  }): Promise<{
-    hash: string;
-    author: string;
-    email: string;
-    date: string;
-    message: string;
-    branch: string;
-    filesChanged: number;
-    additions: number;
-    deletions: number;
-  }[]> {
+  // Everything the dashboard needs from one repository, from local data only. It never fetches:
+  // remote branch dates are as of the last fetch, and remote-tracking refs stay unchanged.
+  async getAnalyticsSnapshot(params: AnalyticsSnapshotParams): Promise<AnalyticsSnapshot> {
     await this.ensureGitRepo();
-    try {
-      // Build git log command with --numstat for file statistics in ONE command
-      const args = [
-        'log',
-        '--numstat',
-        '--pretty=format:COMMIT_START%n%H%n%an%n%ae%n%aI%n%s%n%D',
-        `--max-count=${params.limit || 100}`,
-      ];
+    const options = { readOnly: true, timeoutMs: ANALYTICS_TIMEOUT_MS };
+    const hasCommits = (await this.headOid()) !== null;
+    const [refs, stashes, dates, recent, last] = await Promise.all([
+      this.output(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(authordate:iso-strict)', 'refs/heads', 'refs/remotes', 'refs/tags'], options),
+      this.output(['stash', 'list', '--format=%H'], options),
+      hasCommits ? this.output(['log', '--format=%aI', `--since=${params.historySince}`], options) : '',
+      hasCommits ? this.output(['log', '--numstat', '--pretty=format:COMMIT_START%n%H%n%an%n%ae%n%aI%n%s%n%D', `--max-count=${params.recentLimit}`, `--since=${params.recentSince}`], options) : '',
+      hasCommits ? this.output(['log', '-1', '--format=%aI'], options) : '',
+    ]);
 
-      if (params.since) args.push(`--since=${params.since}`);
-      if (params.until) args.push(`--until=${params.until}`);
-      if (params.author) args.push(`--author=${params.author}`);
-
-      console.error('[Git Analytics] Running optimized git log --numstat command');
-      const startTime = Date.now();
-
-      // Execute single git command (instead of N separate diff commands!)
-      const output: string = await this.git.raw(args);
-
-      console.error(`[Git Analytics] Git command completed in ${Date.now() - startTime}ms`);
-
-      // Parse the output
-      const commits = this.parseGitLogNumstat(output);
-
-      console.error(`[Git Analytics] Parsed ${commits.length} commits`);
-      return commits;
-    } catch (error) {
-      throw new Error(`Failed to get analytics commit history: ${error}`);
+    const daysSince = (date: string): number => Math.floor((Date.now() - new Date(date).getTime()) / (1000 * 60 * 60 * 24));
+    const branches: BranchStaleness[] = [];
+    let tagCount = 0;
+    for (const line of refs.split('\n')) {
+      const [ref, oid, date] = line.split('\0');
+      if (!ref) continue;
+      if (ref.startsWith('refs/tags/')) {
+        tagCount++;
+        continue;
+      }
+      const isRemote = ref.startsWith('refs/remotes/');
+      const name = isRemote ? ref.slice('refs/remotes/'.length).replace(/^origin\//, '') : ref.slice('refs/heads/'.length);
+      if (name === 'HEAD' || name.endsWith('/HEAD')) continue;
+      branches.push({ name, daysSinceLastCommit: daysSince(date), isRemote, lastCommitHash: oid, lastCommitDate: date });
     }
+
+    return {
+      commitDates: dates.split('\n').filter(Boolean),
+      recentCommits: this.parseGitLogNumstat(recent),
+      branches,
+      daysSinceLastCommit: last.trim() ? daysSince(last.trim()) : null,
+      tagCount,
+      stashCount: stashes.split('\n').filter(Boolean).length,
+    };
   }
 
-  /**
-   * Parse git log --numstat output into commit objects
-   */
-  private parseGitLogNumstat(output: string): Array<{
-    hash: string;
-    author: string;
-    email: string;
-    date: string;
-    message: string;
-    branch: string;
-    filesChanged: number;
-    additions: number;
-    deletions: number;
-  }> {
-    const commits = [];
+  private parseGitLogNumstat(output: string): AnalyticsCommit[] {
+    const commits: AnalyticsCommit[] = [];
     const lines = output.split('\n');
 
     let i = 0;
@@ -1780,8 +1758,6 @@ export class GitOperations {
           i++;
         }
 
-        console.error(`[Git Analytics] Parsed commit ${hash.substring(0, 7)}: +${additions} -${deletions} (${filesChanged} files)`);
-
         commits.push({
           hash,
           author,
@@ -1800,165 +1776,30 @@ export class GitOperations {
 
     return commits;
   }
+}
 
-  /**
-   * Get branch staleness information
-   */
-  async getBranchStaleness(): Promise<{
-    name: string;
-    daysSinceLastCommit: number;
-    isRemote: boolean;
-    lastCommitHash: string;
-    lastCommitDate: string;
-  }[]> {
-    await this.ensureGitRepo();
-    try {
-      await this.git.fetch(['--all']);
-      const branches = await this.getBranches();
-      const staleness = [];
+// Snapshots for many repositories with bounded parallelism: each one costs a handful of git processes.
+export async function getAnalyticsSnapshots(repoPaths: string[], params: AnalyticsSnapshotParams): Promise<AnalyticsSnapshotResult[]> {
+  const isDate = (value: unknown): boolean => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  if (!Array.isArray(repoPaths)) throw new Error('Analytics repoPaths must be an array');
+  if (!isDate(params?.historySince) || !isDate(params?.recentSince)) throw new Error('Analytics dates must be YYYY-MM-DD');
+  if (!Number.isInteger(params.recentLimit) || params.recentLimit < 1 || params.recentLimit > 1000) throw new Error('Analytics recentLimit must be 1-1000');
 
-      for (const branch of branches) {
-        try {
-          // Get last commit on this branch
-          const branchRef = branch.isRemote ? `remotes/origin/${branch.name}` : branch.name;
-          const log = await this.git.log({ maxCount: 1, [branchRef]: null });
-
-          if (log.latest) {
-            const lastCommitDate = new Date(log.latest.date);
-            const now = new Date();
-            const daysSince = Math.floor((now.getTime() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
-
-            staleness.push({
-              name: branch.name,
-              daysSinceLastCommit: daysSince,
-              isRemote: branch.isRemote,
-              lastCommitHash: log.latest.hash,
-              lastCommitDate: log.latest.date,
-            });
-          }
-        } catch (error) {
-          // Skip branches that can't be analyzed
-          console.error(`Failed to analyze branch ${branch.name}:`, error);
-        }
+  const results: AnalyticsSnapshotResult[] = new Array(repoPaths.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < repoPaths.length) {
+      const index = next++;
+      const repoPath = repoPaths[index];
+      try {
+        results[index] = { repoPath, snapshot: await new GitOperations(repoPath).getAnalyticsSnapshot(params) };
+      } catch (error) {
+        results[index] = { repoPath, error: errorText(error) };
       }
-
-      return staleness;
-    } catch (error) {
-      throw new Error(`Failed to get branch staleness: ${error}`);
     }
-  }
-
-  /**
-   * Get commit counts grouped by date (for heatmap)
-   */
-  async getCommitCountsByDate(params: {
-    since: string;  // ISO date string
-    until?: string; // ISO date string
-    author?: string;
-  }): Promise<Record<string, number>> {
-    await this.ensureGitRepo();
-    try {
-      const args: any = {};
-
-      // Use git's --since and --until flags
-      if (params.since) args['--since'] = params.since;
-      if (params.until) args['--until'] = params.until;
-      if (params.author) args['--author'] = params.author;
-
-      const log: LogResult = await this.git.log(args);
-      const dateCounts: Record<string, number> = {};
-
-      for (const commit of log.all) {
-        // Extract YYYY-MM-DD from the commit date
-        const date = commit.date.split('T')[0] || commit.date.substring(0, 10);
-        dateCounts[date] = (dateCounts[date] || 0) + 1;
-      }
-
-      return dateCounts;
-    } catch (error) {
-      throw new Error(`Failed to get commit counts by date: ${error}`);
-    }
-  }
-
-  /**
-   * Get days since last commit
-   */
-  async getDaysSinceLastCommit(): Promise<number | null> {
-    await this.ensureGitRepo();
-    try {
-      const log = await this.git.log({ maxCount: 1 });
-
-      if (log.latest) {
-        const lastCommitDate = new Date(log.latest.date);
-        const now = new Date();
-        return Math.floor((now.getTime() - lastCommitDate.getTime()) / (1000 * 60 * 60 * 24));
-      }
-
-      return null; // No commits
-    } catch (error) {
-      throw new Error(`Failed to get days since last commit: ${error}`);
-    }
-  }
-
-  /**
-   * Get aggregate statistics for the repository
-   */
-  async getAggregateStats(): Promise<{
-    totalCommits: number;
-    totalBranches: number;
-    totalTags: number;
-    totalStashes: number;
-    contributors: number;
-  }> {
-    await this.ensureGitRepo();
-    try {
-      // Get total commits
-      const log = await this.git.log();
-      const totalCommits = log.total;
-
-      // Get unique contributors
-      const uniqueAuthors = new Set(log.all.map(c => c.author_email));
-      const contributors = uniqueAuthors.size;
-
-      // Get branches
-      const branches = await this.getBranches();
-      const totalBranches = branches.length;
-
-      // Get tags
-      const tags = await this.listTags();
-      const totalTags = tags.length;
-
-      // Get stashes
-      const stashes = await this.listStashes();
-      const totalStashes = stashes.length;
-
-      return {
-        totalCommits,
-        totalBranches,
-        totalTags,
-        totalStashes,
-        contributors,
-      };
-    } catch (error) {
-      throw new Error(`Failed to get aggregate stats: ${error}`);
-    }
-  }
-
-  /**
-   * Get commit count for a date range
-   */
-  async getCommitCountForDateRange(since: string, until?: string): Promise<number> {
-    await this.ensureGitRepo();
-    try {
-      const args: any = { '--since': since };
-      if (until) args['--until'] = until;
-
-      const log = await this.git.log(args);
-      return log.total;
-    } catch (error) {
-      return 0;
-    }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(ANALYTICS_PARALLEL_REPOS, repoPaths.length) }, worker));
+  return results;
 }
 
 // Standalone Git operations (not tied to a specific repository)

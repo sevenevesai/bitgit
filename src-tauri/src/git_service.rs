@@ -432,85 +432,27 @@ impl GitService {
         Ok(branch)
     }
 
-    // ==================== ANALYTICS FEATURES ====================
+    // ==================== ANALYTICS ====================
 
-    pub fn get_analytics_commit_history(
+    /// One round-trip for every repository; the service reads them in parallel.
+    pub fn get_analytics_snapshots(
         &self,
-        repo_path: &str,
-        limit: u32,
-        since: Option<String>,
-        until: Option<String>,
-        author: Option<String>,
-    ) -> Result<Vec<AnalyticsCommit>> {
+        repo_paths: &[&str],
+        history_since: &str,
+        recent_since: &str,
+        recent_limit: u32,
+    ) -> Result<Vec<AnalyticsSnapshotResult>> {
         let payload = serde_json::json!({
-            "repoPath": repo_path,
+            "repoPaths": repo_paths,
             "params": {
-                "limit": limit,
-                "since": since,
-                "until": until,
-                "author": author
+                "historySince": history_since,
+                "recentSince": recent_since,
+                "recentLimit": recent_limit
             }
         });
-        let result = self.execute("getAnalyticsCommitHistory", payload)?;
-        let commits: Vec<AnalyticsCommit> = serde_json::from_value(result)?;
-        Ok(commits)
-    }
-
-    pub fn get_branch_staleness(&self, repo_path: &str) -> Result<Vec<BranchStaleness>> {
-        let payload = serde_json::json!({ "repoPath": repo_path });
-        let result = self.execute("getBranchStaleness", payload)?;
-        let staleness: Vec<BranchStaleness> = serde_json::from_value(result)?;
-        Ok(staleness)
-    }
-
-    #[allow(dead_code)]
-    pub fn get_commit_counts_by_date(
-        &self,
-        repo_path: &str,
-        since: String,
-        until: Option<String>,
-        author: Option<String>,
-    ) -> Result<std::collections::HashMap<String, u32>> {
-        let payload = serde_json::json!({
-            "repoPath": repo_path,
-            "since": since,
-            "until": until,
-            "author": author
-        });
-        let result = self.execute("getCommitCountsByDate", payload)?;
-        let counts: std::collections::HashMap<String, u32> = serde_json::from_value(result)?;
-        Ok(counts)
-    }
-
-    pub fn get_days_since_last_commit(&self, repo_path: &str) -> Result<Option<i32>> {
-        let payload = serde_json::json!({ "repoPath": repo_path });
-        let result = self.execute("getDaysSinceLastCommit", payload)?;
-        let days: Option<i32> = serde_json::from_value(result)?;
-        Ok(days)
-    }
-
-    pub fn get_aggregate_stats(&self, repo_path: &str) -> Result<AggregateStats> {
-        let payload = serde_json::json!({ "repoPath": repo_path });
-        let result = self.execute("getAggregateStats", payload)?;
-        let stats: AggregateStats = serde_json::from_value(result)?;
-        Ok(stats)
-    }
-
-    #[allow(dead_code)]
-    pub fn get_commit_count_for_date_range(
-        &self,
-        repo_path: &str,
-        since: String,
-        until: Option<String>,
-    ) -> Result<u32> {
-        let payload = serde_json::json!({
-            "repoPath": repo_path,
-            "since": since,
-            "until": until
-        });
-        let result = self.execute("getCommitCountForDateRange", payload)?;
-        let count: u32 = serde_json::from_value(result)?;
-        Ok(count)
+        let result = self.execute("getAnalyticsSnapshots", payload)?;
+        let snapshots: Vec<AnalyticsSnapshotResult> = serde_json::from_value(result)?;
+        Ok(snapshots)
     }
 }
 
@@ -715,6 +657,26 @@ pub struct TagInfo {
 }
 
 // Analytics Types
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsSnapshot {
+    pub commit_dates: Vec<String>,
+    pub recent_commits: Vec<AnalyticsCommit>,
+    pub branches: Vec<BranchStaleness>,
+    pub days_since_last_commit: Option<i32>,
+    pub tag_count: u32,
+    pub stash_count: u32,
+}
+
+/// Exactly one of `snapshot` and `error` is set.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsSnapshotResult {
+    pub repo_path: String,
+    pub snapshot: Option<AnalyticsSnapshot>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsCommit {
@@ -739,15 +701,6 @@ pub struct BranchStaleness {
     pub last_commit_date: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AggregateStats {
-    pub total_commits: u32,
-    pub total_branches: u32,
-    pub total_tags: u32,
-    pub total_stashes: u32,
-    pub contributors: u32,
-}
 
 #[cfg(test)]
 mod tests {

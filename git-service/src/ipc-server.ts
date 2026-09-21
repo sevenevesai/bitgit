@@ -1,5 +1,5 @@
 import * as readline from 'readline';
-import { GitOperations, cloneRepository, initRepository, addRemote, pushToRemote } from './git-operations.js';
+import { GitOperations, cloneRepository, initRepository, addRemote, pushToRemote, getAnalyticsSnapshots } from './git-operations.js';
 import { GitHubAPI } from './github-api.js';
 import { RecoveryService } from './recovery-service.js';
 
@@ -324,47 +324,10 @@ export class IPCServer {
           return { id: command.id, success: true, data: branch };
         }
 
-        // Analytics Features
-        case 'getAnalyticsCommitHistory': {
-          const { repoPath, params } = command.payload;
-          const git = new GitOperations(repoPath);
-          const commits = await git.getAnalyticsCommitHistory(params);
-          return { id: command.id, success: true, data: commits };
-        }
-
-        case 'getBranchStaleness': {
-          const { repoPath } = command.payload;
-          const git = new GitOperations(repoPath);
-          const staleness = await git.getBranchStaleness();
-          return { id: command.id, success: true, data: staleness };
-        }
-
-        case 'getCommitCountsByDate': {
-          const { repoPath, since, until, author } = command.payload;
-          const git = new GitOperations(repoPath);
-          const counts = await git.getCommitCountsByDate({ since, until, author });
-          return { id: command.id, success: true, data: counts };
-        }
-
-        case 'getDaysSinceLastCommit': {
-          const { repoPath } = command.payload;
-          const git = new GitOperations(repoPath);
-          const days = await git.getDaysSinceLastCommit();
-          return { id: command.id, success: true, data: days };
-        }
-
-        case 'getAggregateStats': {
-          const { repoPath } = command.payload;
-          const git = new GitOperations(repoPath);
-          const stats = await git.getAggregateStats();
-          return { id: command.id, success: true, data: stats };
-        }
-
-        case 'getCommitCountForDateRange': {
-          const { repoPath, since, until } = command.payload;
-          const git = new GitOperations(repoPath);
-          const count = await git.getCommitCountForDateRange(since, until);
-          return { id: command.id, success: true, data: count };
+        case 'getAnalyticsSnapshots': {
+          const { repoPaths, params } = command.payload;
+          const snapshots = await getAnalyticsSnapshots(repoPaths, params);
+          return { id: command.id, success: true, data: snapshots };
         }
 
         default:
