@@ -167,6 +167,7 @@ function applyState(projectId: string, state: RecoveryState) {
     idleMinutes: state.settings.idleMinutes,
     settingsError: state.settingsError ?? null,
     repairPending: Boolean(state.pendingRepair || state.repairJournalError),
+    ...(!state.settingsError && !state.settings.automaticEnabled ? { error: null } : {}),
   });
   stateCheckedAt.set(projectId, Date.now());
   if (!state.settingsError && !state.pendingRepair && !state.repairJournalError) {
@@ -322,7 +323,7 @@ export function noteRecoveryState(projectId: string, state: RecoveryState) {
 // Settings were saved from the Automation tab.
 export function noteRecoverySettings(projectId: string, settings: RecoverySettings) {
   if (!statuses.has(projectId)) return;
-  update(projectId, { known: true, enabled: settings.automaticEnabled, idleMinutes: settings.idleMinutes, settingsError: null });
+  update(projectId, { known: true, enabled: settings.automaticEnabled, idleMinutes: settings.idleMinutes, settingsError: null, error: null });
   failures.delete(projectId);
   retryAt.delete(projectId);
 }

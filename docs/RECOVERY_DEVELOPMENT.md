@@ -54,6 +54,12 @@ can warn. The validation UI offers ignore suggestions, but ignoring a tracked fi
 it from published history. Service rules and exact selection semantics live in
 [GIT_OPERATIONS.md](GIT_OPERATIONS.md).
 
+`add_gitignore_patterns` resolves the saved project ID and changes only its root `.gitignore`
+through `src-tauri/src/gitignore.rs`; the frontend has no general filesystem write permission.
+The helper preserves existing bytes, refuses unreadable/link/nonfile targets, reserves an exclusive
+lock, checks for intervening edits and atomically replaces the file. A missing file is created
+exclusively. Do not turn a read error into an empty file or widen the Tauri filesystem allowlist.
+
 The user chose the secure token setup for this release. Browser sign-in is deferred until a GitHub
 OAuth application is registered; no client ID or credentials should be invented or committed.
 

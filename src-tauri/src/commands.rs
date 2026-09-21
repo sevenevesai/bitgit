@@ -971,6 +971,14 @@ fn keep_cargo_lock_tracked(template_id: &str, gitignore: &str) -> String {
         .collect()
 }
 
+/// Append reviewed ignore patterns to the saved project's root file.
+#[tauri::command]
+pub fn add_gitignore_patterns(project_id: String, patterns: Vec<String>) -> Result<usize, String> {
+    let project = find_project(&project_id)?;
+    let local_path = project.local_path.as_deref().ok_or("Project has no local path")?;
+    crate::gitignore::append_patterns(std::path::Path::new(local_path), &patterns)
+}
+
 /// Apply a template to a project (write .gitignore and other files)
 #[tauri::command]
 pub async fn apply_project_template(

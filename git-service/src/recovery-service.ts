@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { assertNoLinks, atomicJson, exists, gitRun, safeRelative, sha256, within, withVaultLock } from './recovery-io.js';
+import { assertNoLinks, atomicJson, atomicWrite, exists, gitRun, safeRelative, sha256, within, withVaultLock } from './recovery-io.js';
 import { captureSource, fingerprint, selectCapture, type CapturedSource, type SnapshotFile } from './recovery-capture.js';
 import { COVERAGE_LIMITS, exclusionReason, MAX_CAPTURE_BYTES, MAX_CAPTURE_FILES, MAX_FILE_BYTES } from './recovery-policy.js';
 import { pendingRepair, repairFiles, rollbackRepair } from './recovery-repair.js';
@@ -10,7 +10,7 @@ import { backupCheckpoint, importRemoteCheckpoint, listRemoteCheckpoints, verify
 import { autoTick, readRecoverySettings, updateRecoverySettings } from './recovery-automation.js';
 import { recordEvidence, runCheckpointCheck, readEvidenceImage } from './recovery-evidence.js';
 import { getRegression, observeRegression, startRegression } from './recovery-regression.js';
-import { readCheckpointMetadata } from './recovery-metadata.js';
+import { readCheckpointMetadata, serializeCheckpointMetadata } from './recovery-metadata.js';
 import type { Checkpoint, CheckpointPreview, RecoveryComparison, RecoveryReceipt, RecoveryRequest, RecoveryResults, RecoverySettings, RecoveryState } from './recovery-types.js';
 
 export const DEFAULT_RECOVERY_SETTINGS: RecoverySettings = { automaticEnabled: false, idleMinutes: 5, retention: 'keep_all' };
@@ -71,7 +71,7 @@ export class RecoveryService {
   async updateMetadata(id: string, update: Partial<Pick<Checkpoint, 'backup' | 'evidence' | 'recoveredAt'>>): Promise<void> {
     const file = this.metadataPath(id);
     const previous = await this.readMetadata(id);
-    await atomicJson(file, { ...previous, ...update });
+    await atomicWrite(file, serializeCheckpointMetadata({ ...previous, ...update }, id));
   }
   async readMetadata(id: string) { return readCheckpointMetadata(this.metadataPath(id), id); }
   async capture(): Promise<CapturedSource> { return captureSource(this.repoPath, this.gitDir); }

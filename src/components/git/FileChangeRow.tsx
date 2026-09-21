@@ -46,9 +46,10 @@ export function FileChangeRow({ repoPath, change, checked, disabled, onToggle, o
   const blockedReason = unselectableReason(change);
   const partlyStaged = Boolean(change.staged && change.unstaged);
   const current = previews[scope];
+  const previewError = Object.values(previews).find(preview => preview.error)?.error ?? null;
 
   const loadPreview = async (target: PreviewScope) => {
-    setPreviews((prev) => ({ ...prev, [target]: { loading: true, error: null, diffs: null } }));
+    setPreviews((prev) => ({ ...prev, [target]: { loading: true, error: prev[target]?.error ?? null, diffs: null } }));
     try {
       const diffs = await invoke<DiffInfo[]>('git_get_diff', {
         repoPath,
@@ -67,9 +68,9 @@ export function FileChangeRow({ repoPath, change, checked, disabled, onToggle, o
   }, [open, scope]);
 
   useEffect(() => {
-    onPreviewError(change.path, open ? current?.error ?? null : null);
+    onPreviewError(change.path, previewError);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, current?.error]);
+  }, [previewError]);
 
   useEffect(() => () => onPreviewError(change.path, null), [change.path]); // eslint-disable-line react-hooks/exhaustive-deps
 

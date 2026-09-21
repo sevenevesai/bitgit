@@ -269,9 +269,14 @@ export async function runCheckpointCheck(service: RecoveryService, request: Extr
   if (changes.length) notes.push(`The command altered the recovered copy (${listChanges(changes)})${failed ? '.' : ', so the run is recorded as untested.'}`);
   if (verificationError) notes.push(`The recovered copy could not be verified after the command (${verificationError})${failed ? '.' : ', so the run is recorded as untested.'}`);
   if (output.truncated) notes.push('Only the last 32 KiB of output is kept.');
+  const redactedCommand = redact(command, service);
+  const commandTruncated = redactedCommand.length > MAX_COMMAND;
+  const commandMarker = ' [truncated]';
+  const recordedCommand = commandTruncated ? redactedCommand.slice(0, MAX_COMMAND - commandMarker.length) + commandMarker : redactedCommand;
+  if (commandTruncated) notes.push('The recorded command was shortened after credential redaction; the full command you confirmed was executed.');
 
   const entry: CheckpointEvidence = { id: randomUUID(), recordedAt: service.now(), kind: 'command', description: redact(notes.join(' '), service).slice(0, MAX_DESCRIPTION),
-    outcome, checkpointId: checkpoint.id, command: redact(command, service), exitCode: result.timedOut ? null : result.exitCode, output: output.text, workingCopyPath: workingCopy };
+    outcome, checkpointId: checkpoint.id, command: recordedCommand, exitCode: result.timedOut ? null : result.exitCode, output: output.text, workingCopyPath: workingCopy };
   await appendEvidence(service, checkpoint.id, entry);
   return entry;
 }

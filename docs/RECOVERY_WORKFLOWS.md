@@ -74,9 +74,9 @@ it was changing and its safety copy, with **Open safety copy** and **Undo the in
 Undo is always a click plus a confirmation; opening or refreshing never rewrites files. If you edited an
 affected file since, the undo stops with the engine's message, the banner stays, and you keep your edits
 and recover the safety copy into a separate folder. Meanwhile saving, repairing and automatic saves are
-paused; comparing, recovering copies, notes, checks and remote restore still work. If the engine cannot
-read its repair record, it refuses to list history and shows its own message (from reading the engine
-code; not exercised).
+paused; comparing, recovering copies, notes, checks and remote restore still work. An unreadable repair
+record shows a warning and pauses writes to the project. History and recovery into a new folder remain
+available; the damaged record is preserved.
 
 ## Remote backup status
 

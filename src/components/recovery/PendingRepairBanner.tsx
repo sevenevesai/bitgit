@@ -32,10 +32,12 @@ export function PendingRepairBanner({ pending, checkpoints, onOpenCheckpoint, on
       const receipt = await call('Undoing the interrupted repair…', { action: 'repairRollback' }, { mutating: true });
       setConfirming(false);
       onRolledBack(receipt);
-      await onChanged();
     } catch (undoError) {
       setError(errorMessage(undoError));
     } finally {
+      try { await onChanged(); } catch (refreshError) {
+        setError(previous => [previous, `Could not refresh repair status: ${errorMessage(refreshError)}`].filter(Boolean).join('\n'));
+      }
       setWorking(false);
     }
   };
@@ -95,7 +97,7 @@ export function PendingRepairBanner({ pending, checkpoints, onOpenCheckpoint, on
           }
         >
           {error}
-          {'\nThe repair is still marked as interrupted. If the message mentions newer edits, keep those files as they are and use Recover copy on the safety copy to write its files into a separate folder; nothing in your project is overwritten that way.'}
+          {'\nIf the message mentions newer edits, keep those files as they are and use Recover copy on the safety copy to write its files into a separate folder; nothing in your project is overwritten that way.'}
         </Notice>
       )}
     </div>

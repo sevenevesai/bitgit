@@ -131,6 +131,9 @@ returns `warnings` if its receipt cannot be saved; it must not be reported as a 
 Unreadable repair journals set `RecoveryState.repairJournalError`; create, repair, rollback and
 automatic ticks stay blocked. Never infer journal contents or overwrite damaged originals.
 Metadata replacement syncs its temporary file before rename; this is not a power-loss guarantee.
+Receipt writes use the reader's schema and 20 MiB serialized-byte limit before replacement, so
+redaction expansion and JSON escaping cannot invalidate previously readable metadata. Commands
+lengthened by redaction are bounded with an explicit truncation marker in their evidence record.
 
 An empty ownership lock or orphaned `.reclaim` guard requires manual recovery: close BitGit and
 stop all harness calls using that vault, confirm no process still owns it, then preserve a copy of

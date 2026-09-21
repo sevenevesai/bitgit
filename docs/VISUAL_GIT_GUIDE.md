@@ -86,7 +86,7 @@ on GitHub and on this computer. Errors and conflicts are shown as the service re
 - Whole files only; no line or hunk selection.
 - A branch that is behind and dirty, or diverged, cannot be resolved inside BitGit yet.
 - Secret screening is heuristic (see GIT_OPERATIONS.md).
-- Branch retention after a merge is a service change that lands separately. The UI never offers
+- Merged branches are retained locally and remotely. The UI never offers
   deletion and shows any `deleted` list the service returns rather than hiding it.
 - The freshness threshold is `STATUS_STALE_MS` in `src/components/git/gitStatusView.ts`.
 

@@ -35,8 +35,12 @@ Independent review confirmed all foundation findings resolved. N3 ownership-lock
 remains a documented manual procedure. Parent native smoke found a validation field-name mismatch;
 `658f524` fixes it with a boundary regression test and a successful actual selected-file publish.
 Parent gates: 137 service tests, 85 native tests plus the new boundary test, UI/service builds and
-cargo check pass. VERIFY-RELEASE is reviewing the final UI and fixes independently; no main landing
-until its findings and final gates are resolved. Historical reports identify their frozen snapshots.
+cargo check pass. VERIFY-RELEASE returned six findings in `RECOVERY_RELEASE_REVIEW.md`. Parent fixes
+cover scoped native ignore writes, stale automation/undo state, bounded receipt writes, persistent
+failed-preview blocking and two stale guide claims. Native ignore failure was reproduced; its fixed
+workflow and the independent follow-up remain pending. New gates include 92 passing Rust tests and
+five metadata tests; final full service run is pending. No main landing until final verification.
+Historical reports identify their frozen snapshots.
 
 Native smoke root: `%TEMP%/bitgit-native-smoke-20260921-01`; app-data override isolates cache,
 vault and credentials. Own Vite/CDP ports 5177/9227. Earlier binary passed source-loss and fresh-vault
@@ -52,9 +56,8 @@ No real GitHub credentials or network publishing have been tested or authorized.
 |---|---|---|
 | VERIFY-RELEASE | faaa1aeb-5a1d-42b2-a3e7-ed86119db1ca | S:/BitGit-wt-final-review; independent final review, report only |
 
-All implementation workers are integrated. GIT, EXTENSIONS, RECOVERY-UI and NATIVE are closed;
-UI workers can close after their final integration evidence is recorded. Maps and earlier verifiers
-are closed; their reports and costs remain in Git and Lloom history.
+All implementation workers, maps and earlier verifiers are integrated and closed; their reports
+and costs remain in Git and Lloom history. Only VERIFY-RELEASE remains for the final follow-up.
 Parent session: `aad26266-17c8-4043-a9eb-8fb1b6c45240`; Codex usage attribution is unavailable.
 
 Parent owns strategy, plan/design, shared contracts, novel safety mechanisms, integration and landing.

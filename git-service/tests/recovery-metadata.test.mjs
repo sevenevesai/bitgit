@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { RecoveryService } from '../dist/recovery-service.js';
 
 async function fixture(t) {
@@ -73,4 +74,36 @@ test('damaged repair journal pauses writes while leaving history and new-copy re
     assert.equal(await fs.readFile(journal, 'utf8'), bytes);
   }
   assert.equal(await fs.readFile(path.join(source, 'app.txt'), 'utf8'), 'saved bytes\r\n');
+});
+
+test('redaction expansion cannot invalidate a check receipt', async t => {
+  const { service, saved } = await fixture(t);
+  const command = `echo ${'://a:b@ '.repeat(496)}`;
+  assert.ok(command.length < 4000);
+  const entry = await service.dispatch({ action: 'runCheck', checkpointId: saved.id, command });
+  t.after(async () => {
+    const holder = path.dirname(entry.workingCopyPath);
+    assert.ok(holder.startsWith(path.resolve(os.tmpdir()) + path.sep + 'bitgit-check-'));
+    await fs.rm(holder, { recursive: true, force: true });
+  });
+  assert.equal(entry.command.length, 4000);
+  assert.match(entry.command, /\[truncated\]$/);
+  assert.match(entry.description, /shortened after credential redaction/);
+  assert.ok(!entry.command.includes('a:b@'));
+  const note = await service.dispatch({ action: 'evidence', checkpointId: saved.id, description: 'Receipt remains usable', outcome: 'untested' });
+  const checkpoint = (await service.dispatch({ action: 'state' })).checkpoints[0];
+  assert.equal(checkpoint.metadataError, undefined);
+  assert.ok(checkpoint.evidence.some(item => item.id === note.id));
+});
+
+test('oversized serialized evidence is refused without changing the existing receipt', async t => {
+  const { service, saved } = await fixture(t);
+  const entry = await service.dispatch({ action: 'evidence', checkpointId: saved.id, description: 'Keep this observation', outcome: 'passed' });
+  const before = await fs.readFile(service.metadataPath(saved.id));
+  const evidence = Array.from({ length: 125 }, () => ({ ...entry, id: randomUUID(), output: '\u0000'.repeat(32768) }));
+  await assert.rejects(service.updateMetadata(saved.id, { evidence }), /exceed 20 MiB/);
+  assert.deepEqual(await fs.readFile(service.metadataPath(saved.id)), before);
+  const checkpoint = (await service.dispatch({ action: 'state' })).checkpoints[0];
+  assert.equal(checkpoint.metadataError, undefined);
+  assert.deepEqual(checkpoint.evidence, [entry]);
 });

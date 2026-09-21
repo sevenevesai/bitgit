@@ -6,6 +6,7 @@ mod app_settings;
 mod commands;
 mod credentials;
 mod git_service;
+mod gitignore;
 mod models;
 mod project_cache;
 mod project_sync;
@@ -43,6 +44,7 @@ fn main() {
             clone_repository,
             create_github_repository,
             validate_before_sync,
+            add_gitignore_patterns,
             sync_project,
             // Recovery
             recovery_command,

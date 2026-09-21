@@ -967,7 +967,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
           onProceed={handleProceedWithWarnings}
           onGitignoreUpdated={handleGitignoreUpdated}
           validation={pending.validation}
-          projectPath={project.localPath || ''}
+          projectId={project.id}
           isBusy={isCommitting}
         />
       )}

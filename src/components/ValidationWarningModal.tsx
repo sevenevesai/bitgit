@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
+import { invoke } from '@tauri-apps/api/tauri';
 import {
   X,
   AlertTriangle,
@@ -21,7 +22,7 @@ interface ValidationWarningModalProps {
   // Called after .gitignore was changed so the caller can re-read the files and validate again.
   onGitignoreUpdated: () => void;
   validation: PreSyncValidation;
-  projectPath: string;
+  projectId: string;
   isBusy?: boolean;
 }
 
@@ -69,7 +70,7 @@ export function ValidationWarningModal({
   onProceed,
   onGitignoreUpdated,
   validation,
-  projectPath,
+  projectId,
   isBusy = false,
 }: ValidationWarningModalProps) {
   const [isAddingToGitignore, setIsAddingToGitignore] = useState(false);
@@ -92,39 +93,13 @@ export function ValidationWarningModal({
 
     setIsAddingToGitignore(true);
     try {
-      const gitignorePath = `${projectPath}\\.gitignore`;
-      let existingContent = '';
-
-      try {
-        const { readTextFile } = await import('@tauri-apps/api/fs');
-        existingContent = await readTextFile(gitignorePath);
-      } catch {
-        // No .gitignore yet: it is created below.
-      }
-
-      const existingLines = new Set(
-        existingContent.split('\n').map((l) => l.trim()).filter(Boolean)
-      );
-      const newPatterns = validation.suggestedGitignore.filter(
-        (p) => !existingLines.has(p)
-      );
-
-      if (newPatterns.length === 0) {
+      const added = await invoke<number>('add_gitignore_patterns', { projectId, patterns: validation.suggestedGitignore });
+      if (added === 0) {
         toast('These patterns are already in .gitignore. Files Git already tracks are not affected by it.');
         return;
       }
 
-      const newContent =
-        existingContent.trim() +
-        (existingContent.trim() ? '\n\n' : '') +
-        '# Added by BitGit\n' +
-        newPatterns.join('\n') +
-        '\n';
-
-      const { writeTextFile } = await import('@tauri-apps/api/fs');
-      await writeTextFile(gitignorePath, newContent);
-
-      toast.success(`Added ${newPatterns.length} pattern(s) to .gitignore. Checking your files again.`);
+      toast.success(`Added ${added} pattern(s) to .gitignore. Checking your files again.`);
       onGitignoreUpdated();
     } catch (error: any) {
       toast.error(`Failed to update .gitignore: ${error}`);
