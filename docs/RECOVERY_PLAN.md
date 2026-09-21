@@ -61,6 +61,8 @@ Parent is implementing the first recovery slice. Managed worker roster:
 | GIT | Sonnet | 7f798e4c-8449-4586-a090-82292648ebc7 | feat/recovery-git-reliability / S:/BitGit-wt-git |
 | NATIVE | Sonnet | 3ab76b41-0479-41a4-80b8-62eaae33cb11 | feat/recovery-native / S:/BitGit-wt-native |
 | RECOVERY-UI | Sonnet | 432d6bb9-795d-4462-a711-f33dce18fa92 | feat/recovery-workspace / S:/BitGit-wt-recovery-ui |
+| MAP-EXTENSIONS (complete) | Haiku | 07a972ca-9e56-4eca-818c-df6bdc8a5dad | chore/recovery-map-extensions / S:/BitGit-map-extensions |
+| EXTENSIONS | Sonnet | 4ed8d08a-669e-4f8d-92ca-753caac9275f | feat/recovery-extensions / S:/BitGit-wt-extensions |
 
 Parent Lloom session:
 `aad26266-17c8-4043-a9eb-8fb1b6c45240`; live Codex usage attribution unavailable at kickoff.
@@ -68,9 +70,9 @@ Parent Lloom session:
 ## Gates and pickup notes
 
 Service recovery gates pass 19 tests; integrated native runtime remains unverified.
-Native candidate `48ad95f` needs integration review: separate GitHub listing from import; route its
-cache and recovery vault through the new app-data helper; extend validation for `repairRollback`
-and automatic exclusions. Parent fixed the old credential test to assert invalid-token rejection.
+Native candidate rebased as `c728c88`; parent patches in its worktree separate listing from import,
+route cache/vault through the app-data helper and extend the request validator. Review and landing
+remain. Parent baseline native tests pass 7/7 after correcting invalid-token expectations.
 Service tests will use Node's built-in runner with disposable repos and isolated Git configuration.
 Existing defects are documented with reproductions in `PRODUCT_REVIEW_FINDINGS.md`.
 Browser-assisted GitHub authorization requires an application client ID; use existing secure token
