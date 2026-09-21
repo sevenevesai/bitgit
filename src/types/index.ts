@@ -16,7 +16,7 @@ export interface Project {
   // Overall project state
   projectStatus: ProjectStatus;
 
-  // Git status (only when both GitHub and Local are linked)
+  // Git status of the local folder; null until the first check
   gitStatus: GitStatus | null;
 
   // Timestamps
@@ -43,7 +43,7 @@ export type ProjectStatus =
   | 'needs_merge'        // Both linked, has remote branches
   | 'needs_sync';        // Both linked, has both issues
 
-// Git status for fully configured projects
+// Git status of a project's local folder (mirrors the native GitStatus)
 export interface GitStatus {
   isGitRepo: boolean;
   hasRemote: boolean;
@@ -52,13 +52,26 @@ export interface GitStatus {
   uncommittedFiles: number;
   untrackedFiles: number;
   modifiedFiles: string[];
+  currentBranch?: string | null;   // null when detached or not a repository
+  upstream?: string | null;        // e.g. "origin/main"; null when none is configured
 
   // Remote state
-  unpushedCommits: number;
+  unpushedCommits: number;         // ahead of the upstream
+  behindCommits?: number;          // upstream commits missing locally
   remoteBranches: string[];
+  remoteCheckedAt?: string | null; // last successful read of the remote; never set by a failed check
+  remoteError?: string | null;     // why the remote could not be read, or the whole check failed
 
-  // Sync state
-  syncStatus: 'synced' | 'local_changes' | 'remote_branches' | 'both' | 'not_connected';
+  // Sync state; `unavailable` means nothing can be claimed about the remote
+  syncStatus:
+    | 'synced'
+    | 'local_changes'
+    | 'remote_branches'
+    | 'both'
+    | 'not_connected'
+    | 'behind'
+    | 'diverged'
+    | 'unavailable';
   lastChecked: string;
 }
 
@@ -81,11 +94,16 @@ export interface OperationLog {
   details?: string;
 }
 
+// Omitting `selectedFiles` pushes existing commits only; it never means "stage everything".
+// `allowWarnings` lets one attempt publish despite reviewed warnings; blocking issues stay blocked.
+export type PublishAction =
+  | { type: 'push_local'; commitMessage?: string; commitDescription?: string; selectedFiles?: string[]; allowWarnings?: boolean }
+  | { type: 'full_sync'; commitMessage?: string; commitDescription?: string; selectedFiles?: string[]; allowWarnings?: boolean };
+
 export type SyncAction =
-  | { type: 'push_local'; commitMessage?: string; commitDescription?: string }
+  | PublishAction
   | { type: 'merge_branches'; branches: string[] }
-  | { type: 'pull_branches'; branches: string[] }
-  | { type: 'full_sync'; commitMessage?: string; commitDescription?: string };
+  | { type: 'pull_branches'; branches: string[] };
 
 export interface SyncResult {
   success: boolean;
@@ -93,11 +111,37 @@ export interface SyncResult {
   details: {
     committed?: number;
     pushed?: number;
+    pulled?: number;
     merged?: string[];
     deleted?: string[];
     errors?: string[];
   };
   newStatus?: RepositoryStatus;
+}
+
+// Result of re-reading one project's local Git state. `unavailable` means the project was
+// checked but the answer is incomplete, so it must not be presented as up to date.
+export type RefreshOutcome =
+  | { status: 'ok'; project: Project }
+  | { status: 'unavailable'; project: Project; cause: 'not_git' | 'remote'; reason: string }
+  | { status: 'skipped'; reason: string }
+  | { status: 'failed'; error: string };
+
+export interface RefreshSummary {
+  checked: number;
+  ok: number;
+  unavailable: number;
+  failed: number;
+  skipped: number;
+}
+
+export type BulkOutcome = 'published' | 'up_to_date' | 'needs_review' | 'blocked' | 'failed' | 'skipped';
+
+export interface BulkProjectResult {
+  projectId: string;
+  name: string;
+  outcome: BulkOutcome;
+  message: string;
 }
 
 export interface AppSettings {
@@ -157,6 +201,9 @@ export interface CommitInfo {
   refs: string;
 }
 
+// staged = HEAD to index, unstaged = index to working tree, untracked = whole new file.
+export type DiffScope = 'staged' | 'unstaged' | 'untracked';
+
 export interface DiffInfo {
   fileName: string;
   changes: Array<{
@@ -164,6 +211,44 @@ export interface DiffInfo {
     type: 'add' | 'remove' | 'context';
     content: string;
   }>;
+  scope?: DiffScope;
+  binary?: boolean;     // changes is empty because the content is not text
+  truncated?: boolean;  // changes was cut at the preview limit
+}
+
+export type FileChangeKind = 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'typechange' | 'conflicted';
+
+// One pending path. A path can be staged and unstaged at once (partially staged);
+// an untracked file has neither.
+export interface FileChangeInfo {
+  path: string;
+  staged: FileChangeKind | null;
+  unstaged: FileChangeKind | null;
+  untracked: boolean;
+  conflicted: boolean;
+}
+
+export type ValidationSeverity = 'error' | 'warning' | 'info';
+
+export interface FileValidationIssue {
+  filePath: string;
+  severity: ValidationSeverity;
+  reason: string;
+  sizeBytes?: number;
+  sizeMb?: number;
+  suggestion?: string;
+  gitignorePattern?: string;
+}
+
+// `canProceed` is false when anything blocking was found; `hasWarnings` means the
+// caller must pass `allowWarnings` for a publish to go through.
+export interface PreSyncValidation {
+  canProceed: boolean;
+  hasWarnings: boolean;
+  totalStagedSize: number;
+  totalStagedSizeMb: number;
+  issues: FileValidationIssue[];
+  suggestedGitignore: string[];
 }
 
 export interface StashInfo {
