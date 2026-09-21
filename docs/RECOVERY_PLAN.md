@@ -20,39 +20,41 @@ Checked items below mean implemented and parent-verified in that candidate, not 
 - [x] Native recovery IPC, persistent imports, honest status/results and damaged-cache preservation.
 - [x] Base recovery UI; actual native save/compare/selected repair/recover/remote-import flow exercised.
 - [x] Automatic idle/deduplicated saves, evidence/checks, regression state and JSON harness CLI backend.
-- [ ] Complete and verify automatic-save, evidence/check and regression UI workflows.
-- [ ] Complete and verify visual Git selection/diffs/status, explicit branches and bulk outcomes.
-- [ ] Fresh independent review of resolved foundation findings and the complete backend/extensions.
+- [x] Complete and verify automatic-save, evidence/check and regression UI workflows.
+- [x] Complete and verify visual Git selection/diffs/status, explicit branches and bulk outcomes.
+- [x] Fresh independent review of resolved foundation findings and the complete backend/extensions.
 - [ ] Resolve findings and run final service/UI/native gates on the integrated tree.
-- [ ] Restart and drive the latest native app with isolated data, including extension workflows.
+- [x] Restart and drive the latest native app with isolated data, including extension workflows.
 - [ ] Update user/developer docs, record verification limits, land and re-verify main.
 - [ ] Close remaining workers and report shipped commits and available orchestration costs.
 
 ## Current evidence and pickup
 
-Candidate `624a1fb` includes fixes for foundation review H1/H2/M1/M2/M3/M4/L1; the fresh verifier
-must confirm them. Parent also closed a tag-ref race, made cache replacement atomic on Windows,
-and added Windows Job Object supervision for exact-version checks.
-Parent gates: 131 service tests pass before the last tag-race test; that regression passes separately.
-Native 85 tests and cargo check pass. Final expected service count is 132. Frontend extension
-workers are still running. Findings source: `RECOVERY_FOUNDATION_REVIEW.md` (frozen earlier tree).
+Candidate `cb87ea9` includes both final UI branches and fixes for complete-review N1/N2/N4/N5.
+Independent review confirmed all foundation findings resolved. N3 ownership-lock crash recovery
+remains a documented manual procedure. Parent native smoke found a validation field-name mismatch;
+`658f524` fixes it with a boundary regression test and a successful actual selected-file publish.
+Parent gates: 137 service tests, 85 native tests plus the new boundary test, UI/service builds and
+cargo check pass. VERIFY-RELEASE is reviewing the final UI and fixes independently; no main landing
+until its findings and final gates are resolved. Historical reports identify their frozen snapshots.
 
 Native smoke root: `%TEMP%/bitgit-native-smoke-20260921-01`; app-data override isolates cache,
 vault and credentials. Own Vite/CDP ports 5177/9227. Earlier binary passed source-loss and fresh-vault
-remote recovery using a disposable bare remote; it must be rebuilt/restarted for current changes.
+remote recovery using a disposable bare remote. Latest native journeys also proved real idle saves,
+screenshot attachment/display, explicit check failure, persisted Good/Bad/Skip search, interrupted
+repair undo, preserved staging on publish, persistent failed backup checks, and recovered code with
+damaged receipts/journals. Evidence and limits are in `RECOVERY_VERIFICATION.md`.
 No real GitHub credentials or network publishing have been tested or authorized.
 
 ## Active work and ownership
 
 | Worker | Session | Worktree / owned area |
 |---|---|---|
-| UI-EXTENSIONS | 31849348-eba3-439f-85ba-422228cab47d | S:/BitGit-wt-ui-extensions; recovery UI/lib and App observer |
-| UI-GIT | a2f8d279-c2d0-4c4b-a068-e487642314ce | S:/BitGit-wt-ui-git; Git components, store and frontend Git types |
-| MAP-FINAL-REVIEW | 0591d74c-5ecb-490d-af81-2f17e9397201 | S:/BitGit-map-final-review; read-only verifier map |
+| VERIFY-RELEASE | faaa1aeb-5a1d-42b2-a3e7-ed86119db1ca | S:/BitGit-wt-final-review; independent final review, report only |
 
-GIT and EXTENSIONS implementations are integrated; retain their sessions until verification is
-recorded. RECOVERY-UI and NATIVE workers are closed after parent gates and integration. Earlier
-maps and the foundation verifier are closed; their outcomes and costs remain in Lloom history.
+All implementation workers are integrated. GIT, EXTENSIONS, RECOVERY-UI and NATIVE are closed;
+UI workers can close after their final integration evidence is recorded. Maps and earlier verifiers
+are closed; their reports and costs remain in Git and Lloom history.
 Parent session: `aad26266-17c8-4043-a9eb-8fb1b6c45240`; Codex usage attribution is unavailable.
 
 Parent owns strategy, plan/design, shared contracts, novel safety mechanisms, integration and landing.

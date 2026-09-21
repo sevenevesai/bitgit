@@ -100,7 +100,7 @@ export function SaveCheckpoint({ state, projectPath, onSaved, onOpenCheckpoint }
 
       {repairPending && (
         <Notice tone="warning" title="Saving is paused">
-          A file repair was interrupted. Undo it using the banner at the top, then you can save again. You can still look at history, compare and recover copies.
+          An interrupted repair needs attention. Follow the banner above; if its journal is unreadable, recover a copy from History. You can still compare and recover saved versions.
         </Notice>
       )}
 

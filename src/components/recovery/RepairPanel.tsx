@@ -94,7 +94,7 @@ export function RepairPanel({ checkpoint, comparison, comparedAt, selected, onRe
 
       {repairPending && (
         <Notice tone="warning" title="Repairing is paused">
-          An earlier repair was interrupted. Undo it using the banner at the top before repairing more files.
+          An earlier repair needs attention. Follow the banner above. If its journal is unreadable, recover a safety copy from History into a separate folder.
         </Notice>
       )}
 

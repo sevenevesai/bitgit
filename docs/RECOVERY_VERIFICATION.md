@@ -1,16 +1,19 @@
 # Recovery verification
 
-This is the implementation evidence record for the recovery roadmap. Final landing remains
-pending the complete review and both UI integration gates; see [the plan](RECOVERY_PLAN.md).
+Implementation evidence for the recovery roadmap. Final landing remains pending the release
+review and its follow-up; see [the plan](RECOVERY_PLAN.md).
 
 ## Parent checks observed
 
-- Service: 131 tests passed on the integrated tree before the last tag-race regression. That added
-  regression was observed failing before the fix and passing after it; final suite count is 132.
-- Native: 85 tests and `cargo check` passed after damaged-cache preservation and direct replacement.
-- Earlier UI build passed. Extension and visual-Git UI builds and native journeys are pending.
-- The independent foundation review found H1/H2/M1/M2/M3/M4/L1. Corrections are in the candidate;
-  [the original report](RECOVERY_FOUNDATION_REVIEW.md) refers to its frozen earlier snapshot.
+- Service: 137 tests passed on `cb87ea9`, including remote re-export and damaged metadata recovery.
+- Native: 85 tests and `cargo check` passed on that tree; the additional native validation field-name
+  regression passed on `658f524`. Final native suite count is 86.
+- UI and service builds pass after integration. Worker browser evidence: 119 visual-Git assertions
+  with recorded native-command stand-ins; 169 recovery assertions forwarding to the real engine.
+  Those are browser harness results, separate from the actual desktop evidence below.
+- Independent complete review confirmed foundation H1/H2/M1/M2/M3/M4/L1 resolved. Its N1/N2/N4/N5
+  corrections are in `cb87ea9`; N3 is a documented lock-recovery limit. Reports name frozen snapshots:
+  [foundation](RECOVERY_FOUNDATION_REVIEW.md), [complete](RECOVERY_COMPLETE_REVIEW.md).
 
 All repositories/remotes used for testing were disposable. Tests did not publish to GitHub or use
 real credentials. Service tests use Node's built-in runner; Windows shell globs must be expanded
@@ -36,7 +39,36 @@ ran explicit checks in recovered copies. The good version passed; the broken ver
 exit code 3 and failed. Source files and their lack of `.git` were preserved.
 An actual one-minute idle observation saved an automatic checkpoint, the next tick deduplicated,
 and a separate JSON CLI process returned the same six checkpoint IDs as native IPC using the
-isolated vault root. These last checks establish the backend/native boundary, not the extension UI.
+isolated vault root. Those initial checks establish the backend/native boundary.
+
+The integrated desktop UI then exercised the remaining journeys with actual Tauri IPC:
+
+- Settings off/on persisted; the app observer produced exactly one automatic checkpoint after a
+  real idle minute while another project's workspace was open. An absent exclusion was retained.
+- Native screenshot picker attached a PNG; its copied evidence displayed through `evidenceImage`.
+  An explicitly confirmed `node check.js` ran on the selected version, failed with exit 3, and left
+  current source unchanged. Close was disabled during the check.
+- Good/Bad/Skip observations survived a full WebView reload. The completed search named the last
+  good and first observed bad versions and displayed the skipped version as an uncertain boundary.
+- A fault-injected interrupted repair refused undo over a newer edit without changing either file.
+  After restoring that disposable conflict to its pre-repair bytes, confirmed undo restored both
+  files and cleared the journal. Source-loss recovery had already passed the base journey.
+- A failed remote re-check remained unconfirmed after close/reopen, with the original source absent.
+- With both a truncated receipt and repair journal, the desktop still listed history and warned
+  about unreadable records. The native picker and Recover copy produced the two expected files;
+  the UI reported the unsaved receipt, and both damaged originals were byte-for-byte preserved.
+- Visual publishing began with no selected files, showed staged/unstaged diffs, and published only
+  the chosen whole `app.txt`. Unrelated `other.txt` remained staged; `.env` and an untracked source
+  file were not published. Local-only Refresh really checked the source folder.
+
+Native publishing first exposed the Node `totalStagedSizeMB` versus serde `totalStagedSizeMb`
+mismatch. The app correctly refused publication. `658f524` adds deserialize aliases for both size
+fields while keeping the frontend names; the same native publish then succeeded with exact bytes.
+
+A concurrent native request for another project took 6,067 ms during a five-second check before
+the scoped service fix. After it, the request returned in 762 ms while the check continued (6,425 ms
+total including startup). The check service stopped and reaped its owned Node child on return.
+Probe receipts and Peek captures are retained in the smoke directory; tests used no real credentials.
 
 ## Known verification boundaries
 
@@ -46,6 +78,9 @@ isolated vault root. These last checks establish the backend/native boundary, no
 - Check commands have normal user permissions. Windows Job Objects manage ordinary descendants;
   external-service or scheduled-task launches are outside that process boundary.
 - Remote checkpoint backup carries saved source; later local evidence/screenshots are not included.
+- An empty ownership lock or orphaned reclaim guard can require manual recovery after a crash;
+  [the procedure](RECOVERY_DESIGN.md#damaged-local-metadata) requires stopping all vault users first.
+- The user chose secure token setup for this release; browser sign-in follows OAuth registration.
 - No participant usability study, semantic AI repair, browser OAuth registration or release signing
   is claimed. Recovery covers eligible source, not databases, dependencies or deployed services.
 

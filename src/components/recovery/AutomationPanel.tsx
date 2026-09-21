@@ -380,7 +380,7 @@ export function AutomationPanel({ projectId, state, onChanged }: AutomationPanel
             {status.error.retryAt ? `; BitGit will try again after ${formatTimestamp(status.error.retryAt)} (it waits longer after each failure).` : '.'}
           </Notice>
         )}
-        {repairPending && <p className="text-xs text-gray-600 dark:text-gray-400">Automatic saves and checks are paused until the interrupted repair is undone.</p>}
+        {repairPending && <p className="text-xs text-gray-600 dark:text-gray-400">Automatic saves are paused while an interrupted repair needs attention. Follow the banner above; saved versions can still be recovered.</p>}
         {checkNote && (
           <Notice tone={checkNote.tone}>{checkNote.text}</Notice>
         )}

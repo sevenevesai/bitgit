@@ -101,5 +101,5 @@ so a harness can enable saving while the app is open. It waits while that projec
   mounts it from `App.tsx`. The workspace tells it about state and settings changes.
 - Panels: `AutomationPanel`, `EvidencePanel`, `CheckPanel` (shared with the regression tab),
   `RegressionPanel`, `PendingRepairBanner`.
-- Verification so far: a browser harness ran these components against the real engine through a
-  stand-in for the native command. The native app has not been driven for these flows.
+- Verification: the worker's browser harness and the parent's actual desktop walkthroughs are
+  recorded separately in [RECOVERY_VERIFICATION.md](RECOVERY_VERIFICATION.md).
