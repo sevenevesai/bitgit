@@ -8,10 +8,11 @@ import { exclusionReason, MAX_FILE_BYTES } from './recovery-policy.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const NETWORK_TIMEOUT_MS = 10 * 60 * 1000; // push and remote branch deletion
+const NETWORK_TIMEOUT_MS = 10 * 60 * 1000; // pushes
 const FETCH_TIMEOUT_MS = 2 * 60 * 1000;
 const STATUS_FETCH_TIMEOUT_MS = 30 * 1000; // status must stay responsive when the remote is unreachable
 const BLOB_CHUNK_BYTES = 32 * 1024 * 1024; // bounds memory while scanning outgoing blobs
+const TAG_PUSH_BATCH = 100; // refspecs per push, so a long tag list cannot overflow the command line
 const DIFF_PREVIEW_MAX_BYTES = 1024 * 1024;
 const DIFF_PREVIEW_MAX_LINES = 5000;
 
@@ -96,7 +97,7 @@ export class BranchIntegrationError extends Error {
   constructor(
     message: string,
     readonly branch: string,
-    readonly stage: 'preflight' | 'merge' | 'validation' | 'push' | 'cleanup',
+    readonly stage: 'preflight' | 'merge' | 'validation' | 'push',
     readonly merged: string[],
     readonly conflicts: string[] = [],
   ) {
@@ -176,6 +177,8 @@ interface UpstreamInfo { remote: string; ref: string; short: string; branchName:
 interface PushTarget { remote: string; remoteBranch: string; trackingRef: string; hasUpstream: boolean; }
 interface PublishPlan { branch: string; target: PushTarget; state: WorkingState; selected: string[]; addOrigin: string | null; }
 interface PublishReport { committed: number; commits: number; pushed: boolean; }
+// oid is the tag ref's own object: the tag object for an annotated tag, else the tagged commit.
+interface TagRef { name: string; oid: string; type: string; }
 interface ScanResult { issues: FileValidationIssue[]; totalBytes: number; }
 
 export class GitOperations {
@@ -214,6 +217,9 @@ export class GitOperations {
    * Prevents command injection through malformed ref names.
    */
   static validateRefName(refName: string, type: 'branch' | 'tag'): void {
+    if (typeof refName !== 'string') {
+      throw new Error(`Invalid ${type} name: must be text`);
+    }
     if (!refName || refName.trim().length === 0) {
       throw new Error(`Invalid ${type} name: cannot be empty`);
     }
@@ -610,7 +616,7 @@ export class GitOperations {
   }
 
   // Errors always block; warnings block unless the caller passed allowWarnings.
-  private static enforce(issues: FileValidationIssue[], allowWarnings: boolean, committed = 0): void {
+  private static enforce(issues: FileValidationIssue[], allowWarnings: boolean, committed = 0, subject = 'Publish'): void {
     const errors = issues.filter((issue) => issue.severity === 'error');
     const warnings = issues.filter((issue) => issue.severity === 'warning');
     if (errors.length === 0 && (warnings.length === 0 || allowWarnings)) return;
@@ -621,10 +627,19 @@ export class GitOperations {
       ? 'Remove the blocked content; it cannot be overridden.'
       : 'Review the warnings and retry with allowWarnings to publish anyway.';
     throw new PublishError(
-      `Publish blocked by validation (${errors.length} error(s), ${warnings.length} warning(s)): ${list}${more}. ${advice}`,
+      `${subject} blocked by validation (${errors.length} error(s), ${warnings.length} warning(s)): ${list}${more}. ${advice}`,
       'blocked',
       { issues, committed },
     );
+  }
+
+  // Options arrive from IPC: only a real boolean true may allow warnings; anything else malformed is refused.
+  private static allowWarnings(options: PublishOptions | null | undefined): boolean {
+    if (options === undefined || options === null) return false;
+    if (typeof options !== 'object' || Array.isArray(options)) throw new PublishError('Publish options must be an object.', 'failed');
+    const allow = options.allowWarnings;
+    if (allow !== undefined && allow !== null && typeof allow !== 'boolean') throw new PublishError('allowWarnings must be true or false.', 'failed');
+    return allow === true;
   }
 
   private static normalizeSelection(options?: PublishOptions): string[] {
@@ -672,30 +687,30 @@ export class GitOperations {
     return sizes;
   }
 
-  private async readBlobs(oids: string[]): Promise<Map<string, Buffer>> {
+  private async readObjects(oids: string[], expected: 'blob' | 'tag' = 'blob'): Promise<Map<string, Buffer>> {
     const run = await this.run(['cat-file', '--batch'], { readOnly: true, input: `${oids.join('\n')}\n` });
     if (run.code !== 0) throw new PublishError(`Cannot read outgoing objects: ${gitMessage(run)}`, 'blocked');
-    const blobs = new Map<string, Buffer>();
+    const objects = new Map<string, Buffer>();
     const data = run.stdout;
     let offset = 0;
     while (offset < data.length) {
       const eol = data.indexOf(0x0a, offset);
       if (eol < 0) break;
       const [oid, type, size] = data.toString('utf8', offset, eol).split(' ');
-      if (type !== 'blob') throw new PublishError('Cannot read every outgoing object.', 'blocked');
+      if (type !== expected) throw new PublishError('Cannot read every outgoing object.', 'blocked');
       const start = eol + 1;
-      blobs.set(oid, data.subarray(start, start + Number(size)));
+      objects.set(oid, data.subarray(start, start + Number(size)));
       offset = start + Number(size) + 1;
     }
-    return blobs;
+    return objects;
   }
 
-  // Inspects every blob added by the commits in `revs` (all of them: no history cap), path by path.
-  private async scanRange(revs: string[]): Promise<ScanResult> {
-    if (!(await this.headOid())) return { issues: [], totalBytes: 0 };
+  // Inspects every blob added by commits reachable from `tips` but not from `not` (all of them: no
+  // history cap), path by path. Tips go through stdin so a long tag list cannot overflow the command line.
+  private async scanRange(tips: string[], not: string[]): Promise<ScanResult> {
     const log = await this.run(
-      ['log', '--no-renames', '-c', '--root', '--raw', '-z', '--no-abbrev', '--format=%H%x01', ...revs, '--'],
-      { readOnly: true },
+      ['log', '--no-renames', '-c', '--root', '--raw', '-z', '--no-abbrev', '--format=%H%x01', '--stdin', ...(not.length > 0 ? ['--not', ...not] : []), '--'],
+      { readOnly: true, input: `${tips.join('\n')}\n` },
     );
     if (log.code !== 0) throw new PublishError(`Cannot inspect outgoing commits: ${gitMessage(log)}`, 'blocked');
 
@@ -738,7 +753,7 @@ export class GitOperations {
     let chunkBytes = 0;
     const flush = async () => {
       if (chunk.length === 0) return;
-      const contents = await this.readBlobs(chunk);
+      const contents = await this.readObjects(chunk);
       for (const oid of chunk) {
         for (const blob of byOid.get(oid)!) {
           issues.push(...GitOperations.screenFile(blob.file, sizes.get(oid)!, () => contents.get(oid)!, blob.commit));
@@ -755,6 +770,12 @@ export class GitOperations {
     }
     await flush();
     return { issues, totalBytes };
+  }
+
+  // Blobs in commits reachable from HEAD that no remote-tracking ref of `remote` already has.
+  private async scanOutgoing(remote: string): Promise<ScanResult> {
+    if (!(await this.headOid())) return { issues: [], totalBytes: 0 };
+    return this.scanRange(['HEAD'], [`--remotes=${remote}`]);
   }
 
   // Selected pending files (working contents, as they would be committed) plus what would newly reach `remote`.
@@ -775,7 +796,7 @@ export class GitOperations {
       issues.push(...GitOperations.screenFile(file, stats.size, stats.isSymbolicLink() ? null : () => fs.readFileSync(fullPath)));
     }
     if (remote) {
-      const outgoing = await this.scanRange(['HEAD', '--not', `--remotes=${remote}`]);
+      const outgoing = await this.scanOutgoing(remote);
       issues.push(...outgoing.issues);
       totalBytes += outgoing.totalBytes;
     }
@@ -788,6 +809,7 @@ export class GitOperations {
    * canProceed is false when a blocking error exists; warnings only block publishing without allowWarnings.
    */
   async validateBeforeSync(options?: PublishOptions): Promise<PreSyncValidation> {
+    GitOperations.allowWarnings(options); // reject malformed options even though warnings are only reported here
     await this.requireRepo();
     try {
       const state = await this.workingState();
@@ -914,7 +936,7 @@ export class GitOperations {
       committed = selected.length;
       try {
         // The stored blobs can differ from the inspected working files (filters, hooks), so inspect the commit itself.
-        const created = await this.scanRange(head ? ['HEAD', '--not', head] : ['HEAD']);
+        const created = await this.scanRange(['HEAD'], head ? [head] : []);
         GitOperations.enforce(GitOperations.sortIssues(created.issues), allowWarnings, committed);
       } catch (error) {
         if (error instanceof PublishError) {
@@ -953,8 +975,9 @@ export class GitOperations {
     options?: PublishOptions
   ): Promise<{ committed: number; pushed: boolean }> {
     try {
+      const allowWarnings = GitOperations.allowWarnings(options);
       const plan = await this.preparePublish(remoteUrl, options);
-      const report = await this.executePublish(plan, commitMessage, commitDescription, options?.allowWarnings === true);
+      const report = await this.executePublish(plan, commitMessage, commitDescription, allowWarnings);
       return { committed: report.committed, pushed: report.pushed };
     } catch (error) {
       if (error instanceof PublishError) throw error;
@@ -968,8 +991,9 @@ export class GitOperations {
    */
   async pushExistingCommits(remote: string, branch: string, options?: PublishOptions): Promise<number> {
     GitOperations.validateRefName(branch, 'branch');
+    const allowWarnings = GitOperations.allowWarnings(options);
     await this.requireRepo();
-    if (!/^[A-Za-z0-9][\w.-]*$/.test(remote) || !(await this.remoteNames()).includes(remote)) {
+    if (typeof remote !== 'string' || !/^[A-Za-z0-9][\w.-]*$/.test(remote) || !(await this.remoteNames()).includes(remote)) {
       throw new PublishError(`Remote '${remote}' is not configured.`, 'failed');
     }
     const current = await this.currentBranch();
@@ -979,7 +1003,7 @@ export class GitOperations {
     if (position.behind > 0) {
       throw new PublishError(`${remote}/${branch} has ${position.behind} commit(s) that ${branch} lacks. BitGit never force-pushes; update ${branch} first.`, 'diverged');
     }
-    GitOperations.enforce(GitOperations.sortIssues((await this.scanRange(['HEAD', '--not', `--remotes=${remote}`])).issues), options?.allowWarnings === true);
+    GitOperations.enforce(GitOperations.sortIssues((await this.scanOutgoing(remote)).issues), allowWarnings);
     await this.pushCurrent(branch, target);
     return position.ahead;
   }
@@ -987,20 +1011,20 @@ export class GitOperations {
   /**
    * Explicit integration of the named remote branches into the current branch, one at a time with
    * --no-ff, pushing after each. Any failure throws BranchIntegrationError naming the branch and stage
-   * (merge conflicts abort the merge and leave the branch unchanged). mergeBranches then deletes each
-   * merged branch from the remote, only after its merge was validated and pushed; pullBranches keeps it.
+   * (merge conflicts abort the merge and leave the branch unchanged). Source branches are never
+   * deleted, locally or on the remote: a collaborator or agent may push to them after the merge, and
+   * a delete could only be made safe with a force-style lease.
    */
   private async integrateBranches(
     branches: string[],
     remoteUrl: string | undefined,
     options: PublishOptions | undefined,
-    deleteAfter: boolean,
+    verb: 'merge' | 'pull',
   ): Promise<string[]> {
-    const verb = deleteAfter ? 'merge' : 'pull';
+    const allowWarnings = GitOperations.allowWarnings(options);
     const merged: string[] = [];
     if (!Array.isArray(branches) || branches.length === 0) return merged;
     for (const name of branches) GitOperations.validateRefName(name, 'branch');
-    const allowWarnings = options?.allowWarnings === true;
     const fail = (branch: string, stage: BranchIntegrationError['stage'], message: string, conflicts: string[] = []) =>
       new BranchIntegrationError(message, branch, stage, [...merged], conflicts);
 
@@ -1028,7 +1052,7 @@ export class GitOperations {
 
     const assertPublishable = async (branch: string, note: string): Promise<void> => {
       try {
-        GitOperations.enforce(GitOperations.sortIssues((await this.scanRange(['HEAD', '--not', `--remotes=${target.remote}`])).issues), allowWarnings);
+        GitOperations.enforce(GitOperations.sortIssues((await this.scanOutgoing(target.remote)).issues), allowWarnings);
       } catch (error) {
         throw fail(branch, 'validation', errorText(error) + note);
       }
@@ -1043,7 +1067,7 @@ export class GitOperations {
         if (!(await this.refExists(remoteRef))) throw fail(branch, 'preflight', `Branch '${branch}' does not exist on ${target.remote}.`);
 
         stage = 'merge';
-        const merge = await this.run(['merge', '--no-ff', '-m', deleteAfter ? `Merge branch '${branch}'` : `Pull updates from branch '${branch}'`, remoteRef]);
+        const merge = await this.run(['merge', '--no-ff', '-m', verb === 'merge' ? `Merge branch '${branch}'` : `Pull updates from branch '${branch}'`, remoteRef]);
         if (merge.code !== 0) {
           const conflicts = (await this.run(['diff', '--name-only', '--diff-filter=U', '-z'], { readOnly: true })).stdout.toString('utf8').split('\0').filter(Boolean);
           await this.run(['merge', '--abort']); // when git refused before starting there is nothing to abort
@@ -1064,23 +1088,7 @@ export class GitOperations {
         try {
           await this.pushCurrent(current, target);
         } catch (error) {
-          throw fail(branch, 'push', `${errorText(error)} The merge of '${branch}' is committed locally; the remote branch was not deleted.`);
-        }
-
-        if (deleteAfter) {
-          stage = 'cleanup';
-          const fullyMerged = (await this.run(['merge-base', '--is-ancestor', remoteRef, 'HEAD'], { readOnly: true })).code === 0;
-          const deleted = fullyMerged ? await this.run(['push', target.remote, '--delete', branch], { timeoutMs: NETWORK_TIMEOUT_MS }) : null;
-          if (!deleted || deleted.code !== 0) {
-            throw new BranchIntegrationError(
-              `'${branch}' was merged and pushed, but deleting it from ${target.remote} failed: ${deleted ? gitMessage(deleted) : 'it is not fully merged'}`,
-              branch,
-              'cleanup',
-              [...merged, branch],
-            );
-          }
-          // -d only removes a local branch git considers merged; a missing or unmerged one is left alone.
-          if (await this.refExists(`refs/heads/${branch}`)) await this.run(['branch', '-d', branch]);
+          throw fail(branch, 'push', `${errorText(error)} The merge of '${branch}' is committed locally but was not pushed.`);
         }
         merged.push(branch);
       } catch (error) {
@@ -1092,14 +1100,14 @@ export class GitOperations {
   }
 
   async mergeBranches(branches: string[], remoteUrl?: string, options?: PublishOptions): Promise<string[]> {
-    return this.integrateBranches(branches, remoteUrl, options, true);
+    return this.integrateBranches(branches, remoteUrl, options, 'merge');
   }
 
   /**
-   * Same integration as mergeBranches, but the remote branches stay alive for future pulls.
+   * Same integration as mergeBranches with a "Pull updates" merge message.
    */
   async pullBranches(branches: string[], remoteUrl?: string, options?: PublishOptions): Promise<string[]> {
-    return this.integrateBranches(branches, remoteUrl, options, false);
+    return this.integrateBranches(branches, remoteUrl, options, 'pull');
   }
 
   /**
@@ -1123,40 +1131,45 @@ export class GitOperations {
     };
 
     try {
+      const allowWarnings = GitOperations.allowWarnings(options);
       const plan = await this.preparePublish(remoteUrl, options);
       const { branch, target } = plan;
       const label = `${target.remote}/${target.remoteBranch}`;
+
       if (plan.addOrigin) {
-        await this.output(['remote', 'add', 'origin', plan.addOrigin]);
-        plan.addOrigin = null;
+        // A remote that is not configured yet has nothing to fetch. executePublish adds origin only after
+        // validation passes and just before the push, so a blocked sync leaves the remote list untouched.
+        if (plan.selected.length === 0 && !(await this.headOid())) {
+          return stop('failed', 'Nothing to publish: the repository has no commits yet. Select files to create the first commit.');
+        }
+      } else {
+        let fetched: GitRun;
+        try {
+          fetched = await this.run(['fetch', '--prune', target.remote], { timeoutMs: FETCH_TIMEOUT_MS });
+        } catch (error) {
+          return stop('fetch-failed', `Could not fetch ${target.remote}: ${errorText(error)}`);
+        }
+        if (fetched.code !== 0) return stop('fetch-failed', `Could not fetch ${target.remote}: ${gitMessage(fetched)}`);
+
+        const position = await this.divergence(target);
+        if (position.behind > 0 && position.ahead > 0) {
+          return stop('diverged', `${branch} has diverged from ${label} (${position.ahead} local, ${position.behind} remote commit(s)). Nothing was changed; integrate the remote changes explicitly, then sync again.`);
+        }
+        if (position.behind > 0 && plan.state.entries.length > 0) {
+          return stop('dirty-behind', `${label} has ${position.behind} new commit(s) and ${branch} has uncommitted changes. Nothing was changed; commit or stash the changes, update ${branch}, then sync again.`);
+        }
+        if (position.behind > 0) {
+          const forwarded = await this.run(['merge', '--ff-only', target.trackingRef]);
+          if (forwarded.code !== 0) return stop('failed', `Could not fast-forward ${branch} to ${label}: ${gitMessage(forwarded)}`);
+          result.success = true;
+          result.outcome = 'fast-forwarded';
+          result.pulled = position.behind;
+          result.message = `Fast-forwarded ${branch} by ${position.behind} commit(s) from ${label}`;
+          return result;
+        }
       }
 
-      let fetched: GitRun;
-      try {
-        fetched = await this.run(['fetch', '--prune', target.remote], { timeoutMs: FETCH_TIMEOUT_MS });
-      } catch (error) {
-        return stop('fetch-failed', `Could not fetch ${target.remote}: ${errorText(error)}`);
-      }
-      if (fetched.code !== 0) return stop('fetch-failed', `Could not fetch ${target.remote}: ${gitMessage(fetched)}`);
-
-      const position = await this.divergence(target);
-      if (position.behind > 0 && position.ahead > 0) {
-        return stop('diverged', `${branch} has diverged from ${label} (${position.ahead} local, ${position.behind} remote commit(s)). Nothing was changed; integrate the remote changes explicitly, then sync again.`);
-      }
-      if (position.behind > 0 && plan.state.entries.length > 0) {
-        return stop('dirty-behind', `${label} has ${position.behind} new commit(s) and ${branch} has uncommitted changes. Nothing was changed; commit or stash the changes, update ${branch}, then sync again.`);
-      }
-      if (position.behind > 0) {
-        const forwarded = await this.run(['merge', '--ff-only', target.trackingRef]);
-        if (forwarded.code !== 0) return stop('failed', `Could not fast-forward ${branch} to ${label}: ${gitMessage(forwarded)}`);
-        result.success = true;
-        result.outcome = 'fast-forwarded';
-        result.pulled = position.behind;
-        result.message = `Fast-forwarded ${branch} by ${position.behind} commit(s) from ${label}`;
-        return result;
-      }
-
-      const report = await this.executePublish(plan, commitMessage, commitDescription, options?.allowWarnings === true);
+      const report = await this.executePublish(plan, commitMessage, commitDescription, allowWarnings);
       result.success = true;
       result.committed = report.committed;
       result.pushed = report.commits;
@@ -1449,22 +1462,162 @@ export class GitOperations {
     }
   }
 
-  async pushTag(tagName: string): Promise<void> {
-    await this.ensureGitRepo();
-    try {
-      await this.git.push(['origin', tagName]);
-    } catch (error) {
-      throw new Error(`Failed to push tag: ${error}`);
+  // Tags go to the current branch's upstream remote, else origin.
+  private async tagRemote(): Promise<string> {
+    const branch = await this.currentBranch();
+    const upstream = branch ? await this.upstreamOf(branch) : null;
+    const remote = upstream?.remote ?? 'origin';
+    if (!(await this.remoteNames()).includes(remote)) {
+      throw new PublishError(`Remote '${remote}' is not configured; tags cannot be published.`, 'failed');
+    }
+    return remote;
+  }
+
+  private async listTagRefs(): Promise<TagRef[]> {
+    const listed = await this.output(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(objecttype)', 'refs/tags'], { readOnly: true });
+    return listed.split('\n').filter(Boolean).map((line) => {
+      const [ref, oid, type] = line.split('\0');
+      return { name: ref.slice('refs/tags/'.length), oid, type };
+    });
+  }
+
+  // An annotated tag's message is published with it, so it is screened like file content (errors only).
+  private async screenTagMessages(tags: TagRef[]): Promise<FileValidationIssue[]> {
+    const issues: FileValidationIssue[] = [];
+    let pending = tags.filter((tag) => tag.type === 'tag').map((tag) => ({ name: tag.name, oid: tag.oid }));
+    for (let depth = 0; pending.length > 0; depth++) {
+      if (depth >= 16) throw new PublishError('A tag points through too many nested tag objects to inspect.', 'blocked');
+      const bodies = await this.readObjects([...new Set(pending.map((entry) => entry.oid))], 'tag');
+      const next: typeof pending = [];
+      for (const { name, oid } of pending) {
+        const body = bodies.get(oid)!;
+        const reason = exclusionReason('tag-message', body.length, body);
+        if (reason) {
+          issues.push({
+            filePath: `refs/tags/${name}`,
+            severity: 'error',
+            reason: `${reason} (in the tag message)`,
+            sizeBytes: body.length,
+            sizeMB: body.length / (1024 * 1024),
+            suggestion: 'Recreate the tag without the credential.',
+          });
+        }
+        const target = /^object ([0-9a-f]{40,64})\ntype (\w+)\n/.exec(body.toString('utf8', 0, Math.min(body.length, 512)));
+        if (target && target[2] === 'tag') next.push({ name, oid: target[1] });
+      }
+      pending = next;
+    }
+    return issues;
+  }
+
+  private static describeTagPushFailure(run: GitRun, remote: string): string {
+    const rejected: string[] = [];
+    for (const line of run.stdout.toString('utf8').split('\n')) {
+      const match = /^!\t[^:\t]+:refs\/tags\/([^\t]+)\t\[[^\]]*\](?: \(([^)]*)\))?/.exec(line.trimEnd());
+      if (match) rejected.push(match[2] ? `'${match[1]}' (${match[2]})` : `'${match[1]}'`);
+    }
+    return rejected.length > 0
+      ? `The remote ${remote} rejected tag(s) ${rejected.join(', ')}. BitGit never force-pushes tags.`
+      : `Pushing tags to ${remote} failed: ${gitMessage(run)}`;
+  }
+
+  // Validates every requested tag (all local tags when `requested` is null) before any is pushed:
+  // names, that each points to a commit, and every blob reachable from those commits that the remote
+  // does not already have. Each tag is pushed as the exact object that was inspected (an annotated tag
+  // stays annotated), without force.
+  private async publishTags(requested: string[] | null, options: PublishOptions | null | undefined): Promise<void> {
+    const allowWarnings = GitOperations.allowWarnings(options);
+    if (requested !== null) {
+      for (const name of requested) {
+        try {
+          GitOperations.validateRefName(name, 'tag');
+        } catch (error) {
+          throw new PublishError(`Tag '${String(name)}': ${errorText(error)}`, 'failed');
+        }
+        if ((await this.run(['check-ref-format', `refs/tags/${name}`], { readOnly: true })).code !== 0) {
+          throw new PublishError(`Tag name '${name}' is not a valid Git ref name.`, 'failed');
+        }
+      }
+    }
+    await this.requireRepo();
+    const remote = await this.tagRemote();
+    const local = await this.listTagRefs();
+
+    let tags: TagRef[];
+    if (requested !== null) {
+      tags = requested.map((name) => {
+        const tag = local.find((candidate) => candidate.name === name);
+        if (!tag) throw new PublishError(`Tag '${name}' does not exist.`, 'failed');
+        return tag;
+      });
+    } else {
+      const invalid = local.filter((tag) => {
+        try { GitOperations.validateRefName(tag.name, 'tag'); return false; } catch { return true; }
+      });
+      if (invalid.length > 0) {
+        throw new PublishError(
+          `No tags were pushed: ${invalid.length} local tag(s) have names BitGit will not publish (${invalid.slice(0, 5).map((tag) => tag.name).join(', ')}).`,
+          'failed',
+        );
+      }
+      tags = local;
+    }
+    tags = [...new Map(tags.map((tag) => [tag.name, tag])).values()];
+    if (tags.length === 0) return;
+
+    const peeled = await this.run(
+      ['cat-file', '--batch-check=%(objectname) %(objecttype)'],
+      { readOnly: true, input: tags.map((tag) => `refs/tags/${tag.name}^{commit}\n`).join('') },
+    );
+    const resolved = peeled.stdout.toString('utf8').split('\n').filter(Boolean);
+    if (peeled.code !== 0 || resolved.length !== tags.length) {
+      throw new PublishError(`Cannot resolve tag targets: ${gitMessage(peeled)}`, 'failed');
+    }
+    const commits = new Set<string>();
+    const notCommits: string[] = [];
+    resolved.forEach((line, i) => {
+      const [oid, type] = line.split(' ');
+      if (type === 'commit') commits.add(oid); else notCommits.push(tags[i].name);
+    });
+    if (notCommits.length > 0) {
+      throw new PublishError(`No tags were pushed: ${notCommits.join(', ')} do not point to a commit and cannot be inspected.`, 'failed');
+    }
+
+    const issues = [...(await this.scanRange([...commits], [`--remotes=${remote}`])).issues, ...(await this.screenTagMessages(tags))];
+    GitOperations.enforce(
+      GitOperations.sortIssues(issues),
+      allowWarnings,
+      0,
+      tags.length === 1 ? `Publishing tag '${tags[0].name}'` : `Publishing ${tags.length} tags`,
+    );
+
+    for (let i = 0; i < tags.length; i += TAG_PUSH_BATCH) {
+      const batch = tags.slice(i, i + TAG_PUSH_BATCH);
+      let run: GitRun;
+      try {
+        run = await this.run(['push', '--porcelain', remote, ...batch.map((tag) => `${tag.oid}:refs/tags/${tag.name}`)], { timeoutMs: NETWORK_TIMEOUT_MS });
+      } catch (error) {
+        throw new PublishError(`Pushing tags to ${remote} failed: ${errorText(error)}`, 'push-failed');
+      }
+      if (run.code !== 0) throw new PublishError(GitOperations.describeTagPushFailure(run, remote), 'push-failed');
     }
   }
 
-  async pushAllTags(): Promise<void> {
-    await this.ensureGitRepo();
-    try {
-      await this.git.push(['--tags']);
-    } catch (error) {
-      throw new Error(`Failed to push tags: ${error}`);
-    }
+  /**
+   * Publishes one tag after the same validation as a branch push: the blobs reachable from the tag's
+   * commit that the remote lacks are inspected (secrets and files over 100 MiB always block; warnings
+   * need options.allowWarnings). Never forces; an existing remote tag with a different target is rejected.
+   */
+  async pushTag(tagName: string, options?: PublishOptions): Promise<void> {
+    await this.publishTags([tagName], options);
+  }
+
+  /**
+   * Publishes every local tag. All tags are validated before any is pushed, so one blocked tag
+   * publishes nothing.
+   */
+  async pushAllTags(options?: PublishOptions): Promise<void> {
+    await this.publishTags(null, options);
   }
 
   async deleteTag(tagName: string): Promise<void> {
