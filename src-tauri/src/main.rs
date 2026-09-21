@@ -8,6 +8,8 @@ mod credentials;
 mod git_service;
 mod models;
 mod project_cache;
+mod project_sync;
+mod recovery_request;
 mod scanner;
 
 use commands::*;
@@ -42,6 +44,8 @@ fn main() {
             create_github_repository,
             validate_before_sync,
             sync_project,
+            // Recovery
+            recovery_command,
             // Advanced Git features
             git_get_branches,
             git_create_branch,
