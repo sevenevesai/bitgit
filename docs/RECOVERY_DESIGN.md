@@ -49,8 +49,9 @@ Do not copy `.git`, run hooks, install dependencies, or claim the recovered appl
 Selective repair accepts explicit file paths and a current fingerprint. Recheck that fingerprint,
 save the complete eligible current state as a safety checkpoint, then replace/delete only the
 reviewed paths. Back up any touched file that was excluded from ordinary capture or refuse the
-operation. Journal interrupted repair before writes, recover it on the next mutation, and return
-the safety checkpoint ID. Preserve the real index even if it now differs from restored working
+operation. Journal repair before writes and expose explicit rollback if interrupted; reads and
+automatic capture never silently rewrite source files. Return the safety checkpoint ID.
+Preserve the real index even if it now differs from restored working
 files. Reject unsafe parent directories and concurrent changes. A retained safety checkpoint lets
 the user recover forward. File selection is explicit; automatic semantic feature repair is absent.
 

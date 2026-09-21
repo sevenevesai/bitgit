@@ -3,8 +3,10 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { assertNoLinks, atomicJson, exists, gitRun, readJson, safeRelative, sha256, within, withVaultLock } from './recovery-io.js';
-import { captureSource, selectCapture, type CapturedSource, type SnapshotFile } from './recovery-capture.js';
-import { exclusionReason, MAX_CAPTURE_BYTES, MAX_CAPTURE_FILES, MAX_FILE_BYTES } from './recovery-policy.js';
+import { captureSource, fingerprint, selectCapture, type CapturedSource, type SnapshotFile } from './recovery-capture.js';
+import { COVERAGE_LIMITS, exclusionReason, MAX_CAPTURE_BYTES, MAX_CAPTURE_FILES, MAX_FILE_BYTES } from './recovery-policy.js';
+import { pendingRepair, repairFiles, rollbackRepair } from './recovery-repair.js';
+import { backupCheckpoint, importRemoteCheckpoint, listRemoteCheckpoints, verifyBackup } from './recovery-remote.js';
 import type { Checkpoint, CheckpointPreview, RecoveryComparison, RecoveryReceipt, RecoveryRequest, RecoveryResults, RecoverySettings, RecoveryState } from './recovery-types.js';
 
 export const DEFAULT_RECOVERY_SETTINGS: RecoverySettings = { automaticEnabled: false, idleMinutes: 5, retention: 'keep_all' };
@@ -78,7 +80,7 @@ export class RecoveryService {
     for (const id of refs.split('\n').filter(Boolean)) checkpoints.push(await this.readCheckpoint(id.trim()));
     checkpoints.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
     const settings = await readJson<RecoverySettings>(path.join(this.vaultPath, 'settings.json'), DEFAULT_RECOVERY_SETTINGS);
-    return { checkpoints, settings, vaultPath: this.vaultPath, sourceAvailable: await exists(this.repoPath) };
+    return { checkpoints, settings, vaultPath: this.vaultPath, sourceAvailable: await exists(this.repoPath), pendingRepair: await pendingRepair(this) };
   }
   async create(request: Extract<RecoveryRequest, { action: 'create' }>): Promise<Checkpoint> {
     if (typeof request.label !== 'string' || !request.label.trim() || request.label.length > 120) throw new Error('Name the milestone using 1–120 characters');
@@ -102,7 +104,7 @@ export class RecoveryService {
         await fs.writeFile(file, captured.files[index].bytes, { flag: 'wx', mode: 0o600 });
         inputPaths.push(file);
       }
-      const oids = (await this.git(['hash-object', '-w', '--no-filters', '--stdin-paths'], `${inputPaths.join('\n')}\n`)).toString('utf8').trim().split('\n');
+      const oids = inputPaths.length ? (await this.git(['hash-object', '-w', '--no-filters', '--stdin-paths'], `${inputPaths.join('\n')}\n`)).toString('utf8').trim().split('\n') : [];
       if (oids.length !== captured.files.length || oids.some(oid => !validOid(oid))) throw new Error('Could not verify captured Git objects');
       const env = { GIT_INDEX_FILE: indexFile };
       await this.git(['read-tree', '--empty'], undefined, env);
@@ -130,9 +132,11 @@ export class RecoveryService {
     if (manifest.format !== 'bitgit-checkpoint' || manifest.version !== 1 || !validId(manifest.id)
       || typeof manifest.label !== 'string' || !manifest.label.trim() || manifest.label.length > 120
       || typeof manifest.note !== 'string' || manifest.note.length > 4000
-      || !['manual', 'automatic', 'safety'].includes(manifest.kind) || !Number.isFinite(Date.parse(manifest.createdAt))
+      || !['manual', 'automatic', 'safety'].includes(manifest.kind) || typeof manifest.createdAt !== 'string' || !Number.isFinite(Date.parse(manifest.createdAt))
+      || (manifest.branch !== null && (typeof manifest.branch !== 'string' || manifest.branch.length > 512))
+      || (manifest.head !== null && (typeof manifest.head !== 'string' || !/^[0-9a-f]{40,64}$/.test(manifest.head)))
       || !/^[0-9a-f]{64}$/.test(manifest.fingerprint) || !Array.isArray(manifest.entries)
-      || !manifest.entries.length || manifest.entries.length > MAX_CAPTURE_FILES
+      || manifest.entries.length > MAX_CAPTURE_FILES
       || !manifest.coverage || !Array.isArray(manifest.coverage.included) || !Array.isArray(manifest.coverage.excluded)
       || !Array.isArray(manifest.coverage.limits) || !Array.isArray(manifest.coverage.warnings)) throw new Error('Unsupported checkpoint manifest');
     let size = 0;
@@ -144,6 +148,20 @@ export class RecoveryService {
         || entry.sizeBytes < 0 || entry.sizeBytes > MAX_FILE_BYTES || (size += entry.sizeBytes) > MAX_CAPTURE_BYTES) throw new Error('Checkpoint contains unsupported or oversized entries');
       seen.add(entry.path.toLowerCase());
     }
+    if (manifest.coverage.included.length !== manifest.entries.length || manifest.coverage.totalBytes !== size
+      || manifest.coverage.excluded.length > 20_000 || manifest.coverage.warnings.length > MAX_CAPTURE_FILES) throw new Error('Checkpoint coverage does not match its entries');
+    const entrySizes = new Map(manifest.entries.map(entry => [entry.path, entry.sizeBytes]));
+    const included = new Set<string>();
+    for (const file of manifest.coverage.included) {
+      if (!file || typeof file.path !== 'string' || included.has(file.path) || entrySizes.get(file.path) !== file.sizeBytes) throw new Error('Checkpoint coverage contains inconsistent files');
+      included.add(file.path);
+    }
+    for (const file of manifest.coverage.excluded) {
+      if (!file || typeof file.path !== 'string' || file.path.length > 4096 || typeof file.reason !== 'string' || file.reason.length > 1000) throw new Error('Checkpoint exclusion receipt is invalid');
+    }
+    if (manifest.coverage.warnings.some(warning => typeof warning !== 'string' || warning.length > 4096)) throw new Error('Checkpoint warning receipt is invalid');
+    // Imported coverage cannot replace this installation's actual recovery limits.
+    manifest.coverage.limits = [...COVERAGE_LIMITS];
     const treeOid = (await this.git(['rev-parse', `${commitOid}^{tree}`])).toString('utf8').trim();
     return { manifest, treeOid };
   }
@@ -167,7 +185,7 @@ export class RecoveryService {
       safeRelative(name);
       return { ...entry, oid };
     });
-    const data = await this.git(['cat-file', '--batch'], `${parsed.map(entry => entry.oid).join('\n')}\n`);
+    const data = parsed.length ? await this.git(['cat-file', '--batch'], `${parsed.map(entry => entry.oid).join('\n')}\n`) : Buffer.alloc(0);
     let offset = 0;
     const files: SnapshotFile[] = [];
     for (const entry of parsed) {
@@ -182,7 +200,9 @@ export class RecoveryService {
       files.push({ path: entry.path, mode: entry.mode, bytes, sha256: entry.sha256 });
       offset = end + size + 2;
     }
-    return files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    if (fingerprint(files) !== manifest.fingerprint) throw new Error('Checkpoint fingerprint does not match its content');
+    return files;
   }
   async compare(id: string): Promise<RecoveryComparison> {
     const checkpoint = await this.readCheckpoint(id);
@@ -232,12 +252,21 @@ export class RecoveryService {
     if (!request || typeof request !== 'object' || typeof request.action !== 'string') throw new Error('Invalid recovery request');
     return this.locked(async () => {
       let result: unknown;
+      if (['create', 'repair', 'autoTick'].includes(request.action) && await pendingRepair(this)) {
+        throw new Error('A file repair was interrupted. Review its safety checkpoint and undo the interrupted repair before saving or repairing again.');
+      }
       switch (request.action) {
         case 'state': result = await this.state(); break;
         case 'preview': result = await this.preview(); break;
         case 'create': result = await this.create(request); break;
         case 'compare': result = await this.compare(request.checkpointId); break;
         case 'recover': result = await this.recover(request.checkpointId, request.destination); break;
+        case 'repair': result = await repairFiles(this, request); break;
+        case 'repairRollback': result = await rollbackRepair(this); break;
+        case 'backup': result = await backupCheckpoint(this, request.checkpointId, request.remoteUrl); break;
+        case 'verifyBackup': result = await verifyBackup(this, request.checkpointId); break;
+        case 'remoteList': result = await listRemoteCheckpoints(this, request.remoteUrl); break;
+        case 'remoteImport': result = await importRemoteCheckpoint(this, request.remoteUrl, request.ref); break;
         default: throw new Error(`Recovery action is not implemented: ${request.action}`);
       }
       return result as RecoveryResults[R['action']];

@@ -25,6 +25,8 @@ export interface BackupReceipt {
   ref: string;
   commitOid: string;
   verifiedAt: string;
+  lastCheckedAt?: string;
+  lastCheckError?: string | null;
 }
 export interface Checkpoint {
   id: string;
@@ -82,6 +84,7 @@ export interface RecoveryState {
   settings: RecoverySettings;
   vaultPath: string;
   sourceAvailable: boolean;
+  pendingRepair?: { safetyCheckpointId: string; startedAt: string; affectedFiles: number } | null;
 }
 export interface RemoteCheckpoint {
   id: string;
@@ -106,6 +109,7 @@ export type RecoveryRequest =
   | { action: 'compare'; checkpointId: string }
   | { action: 'recover'; checkpointId: string; destination: string }
   | { action: 'repair'; checkpointId: string; paths: string[]; expectedFingerprint: string }
+  | { action: 'repairRollback' }
   | { action: 'backup'; checkpointId: string; remoteUrl: string }
   | { action: 'verifyBackup'; checkpointId: string }
   | { action: 'remoteList'; remoteUrl: string }
@@ -125,6 +129,7 @@ export interface RecoveryResults {
   compare: RecoveryComparison;
   recover: RecoveryReceipt;
   repair: RecoveryReceipt;
+  repairRollback: RecoveryReceipt;
   backup: BackupReceipt;
   verifyBackup: BackupReceipt;
   remoteList: RemoteCheckpoint[];

@@ -18,8 +18,8 @@ inspectable workflows; no model service is required.
 
 ## Wave 2: complete recovery workflow
 
-- [ ] REMOTE: verified checkpoint export, remote discovery/import, recovery receipts and tests.
-- [ ] REPAIR: selective restoration with safety checkpoint, stale checks, interruption journal and tests.
+- [x] REMOTE: verified checkpoint export/import; fresh-vault recovery and failure receipt tests pass.
+- [x] REPAIR: selected files, safety checkpoints, stale checks and explicit interrupted-repair undo.
 - [ ] UI: local-project recovery workspace, coverage selection, timeline, comparison, recovered copy.
 - [ ] UI: Git file selection/diffs, branch/upstream/freshness, refresh and honest operation outcomes.
 - [ ] Verify integrated recovery and remote round trip with disposable fixtures.
@@ -67,7 +67,7 @@ Parent Lloom session:
 
 ## Gates and pickup notes
 
-Root frontend and service builds passed during review; native runtime remains unverified.
+Service recovery gates pass 19 tests; integrated native runtime remains unverified.
 Service tests will use Node's built-in runner with disposable repos and isolated Git configuration.
 Existing defects are documented with reproductions in `PRODUCT_REVIEW_FINDINGS.md`.
 Browser-assisted GitHub authorization requires an application client ID; use existing secure token

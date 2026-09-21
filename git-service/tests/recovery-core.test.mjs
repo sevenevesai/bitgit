@@ -149,3 +149,73 @@ test('tampered checkpoint objects do not report successful recovery', async t =>
   await assert.rejects(service.dispatch({ action: 'recover', checkpointId: saved.id, destination }));
   assert.equal(await fs.stat(destination).then(() => true, () => false), false);
 });
+
+test('selected repair preserves unrelated changes and staging, and retains a recoverable safety milestone', async t => {
+  const { service, root, repo, git, write } = await fixtures(t);
+  await write('style.css', 'old styling');
+  const saved = await service.dispatch({ action: 'create', label: 'Login works' });
+  await write('app.txt', 'staged refactor'); git('add', 'app.txt'); await write('app.txt', 'broken login');
+  await write('style.css', 'keep this new styling'); await write('new.txt', 'keep new feature');
+  const index = await fs.readFile(path.join(repo, '.git', 'index'));
+  const comparison = await service.dispatch({ action: 'compare', checkpointId: saved.id });
+  const receipt = await service.dispatch({ action: 'repair', checkpointId: saved.id, paths: ['app.txt'], expectedFingerprint: comparison.currentFingerprint });
+  assert.equal(await fs.readFile(path.join(repo, 'app.txt'), 'utf8'), 'working\r\n');
+  assert.equal(await fs.readFile(path.join(repo, 'style.css'), 'utf8'), 'keep this new styling');
+  assert.equal(await fs.readFile(path.join(repo, 'new.txt'), 'utf8'), 'keep new feature');
+  assert.deepEqual(await fs.readFile(path.join(repo, '.git', 'index')), index);
+  const safety = (await service.dispatch({ action: 'state' })).checkpoints.find(checkpoint => checkpoint.id === receipt.safetyCheckpointId);
+  assert.equal(safety.kind, 'safety');
+  const restored = path.join(root, 'current-attempt');
+  await service.dispatch({ action: 'recover', checkpointId: safety.id, destination: restored });
+  assert.equal(await fs.readFile(path.join(restored, 'app.txt'), 'utf8'), 'broken login');
+});
+
+test('repair rejects stale comparisons and refuses to overwrite contents outside safety coverage', async t => {
+  const { service, repo, write } = await fixtures(t);
+  const saved = await service.dispatch({ action: 'create', label: 'Original' });
+  await write('app.txt', 'changed');
+  const comparison = await service.dispatch({ action: 'compare', checkpointId: saved.id });
+  await write('app.txt', 'edited after comparison');
+  await assert.rejects(service.dispatch({ action: 'repair', checkpointId: saved.id, paths: ['app.txt'], expectedFingerprint: comparison.currentFingerprint }), /changed after comparison/);
+  const secret = `ghp_${'B'.repeat(36)}`; await write('app.txt', secret);
+  const latest = await service.dispatch({ action: 'compare', checkpointId: saved.id });
+  await assert.rejects(service.dispatch({ action: 'repair', checkpointId: saved.id, paths: ['app.txt'], expectedFingerprint: latest.currentFingerprint }), /Cannot protect current contents/);
+  assert.equal(await fs.readFile(path.join(repo, 'app.txt'), 'utf8'), secret);
+  assert.equal((await service.dispatch({ action: 'state' })).checkpoints.length, 1);
+});
+
+test('interrupted repair remains visible, preserves later edits, and rolls back after they are resolved', async t => {
+  const { service, repo, write } = await fixtures(t);
+  await write('second.txt', 'original second');
+  const saved = await service.dispatch({ action: 'create', label: 'Old version' });
+  await write('app.txt', 'current app'); await write('second.txt', 'current second');
+  const comparison = await service.dispatch({ action: 'compare', checkpointId: saved.id });
+  const originalSave = service.saveCaptured.bind(service);
+  service.saveCaptured = async (...args) => {
+    const checkpoint = await originalSave(...args);
+    // Deterministically model an editor writing after the safety snapshot but before repair.
+    await write('second.txt', 'concurrent edit');
+    return checkpoint;
+  };
+  await assert.rejects(service.dispatch({ action: 'repair', checkpointId: saved.id, paths: ['app.txt', 'second.txt'], expectedFingerprint: comparison.currentFingerprint }), /Repair is incomplete/);
+  assert.equal(await fs.readFile(path.join(repo, 'app.txt'), 'utf8'), 'working\r\n');
+  assert.equal((await service.dispatch({ action: 'state' })).pendingRepair.affectedFiles, 2);
+  await assert.rejects(service.dispatch({ action: 'create', label: 'Do not capture partial repair' }), /interrupted/);
+  await assert.rejects(service.dispatch({ action: 'repairRollback' }), /New edits were found/);
+  assert.equal(await fs.readFile(path.join(repo, 'second.txt'), 'utf8'), 'concurrent edit');
+  await write('second.txt', 'current second');
+  await service.dispatch({ action: 'repairRollback' });
+  assert.equal(await fs.readFile(path.join(repo, 'app.txt'), 'utf8'), 'current app');
+  assert.equal((await service.dispatch({ action: 'state' })).pendingRepair, null);
+});
+
+test('repair can protect an empty current source before restoring a deleted file', async t => {
+  const { service, repo } = await fixtures(t);
+  const saved = await service.dispatch({ action: 'create', label: 'Before deletion' });
+  await fs.rm(path.join(repo, 'app.txt'));
+  const comparison = await service.dispatch({ action: 'compare', checkpointId: saved.id });
+  const receipt = await service.dispatch({ action: 'repair', checkpointId: saved.id, paths: ['app.txt'], expectedFingerprint: comparison.currentFingerprint });
+  const state = await service.dispatch({ action: 'state' });
+  assert.equal(state.checkpoints.find(checkpoint => checkpoint.id === receipt.safetyCheckpointId).coverage.included.length, 0);
+  assert.equal(await fs.readFile(path.join(repo, 'app.txt'), 'utf8'), 'working\r\n');
+});
