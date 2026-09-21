@@ -119,19 +119,20 @@ One `RecoveryRequest` JSON object on stdin (max 1 MiB) per invocation; one JSON 
 `{"success":true,"data":...}` or `{"success":false,"error":"..."}`. Exit 0 = success, 1 = request
 failed, 2 = bad arguments, empty/oversized/malformed input or unknown action. Nothing is sent or
 changed unless you send a request. No progress output, no daemon, no credential flags: remote actions
-use your Git credential helper. `--help` prints the protocol. Also installed as `bitgit-recovery`
-(package `bin`); avoid `npm run` wrappers in scripts because npm prints a banner on stdout.
+use your Git credential helper. `--help` prints the protocol. Installing this package exposes the
+`bitgit-recovery` bin; avoid `npm run` wrappers in scripts because npm prints a banner on stdout.
 
-Before a refactor, and a manual milestone with a note (bash):
+Before a refactor, save a manual milestone with a note (bash):
 
 ```
 echo '{"action":"create","label":"Before auth refactor","note":"login works by hand"}' \
   | node git-service/dist/recovery-cli.js --repo /work/app
 ```
 
-PowerShell (here-string avoids argument quoting; ASCII-only requests are safest on Windows PowerShell 5.1):
+PowerShell (UTF-8 output preserves non-ASCII labels and commands on Windows PowerShell 5.1):
 
 ```
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 @'
 {"action":"runCheck","checkpointId":"<id>","command":"npm test","timeoutSeconds":300}
 '@ | node git-service/dist/recovery-cli.js --repo C:\work\app

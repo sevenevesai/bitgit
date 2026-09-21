@@ -6,8 +6,8 @@ review and its follow-up; see [the plan](RECOVERY_PLAN.md).
 ## Parent checks observed
 
 - Service: 137 tests passed on `cb87ea9`, including remote re-export and damaged metadata recovery.
-- Native: 85 tests and `cargo check` passed on that tree; the additional native validation field-name
-  regression passed on `658f524`. Final native suite count is 86.
+- Native: all 86 tests and `cargo check` passed on `b7bd708`, including the validation field-name
+  boundary regression from `658f524`.
 - UI and service builds pass after integration. Worker browser evidence: 119 visual-Git assertions
   with recorded native-command stand-ins; 169 recovery assertions forwarding to the real engine.
   Those are browser harness results, separate from the actual desktop evidence below.
@@ -86,7 +86,7 @@ Probe receipts and Peek captures are retained in the smoke directory; tests used
 
 ## Documentation preservation ledger
 
-The root `CLAUDE.md` was reduced from 157 lines / 5,624 bytes to 50 lines / about 3 KiB.
+The tracked root `CLAUDE.md` was reduced from 155 lines / 5,469 bytes to 50 lines / 3,011 bytes.
 
 | Earlier content | Disposition |
 |---|---|

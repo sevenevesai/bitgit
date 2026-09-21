@@ -22,11 +22,11 @@ The [audience review and research](docs/PRODUCT_REVIEW.md) explain the product d
 
 ### Why BitGit?
 
-**The Problem:** Managing multiple repositories is tedious
-- Manually checking status across 10+ repos
-- Forgetting which projects have uncommitted changes
-- Losing track of remote branches that need merging
-- Switching between GitHub and local directories constantly
+**The problem:** Long coding sessions can erase a working version
+- AI changes can break a feature that worked earlier
+- Git commands and staging rules can obscure what will be saved or published
+- A local save does not establish that a remote copy exists or that the code works
+- Finding a regression requires comparing versions and recording what was tested
 
 **The workflow:** Save, inspect, recover
 - See all your projects at a glance
