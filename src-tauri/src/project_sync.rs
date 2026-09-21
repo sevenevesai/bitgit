@@ -150,6 +150,7 @@ fn details(committed: Option<u32>, pushed: Option<u32>) -> SyncDetails {
     SyncDetails {
         committed,
         pushed,
+        pulled: None,
         merged: None,
         deleted: None,
         errors: None,
@@ -242,6 +243,7 @@ pub fn full_sync_outcome(result: FullSyncResult) -> SyncResult {
         details: SyncDetails {
             committed: result.committed,
             pushed: result.pushed,
+            pulled: result.pulled,
             merged: result.merged,
             deleted: result.deleted,
             errors: result.errors,
@@ -257,7 +259,7 @@ pub fn advances_last_synced(action: &SyncAction, result: &SyncResult) -> bool {
     }
     match action {
         SyncAction::PushLocal { .. } => result.details.pushed.unwrap_or(0) > 0,
-        SyncAction::FullSync { .. } => true,
+        SyncAction::FullSync { .. } => result.details.pushed.unwrap_or(0) > 0 || result.details.pulled.unwrap_or(0) > 0,
         SyncAction::MergeBranches { .. } | SyncAction::PullBranches { .. } => result
             .details
             .merged
@@ -750,6 +752,7 @@ mod tests {
             message: "Full sync completed".to_string(),
             committed: Some(2),
             pushed: None,
+            pulled: None,
             merged: Some(vec!["feature".to_string()]),
             deleted: None,
             errors: None,
@@ -764,6 +767,7 @@ mod tests {
             message: "ok".to_string(),
             committed: Some(0),
             pushed: Some(0),
+            pulled: None,
             merged: None,
             deleted: None,
             errors: None,
@@ -778,6 +782,7 @@ mod tests {
             message: "Full sync completed".to_string(),
             committed: Some(1),
             pushed: Some(1),
+            pulled: None,
             merged: None,
             deleted: None,
             errors: Some(vec!["Merge failed: conflict".to_string()]),
@@ -844,6 +849,7 @@ mod tests {
             message: "Full sync failed: offline".to_string(),
             committed: None,
             pushed: None,
+            pulled: None,
             merged: None,
             deleted: None,
             errors: Some(vec!["offline".to_string()]),
@@ -855,11 +861,15 @@ mod tests {
             message: "Full sync completed".to_string(),
             committed: Some(0),
             pushed: Some(0),
+            pulled: None,
             merged: None,
             deleted: None,
             errors: None,
         });
-        assert!(advances_last_synced(&full_action(), &ok_full));
+        assert!(!advances_last_synced(&full_action(), &ok_full));
+        let mut fast_forwarded = ok_full;
+        fast_forwarded.details.pulled = Some(2);
+        assert!(advances_last_synced(&full_action(), &fast_forwarded));
     }
 
     // ---- import: keys ----

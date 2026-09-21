@@ -387,7 +387,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
       });
 
       const visibility = isPrivate ? 'private' : 'public';
-      toast.success(`GitHub repository created and pushed as ${visibility}!`, { id: 'create-repo' });
+      toast.success(`Created a ${visibility} GitHub repository. Choose files to publish when ready.`, { id: 'create-repo' });
 
       // Refresh project in store
       await useAppStore.getState().refreshProject(project.id);

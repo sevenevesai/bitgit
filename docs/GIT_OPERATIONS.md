@@ -108,17 +108,20 @@ changes, and a branch not behind its upstream.
 - `pushToRemote(localPath, remoteName, branch, options?)` keeps its branch handling, then pushes
   through `GitOperations.pushExistingCommits(remote, branch, options)` with validation.
 
-## IPC handoff (parent-owned)
+## IPC and native callers
 
-Forward `options` (`selectedFiles`, `allowWarnings`) for `pushLocal`, `fullSync`, `pushToRemote`,
-`validateBeforeSync`, `mergeBranches` and `pullBranches`; forward `scope` for `getDiff`; add
-`getFileChanges`. Until then existing callers get push-only behavior and a needs-selection error on
-dirty trees. Errors are ordinary `Error`s (`message` is sanitized); read `outcome`/`issues` from
+IPC forwards `selectedFiles`/`allowWarnings` for publishing and validation, `scope` for `getDiff`,
+and exposes `getFileChanges`. Missing selections fail closed on dirty trees. Rust exposes
+`git_get_file_changes` and forwards selection through `sync_project` and `validate_before_sync`.
+Errors are ordinary `Error`s (`message` is sanitized); read `outcome`/`issues` from
 `PublishError` and `merged`/`stage` from `BranchIntegrationError`. Consumers must honor `pushed`
 and `success` instead of assuming a push.
 
 ## Known limits
 
-`initRepository` still stages everything into its first local commit; validation then blocks the
-push, not the commit. Other read methods (`getBranches` and similar) still call `ensureGitRepo`,
-which initializes a missing repository. Secret screening is heuristic.
+`initRepository` creates metadata only; the first commit requires reviewed files. Read methods
+refuse a missing repository instead of initializing it. Adding an existing remote refuses a
+different URL. Secret screening is heuristic.
+
+`node --test git-service/tests/ipc-publishing.test.mjs` exercises the real Node IPC process,
+selected publishing and validation, index preservation, and initialization without an automatic commit.

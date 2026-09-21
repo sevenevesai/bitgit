@@ -146,8 +146,8 @@ impl GitService {
         Ok(status)
     }
 
-    pub fn validate_before_sync(&self, repo_path: &str) -> Result<crate::models::PreSyncValidation> {
-        let payload = serde_json::json!({ "repoPath": repo_path });
+    pub fn validate_before_sync(&self, repo_path: &str, selected_files: Option<Vec<String>>) -> Result<crate::models::PreSyncValidation> {
+        let payload = publish_payload(repo_path, None, None, None, &PublishOptions { selected_files, allow_warnings: false });
         let result = self.execute("validateBeforeSync", payload)?;
         let validation: crate::models::PreSyncValidation = serde_json::from_value(result)?;
         Ok(validation)
@@ -272,16 +272,6 @@ impl GitService {
         Ok(())
     }
 
-    pub fn push_to_remote(&self, local_path: &str, remote_name: &str, branch: &str) -> Result<()> {
-        let payload = serde_json::json!({
-            "localPath": local_path,
-            "remoteName": remote_name,
-            "branch": branch
-        });
-        self.execute("pushToRemote", payload)?;
-        Ok(())
-    }
-
     // Advanced Git Features
     pub fn get_branches(&self, repo_path: &str) -> Result<Vec<BranchInfo>> {
         let payload = serde_json::json!({ "repoPath": repo_path });
@@ -329,10 +319,16 @@ impl GitService {
         Ok(commits)
     }
 
-    pub fn get_diff(&self, repo_path: &str, file_path: Option<String>) -> Result<Vec<DiffInfo>> {
+    pub fn get_file_changes(&self, repo_path: &str) -> Result<Vec<FileChangeInfo>> {
+        let result = self.execute("getFileChanges", serde_json::json!({ "repoPath": repo_path }))?;
+        Ok(serde_json::from_value(result)?)
+    }
+
+    pub fn get_diff(&self, repo_path: &str, file_path: Option<String>, scope: Option<String>) -> Result<Vec<DiffInfo>> {
         let payload = serde_json::json!({
             "repoPath": repo_path,
-            "filePath": file_path
+            "filePath": file_path,
+            "scope": scope.unwrap_or_else(|| "all".to_string())
         });
         let result = self.execute("getDiff", payload)?;
         let diffs: Vec<DiffInfo> = serde_json::from_value(result)?;
@@ -625,6 +621,8 @@ pub struct FullSyncResult {
     #[serde(default)]
     pub pushed: Option<u32>,
     #[serde(default)]
+    pub pulled: Option<u32>,
+    #[serde(default)]
     pub merged: Option<Vec<String>>,
     #[serde(default)]
     pub deleted: Option<Vec<String>>,
@@ -686,6 +684,21 @@ pub struct DiffChange {
 pub struct DiffInfo {
     pub file_name: String,
     pub changes: Vec<DiffChange>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub binary: bool,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileChangeInfo {
+    pub path: String,
+    pub staged: Option<String>,
+    pub unstaged: Option<String>,
+    pub untracked: bool,
+    pub conflicted: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

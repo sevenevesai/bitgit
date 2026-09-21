@@ -147,6 +147,7 @@ pub struct SyncResult {
 pub struct SyncDetails {
     pub committed: Option<u32>,
     pub pushed: Option<u32>,
+    pub pulled: Option<u32>,
     pub merged: Option<Vec<String>>,
     pub deleted: Option<Vec<String>>,
     pub errors: Option<Vec<String>>,

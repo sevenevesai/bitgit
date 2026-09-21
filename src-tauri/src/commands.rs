@@ -1,6 +1,6 @@
 use crate::app_settings::{self, EditorConfig, EditorPreset};
 use crate::credentials::CredentialManager;
-use crate::git_service::{GitService, PublishOptions, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo};
+use crate::git_service::{GitService, PublishOptions, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo, FileChangeInfo};
 use crate::models::*;
 use crate::project_cache;
 use crate::project_sync::{self, LocalRepoImport};
@@ -20,7 +20,7 @@ static GIT_SERVICE: Lazy<Mutex<Option<Arc<GitService>>>> = Lazy::new(|| Mutex::n
 
 /// Helper to safely acquire a mutex lock, handling poison errors gracefully.
 /// If the lock is poisoned (previous holder panicked), we recover by accessing the data anyway.
-fn safe_lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<T>, String> {
+fn safe_lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, String> {
     mutex.lock().map_err(|e: PoisonError<MutexGuard<T>>| {
         // Recover from poison - the data may be in an inconsistent state but we log it
         eprintln!("[Rust] Warning: Mutex was poisoned, recovering...");
@@ -726,13 +726,9 @@ pub async fn create_github_repository(
     service.init_repository(&local_path)
         .map_err(|e| format!("Failed to initialize git repository: {}", e))?;
 
-    // Add remote and push
+    // Link the remote. Publishing is a separate action with an explicit file selection.
     service.add_remote(&local_path, "origin", &github_url)
         .map_err(|e| format!("Failed to add remote: {}", e))?;
-
-    // Push to GitHub
-    service.push_to_remote(&local_path, "origin", "main")
-        .map_err(|e| format!("Failed to push to GitHub: {}", e))?;
 
     // Record the GitHub link on the stored project (re-read under the cache lock: the
     // network calls above are slow and other commands may have edited it meanwhile)
@@ -748,7 +744,7 @@ pub async fn create_github_repository(
 /// Validate files before sync to prevent push failures
 /// Checks for large files (>100MB GitHub limit) and problematic patterns
 #[tauri::command]
-pub async fn validate_before_sync(project_id: String) -> Result<PreSyncValidation, String> {
+pub async fn validate_before_sync(project_id: String, selected_files: Option<Vec<String>>) -> Result<PreSyncValidation, String> {
     let projects = project_cache::load_projects()
         .map_err(|e| format!("Failed to load projects: {}", e))?;
 
@@ -764,7 +760,7 @@ pub async fn validate_before_sync(project_id: String) -> Result<PreSyncValidatio
 
     let service = get_git_service()?;
     let validation = service
-        .validate_before_sync(local_path)
+        .validate_before_sync(local_path, selected_files)
         .map_err(|e| format!("Validation failed: {}", e))?;
 
     Ok(validation)
@@ -814,10 +810,16 @@ pub async fn git_get_commit_history(repo_path: String, limit: u32) -> Result<Vec
 }
 
 #[tauri::command]
-pub async fn git_get_diff(repo_path: String, file_path: Option<String>) -> Result<Vec<DiffInfo>, String> {
+pub async fn git_get_diff(repo_path: String, file_path: Option<String>, scope: Option<String>) -> Result<Vec<DiffInfo>, String> {
     let service = get_git_service()?;
-    service.get_diff(&repo_path, file_path)
+    service.get_diff(&repo_path, file_path, scope)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_get_file_changes(repo_path: String) -> Result<Vec<FileChangeInfo>, String> {
+    get_git_service()?.get_file_changes(&repo_path)
+        .map_err(|e| format!("Failed to get changed files: {}", e))
 }
 
 #[tauri::command]
@@ -986,10 +988,22 @@ pub async fn apply_project_template(
         .as_ref()
         .ok_or_else(|| "Project has no local path".to_string())?;
 
-    // Write .gitignore file if content is provided
+    // Existing rules remain last so their explicit exceptions still override template defaults.
     if !gitignore_content.is_empty() {
         let gitignore_path = Path::new(local_path).join(".gitignore");
-        fs::write(&gitignore_path, keep_cargo_lock_tracked(&template_id, &gitignore_content))
+        if fs::symlink_metadata(&gitignore_path).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+            return Err("The .gitignore file is a link; edit it explicitly before applying a template".to_string());
+        }
+        let existing = match fs::read_to_string(&gitignore_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(format!("Failed to read existing .gitignore: {}", error)),
+        };
+        let proposed = keep_cargo_lock_tracked(&template_id, &gitignore_content);
+        let existing_lines: HashSet<&str> = existing.lines().map(str::trim).collect();
+        let additions: Vec<&str> = proposed.lines().filter(|line| !line.trim().is_empty() && !existing_lines.contains(line.trim())).collect();
+        let combined = if additions.is_empty() { existing } else { format!("{}\n{}", additions.join("\n"), existing) };
+        fs::write(&gitignore_path, combined)
             .map_err(|e| format!("Failed to write .gitignore: {}", e))?;
     }
 

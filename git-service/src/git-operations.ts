@@ -264,23 +264,10 @@ export class GitOperations {
     this.git = simpleGit(repoPath);
   }
 
-  /**
-   * Ensures the directory is initialized as a git repository.
-   * If .git doesn't exist, initializes it with main branch.
-   * Returns true if initialization was needed, false if already a repo.
-   */
+  // Legacy callers include analytics and other reads. Never create Git metadata here.
   async ensureGitRepo(): Promise<boolean> {
-    try {
-      // Try to get status - if this succeeds, it's already a git repo
-      await this.git.status();
-      return false; // Already initialized
-    } catch (error) {
-      // Not a git repo, initialize it
-      console.error(`[Git] Directory ${this.repoPath} is not a git repository, initializing...`);
-      await this.git.init(['-b', 'main']);
-      console.error(`[Git] Initialized git repository at ${this.repoPath}`);
-      return true; // Just initialized
-    }
+    await this.requireRepo();
+    return false;
   }
 
   private run(args: string[], options?: GitRunOptions): Promise<GitRun> {
@@ -1833,63 +1820,16 @@ export async function cloneRepository(githubUrl: string, localPath: string): Pro
 }
 
 export async function initRepository(localPath: string): Promise<void> {
-  try {
-    const git = simpleGit(localPath);
-    let isNewRepo = false;
-
-    // Check if already a git repository
-    try {
-      await git.status();
-      // Already a git repo
-    } catch (e) {
-      // Not a git repo, initialize with main branch
-      await git.init(['-b', 'main']);
-      isNewRepo = true;
-    }
-
-    // Check if there are any commits
-    let hasCommits = false;
-    try {
-      await git.log(['-n', '1']);
-      hasCommits = true;
-    } catch (e) {
-      // No commits yet
-      hasCommits = false;
-    }
-
-    // If no commits, create initial commit
-    if (!hasCommits) {
-      const status = await git.status();
-
-      // If there are files to commit
-      if (status.files.length > 0 || status.not_added.length > 0) {
-        // Stage all files
-        await git.add('.');
-        await git.commit('Initial commit');
-      } else {
-        // No files exist, create a README
-        const fs = await import('fs/promises');
-        const path = await import('path');
-        const readmePath = path.join(localPath, 'README.md');
-
-        await fs.writeFile(readmePath, '# Project\n\nInitialized with BitGit\n');
-        await git.add('README.md');
-        await git.commit('Initial commit');
-      }
-
-      // Ensure we're on main branch (for older git versions that might use master)
-      try {
-        const currentBranch = (await git.status()).current;
-        if (currentBranch !== 'main') {
-          await git.branch(['-M', 'main']);
-        }
-      } catch (e) {
-        // Branch rename might fail, but that's ok
-      }
-    }
-  } catch (error) {
-    throw new Error(`Failed to initialize repository: ${error}`);
+  const probe = await runGit(localPath, ['rev-parse', '--is-inside-work-tree', '--show-cdup'], { readOnly: true });
+  if (probe.code === 0) {
+    const [inside, parent] = probe.stdout.toString('utf8').split('\n');
+    if (inside.trim() !== 'true' || (parent ?? '').trim() !== '') throw new Error('Choose a repository root, not a folder inside another repository.');
+    return;
   }
+  if (!/not a git repository/i.test(probe.stderr)) throw new Error(`Cannot inspect repository: ${gitMessage(probe)}`);
+  const initialized = await runGit(localPath, ['init', '-b', 'main']);
+  if (initialized.code !== 0) throw new Error(`Failed to initialize repository: ${gitMessage(initialized)}`);
+  // Initialization creates metadata only. The first commit also requires an explicit file selection.
 }
 
 export async function addRemote(localPath: string, remoteName: string, remoteUrl: string): Promise<void> {
@@ -1901,8 +1841,10 @@ export async function addRemote(localPath: string, remoteName: string, remoteUrl
     const remoteExists = remotes.some(r => r.name === remoteName);
 
     if (remoteExists) {
-      // Update existing remote
-      await git.remote(['set-url', remoteName, remoteUrl]);
+      const existingUrl = await git.remote(['get-url', remoteName]);
+      if (normalizeRemoteUrl(existingUrl ?? '') !== normalizeRemoteUrl(remoteUrl)) {
+        throw new Error('This remote already points to a different repository. Change it explicitly in Git before linking.');
+      }
     } else {
       // Add new remote
       await git.addRemote(remoteName, remoteUrl);

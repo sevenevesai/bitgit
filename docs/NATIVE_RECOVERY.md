@@ -51,8 +51,13 @@ service omitting the new fields never yields `synced`.
 `push_local`/`full_sync` take `PublishOptions` and send `selectedFiles` (only when set) and `allowWarnings`
 (default false). Results report only what the service returned: push count is 1 if `pushed` else 0, and a
 commit that was not pushed is `success=false`; `pushed`/`deleted` for full sync and merge pass through and
-are never assumed; full sync with errors is not success. `lastSynced` advances only when data moved (push
-`pushed>0`, successful full sync, non-empty pull/merge) - never on failed, partial or no-op results.
+are never assumed; full sync with errors is not success. Full sync also forwards `pulled` commits.
+`lastSynced` advances only on a reported push/pull count or non-empty explicit branch integration,
+never on failed, partial or no-op results.
+
+`validate_before_sync(project_id, selected_files?)` forwards the same selection as publishing.
+`git_get_file_changes(repo_path)` returns staged/unstaged/untracked states; `git_get_diff` accepts
+an optional scope and preserves scope/binary/truncated flags for the UI.
 
 ## Imports and cache
 
@@ -71,8 +76,10 @@ lost updates and the shared `.tmp` race; `update_project(id, f)` re-reads under 
 do not overwrite concurrent edits. The atomic-write, `.bak` and recovery sequence is unchanged. Two BitGit
 processes on one data directory are not coordinated.
 
-`apply_project_template` drops the `Cargo.lock` rule from the `rust` template (application lockfiles stay
-tracked). The rule itself is in `src/types/index.ts`; remove it there (UI) and the guard is a no-op.
+`apply_project_template` prepends missing defaults and preserves existing rules last, so user exceptions
+retain precedence. It refuses a linked `.gitignore`. Application templates include lockfiles.
+Creating a GitHub repository initializes Git metadata and links an empty remote; publishing requires
+a separate reviewed file selection, including the first commit.
 
 ## Verification
 
@@ -84,7 +91,6 @@ handling. Runtime behavior against the Node service and UI is not verified here.
 
 - By code reading, a service crash is not detected or restarted: later commands fail until the app restarts.
 - Local imports match by path only (no origin URL read), so a scan does not link to a GitHub-only project.
-- `apply_project_template` overwrites an existing `.gitignore`.
 
 Debug native smoke runs set an absolute `BITGIT_TEST_DATA_DIR`. Cache, settings, and recovery use that
 isolated directory, and credential access is disabled. Release builds ignore the test override.

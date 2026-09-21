@@ -397,8 +397,6 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
-yarn.lock
 
 # Environment
 .env
@@ -485,7 +483,6 @@ coverage/`,
     description: 'Rust project with Cargo ignores',
     gitignore: `# Cargo
 /target/
-Cargo.lock
 
 # IDE
 .vscode/

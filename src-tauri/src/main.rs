@@ -53,6 +53,7 @@ fn main() {
             git_delete_branch,
             git_get_commit_history,
             git_get_diff,
+            git_get_file_changes,
             git_create_stash,
             git_list_stashes,
             git_apply_stash,
