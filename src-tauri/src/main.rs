@@ -7,6 +7,7 @@ mod commands;
 mod credentials;
 mod git_service;
 mod gitignore;
+mod instance_lock;
 mod models;
 mod project_cache;
 mod project_sync;
@@ -16,6 +17,27 @@ mod scanner;
 use commands::*;
 
 fn main() {
+    // Held until the process exits. Keyed on the data directory, so an isolated smoke run never
+    // collides with the installed app. The recovery CLI never takes it: idle saves run beside the GUI.
+    let _instance = match app_data::config_dir() {
+        Ok(data_dir) => match instance_lock::acquire(&data_dir) {
+            Ok(lock) => Some(lock),
+            Err(instance_lock::AlreadyRunning) => {
+                tauri::api::dialog::blocking::message(
+                    None::<&tauri::Window>,
+                    "BitGit",
+                    "BitGit is already running. Close the other window first.",
+                );
+                return;
+            }
+        },
+        Err(error) => {
+            // Fail open like instance_lock::acquire; the commands report the data directory error.
+            eprintln!("BitGit instance lock unavailable, starting without it: {error:#}");
+            None
+        }
+    };
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             greet,

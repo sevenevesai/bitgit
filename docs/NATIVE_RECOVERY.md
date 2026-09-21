@@ -105,7 +105,9 @@ minutes fails without restarting the service: a restart would kill other reposit
   or replace each other's token between `setGithubToken` and `recovery`. Carrying the token inside the
   request would close the window.
 - Local imports match by path only (no origin URL read), so a scan does not link to a GitHub-only project.
-- The cache lock is in-process: two BitGit processes on one data directory are not coordinated.
+- One GUI process per data directory: `main` holds `instance.lock` there, opened without sharing, and a
+  second process says BitGit is already running and exits. The OS releases the lock when the process
+  dies. The recovery CLI and the Node service never take it; the vault has its own `operation.lock`.
 
 Debug native smoke runs set an absolute `BITGIT_TEST_DATA_DIR`. Cache, settings, and recovery use that
 isolated directory, and credential access is disabled. Release builds ignore the test override.
