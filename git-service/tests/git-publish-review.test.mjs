@@ -34,6 +34,22 @@ function commitLeak(work, message = 'oops') {
 }
 
 describe('tag publishing validates like a branch push (H1)', () => {
+  it('inspects the same tag object it publishes when another process moves the local ref', async () => {
+    const { remote, work } = project();
+    const clean = fx.head(work);
+    commitLeak(work);
+    fx.git(work, 'tag', 'moving');
+    const ops = new GitOperations(work), originalRun = ops.run.bind(ops);
+    ops.run = async (args, options) => {
+      if (args[0] === 'cat-file' && args[1] === '--batch-check=%(objectname) %(objecttype)') {
+        fx.git(work, 'update-ref', 'refs/tags/moving', clean);
+      }
+      return originalRun(args, options);
+    };
+    assert.ok(blockedBy(await caught(ops.pushTag('moving')), 'notes.txt'));
+    assert.deepEqual(remoteTags(remote), []);
+  });
+
   it('blocks a tag whose commit holds a credential file and pushes nothing', async () => {
     const { remote, work } = project();
     fx.write(work, '.env', `API_KEY=${fx.FAKE_TOKEN}\n`);

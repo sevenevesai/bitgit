@@ -243,13 +243,8 @@ impl ProjectStore {
         }
         // If the current file is invalid, the backup is left as is (it may be the only good copy)
 
-        // Step 6: Atomic rename temp -> main
-        // On Windows, we need to remove the destination first if it exists
-        if cache_path.exists() {
-            fs::remove_file(&cache_path)
-                .context("Failed to remove old cache file")?;
-        }
-
+        // std::fs::rename replaces a file on Windows too. Removing main first would
+        // introduce a crash window between deletion and publication.
         fs::rename(&temp_path, &cache_path)
             .context("Failed to rename temp file to cache file")?;
 
@@ -288,12 +283,7 @@ impl ProjectStore {
             return Err(e);
         }
 
-        // Remove corrupted main file if it exists
-        if cache_path.exists() {
-            let _ = fs::remove_file(&cache_path);
-        }
-
-        // Rename temp to main
+        // Replace the preserved main directly; a failed rename leaves it in place.
         fs::rename(&temp_path, &cache_path)
             .context("Failed to restore cache file")?;
 

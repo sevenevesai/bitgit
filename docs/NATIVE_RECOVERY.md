@@ -71,6 +71,7 @@ a separate reviewed file selection, including the first commit.
 
 `ProjectStore` serializes every load, save and read-modify-write behind one process-wide lock;
 `update_project` re-reads under it. Writes stay atomic (temp, verify, `.bak`, rename).
+Rename replaces main directly on Windows too; deleting it first would introduce a crash gap.
 
 `projects.json` and `projects.json.bak` live in the app data directory (`%APPDATA%\BitGit`). A file that is
 not a valid project list (corrupt, truncated, non-UTF-8, an unknown value such as a newer status; zero-length

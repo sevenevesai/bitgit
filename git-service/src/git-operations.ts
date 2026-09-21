@@ -1567,7 +1567,7 @@ export class GitOperations {
 
     const peeled = await this.run(
       ['cat-file', '--batch-check=%(objectname) %(objecttype)'],
-      { readOnly: true, input: tags.map((tag) => `refs/tags/${tag.name}^{commit}\n`).join('') },
+      { readOnly: true, input: tags.map((tag) => `${tag.oid}^{commit}\n`).join('') },
     );
     const resolved = peeled.stdout.toString('utf8').split('\n').filter(Boolean);
     if (peeled.code !== 0 || resolved.length !== tags.length) {
