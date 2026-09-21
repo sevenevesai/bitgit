@@ -7,6 +7,9 @@ import { captureSource, fingerprint, selectCapture, type CapturedSource, type Sn
 import { COVERAGE_LIMITS, exclusionReason, MAX_CAPTURE_BYTES, MAX_CAPTURE_FILES, MAX_FILE_BYTES } from './recovery-policy.js';
 import { pendingRepair, repairFiles, rollbackRepair } from './recovery-repair.js';
 import { backupCheckpoint, importRemoteCheckpoint, listRemoteCheckpoints, verifyBackup } from './recovery-remote.js';
+import { autoTick, readRecoverySettings, updateRecoverySettings } from './recovery-automation.js';
+import { recordEvidence, runCheckpointCheck } from './recovery-evidence.js';
+import { getRegression, observeRegression, startRegression } from './recovery-regression.js';
 import type { Checkpoint, CheckpointPreview, RecoveryComparison, RecoveryReceipt, RecoveryRequest, RecoveryResults, RecoverySettings, RecoveryState } from './recovery-types.js';
 
 export const DEFAULT_RECOVERY_SETTINGS: RecoverySettings = { automaticEnabled: false, idleMinutes: 5, retention: 'keep_all' };
@@ -79,7 +82,7 @@ export class RecoveryService {
     const checkpoints: Checkpoint[] = [];
     for (const id of refs.split('\n').filter(Boolean)) checkpoints.push(await this.readCheckpoint(id.trim()));
     checkpoints.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
-    const settings = await readJson<RecoverySettings>(path.join(this.vaultPath, 'settings.json'), DEFAULT_RECOVERY_SETTINGS);
+    const settings = await readRecoverySettings(this);
     return { checkpoints, settings, vaultPath: this.vaultPath, sourceAvailable: await exists(this.repoPath), pendingRepair: await pendingRepair(this) };
   }
   async create(request: Extract<RecoveryRequest, { action: 'create' }>): Promise<Checkpoint> {
@@ -267,7 +270,14 @@ export class RecoveryService {
         case 'verifyBackup': result = await verifyBackup(this, request.checkpointId); break;
         case 'remoteList': result = await listRemoteCheckpoints(this, request.remoteUrl); break;
         case 'remoteImport': result = await importRemoteCheckpoint(this, request.remoteUrl, request.ref); break;
-        default: throw new Error(`Recovery action is not implemented: ${request.action}`);
+        case 'settings': result = await updateRecoverySettings(this, request.settings); break;
+        case 'autoTick': result = await autoTick(this); break;
+        case 'evidence': result = await recordEvidence(this, request); break;
+        case 'runCheck': result = await runCheckpointCheck(this, request); break;
+        case 'regressionStart': result = await startRegression(this, request.goodId, request.badId); break;
+        case 'regressionObserve': result = await observeRegression(this, request.sessionId, request.checkpointId, request.outcome); break;
+        case 'regressionGet': result = await getRegression(this, request.sessionId); break;
+        default: throw new Error(`Unknown recovery action: ${String((request as { action?: unknown }).action)}`);
       }
       return result as RecoveryResults[R['action']];
     });

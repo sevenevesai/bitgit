@@ -19,6 +19,8 @@ export interface CheckpointEvidence {
   exitCode?: number | null;
   output?: string;
   screenshotPath?: string;
+  // runCheck only: the retained recovered copy the command ran in (a temporary folder; may be deleted later).
+  workingCopyPath?: string;
 }
 export interface BackupReceipt {
   remoteUrl: string;
