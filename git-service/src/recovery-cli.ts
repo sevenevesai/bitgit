@@ -11,7 +11,7 @@ import type { RecoveryRequest } from './recovery-types.js';
 export const MAX_REQUEST_BYTES = 1024 * 1024;
 const ACTIONS: Record<RecoveryRequest['action'], true> = {
   state: true, preview: true, create: true, compare: true, recover: true, repair: true, repairRollback: true, backup: true, verifyBackup: true,
-  remoteList: true, remoteImport: true, settings: true, autoTick: true, evidence: true, runCheck: true, regressionStart: true,
+  remoteList: true, remoteImport: true, settings: true, autoTick: true, evidence: true, evidenceImage: true, runCheck: true, regressionStart: true,
   regressionObserve: true, regressionGet: true,
 };
 

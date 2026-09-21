@@ -121,6 +121,7 @@ export type RecoveryRequest =
   | { action: 'settings'; settings: RecoverySettings }
   | { action: 'autoTick' }
   | { action: 'evidence'; checkpointId: string; description: string; outcome: 'passed' | 'failed' | 'untested'; screenshotPath?: string }
+  | { action: 'evidenceImage'; checkpointId: string; evidenceId: string }
   | { action: 'runCheck'; checkpointId: string; command: string; timeoutSeconds?: number }
   | { action: 'regressionStart'; goodId: string; badId: string }
   | { action: 'regressionObserve'; sessionId: string; checkpointId: string; outcome: 'good' | 'bad' | 'skip' }
@@ -141,6 +142,7 @@ export interface RecoveryResults {
   settings: RecoverySettings;
   autoTick: { checkpoint: Checkpoint | null; reason: string };
   evidence: CheckpointEvidence;
+  evidenceImage: { dataUrl: string };
   runCheck: CheckpointEvidence;
   regressionStart: RegressionSession;
   regressionObserve: RegressionSession;

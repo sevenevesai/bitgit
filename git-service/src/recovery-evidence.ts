@@ -105,6 +105,23 @@ export async function recordEvidence(service: RecoveryService, request: Extract<
 
 interface ShellResult { exitCode: number | null; signal: string | null; timedOut: boolean; stopped: boolean; error?: string; output: Buffer; truncated: boolean; }
 
+export async function readEvidenceImage(service: RecoveryService, checkpointId: string, evidenceId: string): Promise<{ dataUrl: string }> {
+  const checkpoint = await service.readCheckpoint(checkpointId);
+  if (typeof evidenceId !== 'string' || !/^[0-9a-f-]{36}$/.test(evidenceId)) throw new Error('Invalid evidence ID');
+  const entry = checkpoint.evidence.find(item => item.id === evidenceId);
+  if (!entry?.screenshotPath) throw new Error('This observation has no screenshot');
+  const expectedDirectory = path.join(service.vaultPath, 'evidence', checkpoint.id, evidenceId);
+  const file = path.resolve(entry.screenshotPath);
+  if (path.dirname(file) !== expectedDirectory || !/^screenshot\.(png|jpg|webp)$/.test(path.basename(file))) throw new Error('Invalid saved screenshot path');
+  await assertNoLinks(service.vaultPath, file);
+  const stat = await fs.lstat(file);
+  if (!stat.isFile() || stat.size > MAX_SCREENSHOT_BYTES) throw new Error('Invalid saved screenshot');
+  const bytes = await fs.readFile(file);
+  const extension = imageExtension(bytes);
+  if (!extension || bytes.length > MAX_SCREENSHOT_BYTES) throw new Error('Invalid saved screenshot');
+  return { dataUrl: `data:image/${extension === 'jpg' ? 'jpeg' : extension};base64,${bytes.toString('base64')}` };
+}
+
 function killTree(child: ChildProcess): Promise<void> {
   const pid = child.pid;
   if (!pid) return Promise.resolve();

@@ -8,7 +8,7 @@ import { COVERAGE_LIMITS, exclusionReason, MAX_CAPTURE_BYTES, MAX_CAPTURE_FILES,
 import { pendingRepair, repairFiles, rollbackRepair } from './recovery-repair.js';
 import { backupCheckpoint, importRemoteCheckpoint, listRemoteCheckpoints, verifyBackup } from './recovery-remote.js';
 import { autoTick, readRecoverySettings, updateRecoverySettings } from './recovery-automation.js';
-import { recordEvidence, runCheckpointCheck } from './recovery-evidence.js';
+import { recordEvidence, runCheckpointCheck, readEvidenceImage } from './recovery-evidence.js';
 import { getRegression, observeRegression, startRegression } from './recovery-regression.js';
 import type { Checkpoint, CheckpointPreview, RecoveryComparison, RecoveryReceipt, RecoveryRequest, RecoveryResults, RecoverySettings, RecoveryState } from './recovery-types.js';
 
@@ -276,6 +276,7 @@ export class RecoveryService {
         case 'settings': result = await updateRecoverySettings(this, request.settings); break;
         case 'autoTick': result = await autoTick(this); break;
         case 'evidence': result = await recordEvidence(this, request); break;
+        case 'evidenceImage': result = await readEvidenceImage(this, request.checkpointId, request.evidenceId); break;
         case 'runCheck': result = await runCheckpointCheck(this, request); break;
         case 'regressionStart': result = await startRegression(this, request.goodId, request.badId); break;
         case 'regressionObserve': result = await observeRegression(this, request.sessionId, request.checkpointId, request.outcome); break;

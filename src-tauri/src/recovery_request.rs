@@ -84,6 +84,7 @@ fn action_fields(action: &str) -> Option<Vec<Field>> {
             req("outcome", Text),
         ],
         "regressionGet" => vec![req("sessionId", Text)],
+        "evidenceImage" => vec![req("checkpointId", Text), req("evidenceId", Text)],
         _ => return None,
     })
 }
