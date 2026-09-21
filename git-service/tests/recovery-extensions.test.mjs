@@ -60,7 +60,7 @@ const listFiles = async directory => (await fs.readdir(directory, { recursive: t
 
 // ---------- settings and automatic saves ----------
 
-test('settings validate strictly, persist, and malformed stored settings fail until replaced', async t => {
+test('malformed settings disable automation while recovery history stays available', async t => {
   const { service, state, enable, vaultRoot, repo } = await fixtures(t);
   assert.deepEqual((await state()).settings, { automaticEnabled: false, idleMinutes: 5, retention: 'keep_all' });
   const invalid = [
@@ -83,10 +83,12 @@ test('settings validate strictly, persist, and malformed stored settings fail un
 
   const file = path.join(service.vaultPath, 'settings.json');
   await fs.writeFile(file, JSON.stringify({ automaticEnabled: 'maybe', idleMinutes: 5, retention: 'keep_all' }));
-  await assert.rejects(state(), /Saved automatic-save settings are invalid/);
+  const invalidState = await state();
+  assert.match(invalidState.settingsError, /Saved automatic-save settings are invalid/);
+  assert.equal(invalidState.settings.automaticEnabled, false);
   await assert.rejects(service.dispatch({ action: 'autoTick' }), /invalid/);
   await fs.writeFile(file, 'not json');
-  await assert.rejects(state(), /settings\.json/);
+  assert.match((await state()).settingsError, /settings\.json/);
   await enable();
   assert.equal((await state()).settings.automaticEnabled, true, 'saving valid settings replaces the malformed file');
 });

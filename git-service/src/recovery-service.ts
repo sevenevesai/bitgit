@@ -82,8 +82,11 @@ export class RecoveryService {
     const checkpoints: Checkpoint[] = [];
     for (const id of refs.split('\n').filter(Boolean)) checkpoints.push(await this.readCheckpoint(id.trim()));
     checkpoints.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
-    const settings = await readRecoverySettings(this);
-    return { checkpoints, settings, vaultPath: this.vaultPath, sourceAvailable: await exists(this.repoPath), pendingRepair: await pendingRepair(this) };
+    let settings = { ...DEFAULT_RECOVERY_SETTINGS }, settingsError: string | undefined;
+    try { settings = await readRecoverySettings(this); } catch (error) {
+      settingsError = error instanceof Error ? error.message : String(error);
+    }
+    return { checkpoints, settings, settingsError, vaultPath: this.vaultPath, sourceAvailable: await exists(this.repoPath), pendingRepair: await pendingRepair(this) };
   }
   async create(request: Extract<RecoveryRequest, { action: 'create' }>): Promise<Checkpoint> {
     if (typeof request.label !== 'string' || !request.label.trim() || request.label.length > 120) throw new Error('Name the milestone using 1–120 characters');

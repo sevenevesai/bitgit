@@ -83,6 +83,7 @@ export interface RecoverySettings {
   retention: 'keep_all';
 }
 export interface RecoveryState {
+  settingsError?: string;
   checkpoints: Checkpoint[];
   settings: RecoverySettings;
   vaultPath: string;
