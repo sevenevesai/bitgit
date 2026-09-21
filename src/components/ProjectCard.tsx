@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Project, SyncAction } from '../types';
-import { useAppStore } from '../stores/useAppStore';
+import { useEffect, useRef, useState } from 'react';
+import { Project, PublishAction, SyncAction, SyncResult, FileChangeInfo, PreSyncValidation } from '../types';
+import { useAppStore, describeSyncResult, syncMovedData, syncActionLabel } from '../stores/useAppStore';
 import { invoke } from '@tauri-apps/api/tauri';
 import { open } from '@tauri-apps/api/dialog';
 import toast from 'react-hot-toast';
@@ -8,12 +8,14 @@ import { LinkLocalModal } from './LinkLocalModal';
 import { LinkGitHubModal } from './LinkGitHubModal';
 import { CreateRepoModal } from './CreateRepoModal';
 import { ProjectDetails } from './ProjectDetails';
-import { ValidationWarningModal, PreSyncValidation } from './ValidationWarningModal';
+import { ValidationWarningModal } from './ValidationWarningModal';
 import { CommitModal } from './CommitModal';
+import { BranchIntegrationModal } from './git/BranchIntegrationModal';
+import { GitStatusSummary } from './git/GitStatusSummary';
+import { formatRelativeTime, getCardStatus, CardTone } from './git/gitStatusView';
 import { RecoveryWorkspace } from './recovery/RecoveryWorkspace';
 import {
   GitBranch,
-  GitCommit,
   CheckCircle,
   AlertCircle,
   Clock,
@@ -42,32 +44,37 @@ interface ProjectCardProps {
   project: Project;
 }
 
-// Helper function to format relative time (e.g., "2 hours ago")
-function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSeconds = Math.floor(diffMs / 1000);
-  const diffMinutes = Math.floor(diffSeconds / 60);
-  const diffHours = Math.floor(diffMinutes / 60);
-  const diffDays = Math.floor(diffHours / 24);
+type NoticeTone = 'success' | 'neutral' | 'error';
 
-  if (diffSeconds < 60) {
-    return 'just now';
-  } else if (diffMinutes < 60) {
-    return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} ago`;
-  } else if (diffHours < 24) {
-    return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
-  } else if (diffDays < 7) {
-    return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
-  } else {
-    return date.toLocaleDateString();
-  }
+// The last thing that happened on this card, kept on screen (a toast disappears) until the next action.
+interface Notice {
+  tone: NoticeTone;
+  title: string;
+  detail?: string;
 }
 
+const NOTICE_STYLE: Record<NoticeTone, string> = {
+  success: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-800 dark:text-green-200',
+  neutral: 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300',
+  error: 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-800 dark:text-red-200',
+};
+
+const errorText = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 export function ProjectCard({ project }: ProjectCardProps) {
-  console.log('[ProjectCard] Rendering:', project.name, project);
-  const { syncProject, toggleSelection, selectedProjectIds, deleteProject, updateProject, refreshProject, settings } = useAppStore();
+  const {
+    syncProject,
+    toggleSelection,
+    selectedProjectIds,
+    deleteProject,
+    updateProject,
+    refreshProject,
+    settings,
+    syncingProjects,
+    reviewRequest,
+    requestReview,
+  } = useAppStore();
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showLinkLocalModal, setShowLinkLocalModal] = useState(false);
@@ -76,142 +83,186 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const [showDetails, setShowDetails] = useState(false);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [descriptionText, setDescriptionText] = useState(project.description || '');
-  const [showValidationModal, setShowValidationModal] = useState(false);
-  const [pendingValidation, setPendingValidation] = useState<PreSyncValidation | null>(null);
-  const [pendingSyncAction, setPendingSyncAction] = useState<SyncAction | null>(null);
-  const [showCommitModal, setShowCommitModal] = useState(false);
+  // What is waiting on the validation modal: the exact action (with its exact file list) that was validated
+  const [pending, setPending] = useState<{ action: PublishAction; validation: PreSyncValidation } | null>(null);
+  const [commitKind, setCommitKind] = useState<PublishAction['type'] | null>(null);
+  const [reloadSignal, setReloadSignal] = useState(0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [integrationMode, setIntegrationMode] = useState<'merge_branches' | 'pull_branches' | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [isCommitting, setIsCommitting] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const isSelected = selectedProjectIds.has(project.id);
   const isFavorite = project.favorite || false;
   const isArchived = project.archived || false;
+  const isBusy = isLoading || isCommitting || syncingProjects.has(project.id);
+  const cardStatus = getCardStatus(project);
 
-  // Show details button only when both GitHub and Local are configured
-  const canShowDetails = project.githubUrl && project.localPath;
+  // Advanced Git views need a local Git folder; a GitHub link is not required.
+  const canShowDetails = Boolean(project.localPath) && project.gitStatus?.isGitRepo !== false;
 
   const handleRefreshStatus = async () => {
-    console.log('[ProjectCard] handleRefreshStatus clicked for project:', project.id, project.name);
-    console.log('[ProjectCard] Project details:', {
-      id: project.id,
-      name: project.name,
-      githubUrl: project.githubUrl,
-      localPath: project.localPath,
-      status: project.projectStatus,
-    });
     setIsRefreshing(true);
     try {
-      console.log('[ProjectCard] Calling refreshProject from store...');
-      await refreshProject(project.id);
-      console.log('[ProjectCard] refreshProject completed successfully');
-      toast.success('Status refreshed', { duration: 2000 });
-    } catch (error: any) {
-      console.error('[ProjectCard] refreshProject failed:', error);
-      toast.error(`Failed to refresh: ${error}`);
+      const outcome = await refreshProject(project.id);
+      if (outcome.status === 'ok') {
+        toast.success('Status refreshed', { duration: 2000 });
+      } else if (outcome.status === 'unavailable') {
+        // Checked, but the answer is incomplete: never reported as a success.
+        if (outcome.cause === 'not_git') toast(outcome.reason);
+        else toast.error(`Status could not be fully checked: ${outcome.reason}`, { duration: 6000 });
+      } else if (outcome.status === 'skipped') {
+        toast(outcome.reason);
+      }
+      // A failed refresh has already been reported by the store.
     } finally {
       setIsRefreshing(false);
     }
   };
 
-  const handleSync = async (action: SyncAction) => {
-    // Only validate for actions that push to GitHub
-    const needsValidation = action.type === 'push_local' || action.type === 'full_sync';
-
-    if (needsValidation && project.localPath) {
-      setIsLoading(true);
-      try {
-        // Run validation first
-        const validation = await invoke<PreSyncValidation>('validate_before_sync', {
-          projectId: project.id,
-        });
-
-        // If there are issues, show the modal
-        if (!validation.canProceed || validation.hasWarnings) {
-          setPendingValidation(validation);
-          setPendingSyncAction(action);
-          setShowValidationModal(true);
-          setIsLoading(false);
-          return;
-        }
-
-        // No issues, proceed directly
-        await syncProject(project.id, action);
-      } catch (error: any) {
-        console.error('Validation failed:', error);
-        // If validation fails, still allow sync (graceful degradation)
-        await syncProject(project.id, action);
-      } finally {
-        setIsLoading(false);
-      }
-    } else {
-      // For merge/pull operations, no validation needed
-      setIsLoading(true);
-      try {
-        await syncProject(project.id, action);
-      } finally {
-        setIsLoading(false);
-      }
-    }
+  const reportResult = (action: SyncAction, result: SyncResult) => {
+    const moved = syncMovedData(action, result);
+    setNotice({
+      tone: moved ? 'success' : 'neutral',
+      title: moved ? `${syncActionLabel(action)} finished` : `${syncActionLabel(action)}: nothing was sent or merged`,
+      detail: describeSyncResult(action, result),
+    });
   };
 
-  const handleProceedWithSync = async () => {
-    setShowValidationModal(false);
-    if (pendingSyncAction) {
-      setIsLoading(true);
-      try {
-        await syncProject(project.id, pendingSyncAction);
-      } finally {
-        setIsLoading(false);
-        setPendingSyncAction(null);
-        setPendingValidation(null);
-      }
-    }
-  };
-
-  // Show commit modal when user clicks Push Local
-  const handleShowCommitModal = () => {
-    setShowCommitModal(true);
-  };
-
-  // Handle commit from the modal
-  const handleCommit = async (message: string, description?: string) => {
-    setIsCommitting(true);
-    const action: SyncAction = {
-      type: 'push_local',
-      commitMessage: message,
-      commitDescription: description,
-    };
-
+  // Runs one sync action and keeps the outcome on the card. Returns whether it succeeded.
+  const runAction = async (action: SyncAction): Promise<boolean> => {
+    setNotice(null);
     try {
-      // Run validation first if we have a local path
-      if (project.localPath) {
-        const validation = await invoke<PreSyncValidation>('validate_before_sync', {
-          projectId: project.id,
-        });
+      const result = await syncProject(project.id, action);
+      reportResult(action, result);
+      return true;
+    } catch (error) {
+      setNotice({ tone: 'error', title: `${syncActionLabel(action)} did not complete`, detail: errorText(error) });
+      return false;
+    }
+  };
 
-        // If there are issues, show the validation modal
-        if (!validation.canProceed || validation.hasWarnings) {
-          setShowCommitModal(false);
-          setPendingValidation(validation);
-          setPendingSyncAction(action);
-          setShowValidationModal(true);
-          setIsCommitting(false);
-          return;
-        }
-      }
+  // Validates the exact action, then either publishes, or hands the result to the validation modal.
+  // Any failure to validate stops here: nothing is published on an unchecked selection.
+  type PublishStep = 'published' | 'failed' | 'needs_review' | 'check_failed';
+  const validateAndPublish = async (action: PublishAction): Promise<PublishStep> => {
+    setNotice(null);
+    let validation: PreSyncValidation;
+    try {
+      validation = await invoke<PreSyncValidation>('validate_before_sync', {
+        projectId: project.id,
+        selectedFiles: action.selectedFiles ?? null,
+      });
+    } catch (error) {
+      const detail = `BitGit could not check the files first, so nothing was published: ${errorText(error)}`;
+      setNotice({ tone: 'error', title: 'Nothing was published', detail });
+      setSubmitError(detail);
+      return 'check_failed';
+    }
 
-      // No validation issues, proceed with sync
-      setShowCommitModal(false);
-      await syncProject(project.id, action);
-    } catch (error: any) {
-      console.error('Commit failed:', error);
-      // If validation fails, still allow sync (graceful degradation)
-      setShowCommitModal(false);
-      await syncProject(project.id, action);
+    if (!validation.canProceed || validation.hasWarnings) {
+      setPending({ action, validation });
+      return 'needs_review';
+    }
+    return (await runAction(action)) ? 'published' : 'failed';
+  };
+
+  // Push Local / Sync All. Dirty folders need a reviewed file selection; clean ones publish what is already committed.
+  const startPublish = async (kind: PublishAction['type']) => {
+    if (!project.localPath) return;
+    setIsLoading(true);
+    setNotice(null);
+    let changes: FileChangeInfo[];
+    try {
+      changes = await invoke<FileChangeInfo[]>('git_get_file_changes', { repoPath: project.localPath });
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        title: 'Nothing was published',
+        detail: `BitGit could not read the changed files: ${errorText(error)}`,
+      });
+      setIsLoading(false);
+      return;
+    }
+
+    if (changes.length > 0) {
+      setSubmitError(null);
+      setCommitKind(kind);
+      setIsLoading(false);
+      return;
+    }
+    try {
+      await validateAndPublish({ type: kind });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleModalSubmit = async (message: string, description: string | undefined, selectedFiles: string[]) => {
+    if (!commitKind) return;
+    setSubmitError(null);
+    setIsCommitting(true);
+    try {
+      const step = await validateAndPublish({
+        type: commitKind,
+        commitMessage: message,
+        commitDescription: description,
+        selectedFiles: selectedFiles.length > 0 ? selectedFiles : undefined,
+      });
+      // With a review pending the commit dialog stays underneath so Cancel returns to the same selection.
+      if (step === 'published' || step === 'failed') setCommitKind(null);
     } finally {
       setIsCommitting(false);
     }
   };
+
+  const handleProceedWithWarnings = async () => {
+    if (!pending) return;
+    // Same files, same action; warnings are allowed for this attempt only.
+    const action: PublishAction = { ...pending.action, allowWarnings: pending.validation.hasWarnings };
+    setPending(null);
+    setIsCommitting(true);
+    try {
+      await runAction(action);
+      setCommitKind(null);
+    } finally {
+      setIsCommitting(false);
+    }
+  };
+
+  const handleGitignoreUpdated = () => {
+    // The ignored files may no longer be pending: go back to the file list and read it again.
+    setPending(null);
+    if (commitKind) {
+      setReloadSignal((n) => n + 1);
+    } else {
+      void startPublish(pending?.action.type ?? 'push_local');
+    }
+  };
+
+  const handleIntegrate = async (branches: string[]) => {
+    if (!integrationMode) return;
+    const action: SyncAction = { type: integrationMode, branches };
+    setIsCommitting(true);
+    try {
+      await runAction(action);
+      setIntegrationMode(null);
+    } finally {
+      setIsCommitting(false);
+    }
+  };
+
+  // Opened from the bulk result panel for a project that needs its files reviewed.
+  useEffect(() => {
+    if (reviewRequest && reviewRequest.id === project.id) {
+      requestReview(null);
+      cardRef.current?.scrollIntoView?.({ block: 'center' });
+      void startPublish(reviewRequest.kind);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewRequest]);
 
   const handleDelete = async () => {
     // Show confirmation dialog BEFORE doing anything
@@ -452,69 +503,39 @@ export function ProjectCard({ project }: ProjectCardProps) {
     }
   };
 
-  // Determine status color based on project status
-  const getStatusColor = () => {
-    switch (project.projectStatus) {
-      case 'synced':
-        return 'border-green-500';
-      case 'needs_push':
-        return 'border-yellow-500';
-      case 'needs_merge':
-        return 'border-orange-500';
-      case 'needs_sync':
-        return 'border-red-500';
-      case 'ready':
-        return 'border-blue-500';
-      case 'github_only':
-        return 'border-purple-500';
-      case 'local_only':
-        return 'border-indigo-500';
-      case 'not_configured':
-        return 'border-gray-300';
-      default:
-        return 'border-gray-300';
-    }
+  // Badge colour and icon follow what the last check could actually confirm (see getCardStatus).
+  const TONE_BORDER: Record<CardTone, string> = {
+    synced: 'border-green-500',
+    unconfirmed: 'border-gray-400',
+    changes: 'border-yellow-500',
+    behind: 'border-orange-500',
+    diverged: 'border-red-500',
+    unavailable: 'border-red-400',
+    not_git: 'border-gray-400',
+    ready: 'border-blue-500',
+    github_only: 'border-purple-500',
+    local_only: 'border-indigo-500',
+    not_configured: 'border-gray-300',
   };
 
   const getStatusIcon = () => {
-    switch (project.projectStatus) {
+    switch (cardStatus.tone) {
       case 'synced':
-        return <CheckCircle className="w-5 h-5 text-green-600" />;
-      case 'needs_push':
-      case 'needs_merge':
-      case 'needs_sync':
-        return <AlertCircle className="w-5 h-5 text-yellow-600" />;
+        return <CheckCircle className="w-5 h-5 text-green-600" aria-hidden="true" />;
+      case 'changes':
+      case 'behind':
+      case 'diverged':
+        return <AlertCircle className="w-5 h-5 text-yellow-600" aria-hidden="true" />;
+      case 'unavailable':
+        return <AlertCircle className="w-5 h-5 text-red-500" aria-hidden="true" />;
       case 'ready':
-        return <Clock className="w-5 h-5 text-blue-600" />;
+        return <Clock className="w-5 h-5 text-blue-600" aria-hidden="true" />;
       case 'github_only':
-        return <Github className="w-5 h-5 text-purple-600" />;
+        return <Github className="w-5 h-5 text-purple-600" aria-hidden="true" />;
       case 'local_only':
-        return <FolderGit className="w-5 h-5 text-indigo-600" />;
+        return <FolderGit className="w-5 h-5 text-indigo-600" aria-hidden="true" />;
       default:
-        return <Clock className="w-5 h-5 text-gray-400" />;
-    }
-  };
-
-  const getStatusText = () => {
-    switch (project.projectStatus) {
-      case 'synced':
-        return 'Synced';
-      case 'needs_push':
-        return 'Needs Push';
-      case 'needs_merge':
-        return 'Needs Merge';
-      case 'needs_sync':
-        return 'Needs Sync';
-      case 'ready':
-        return 'Ready';
-      case 'github_only':
-        return 'GitHub Only';
-      case 'local_only':
-        return 'Local Only';
-      case 'not_configured':
-        return 'Not Configured';
-      default:
-        return 'Unknown';
+        return <Clock className="w-5 h-5 text-gray-400" aria-hidden="true" />;
     }
   };
 
@@ -572,7 +593,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
 
       case 'local_only':
         return (
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button
               onClick={handleCreateGitHubRepoClick}
               disabled={isLoading}
@@ -594,6 +615,17 @@ export function ProjectCard({ project }: ProjectCardProps) {
               <LinkIcon className="w-4 h-4" />
               Link Existing GitHub
             </button>
+
+            {canShowDetails && (
+              <button
+                onClick={() => setShowDetails(!showDetails)}
+                className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                title="Show branches, commits, changes, stashes and tags"
+              >
+                {showDetails ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                Details
+              </button>
+            )}
           </div>
         );
 
@@ -605,16 +637,19 @@ export function ProjectCard({ project }: ProjectCardProps) {
         // Show Git sync actions
         const hasLocalChanges = project.gitStatus && (project.gitStatus.uncommittedFiles > 0 || project.gitStatus.unpushedCommits > 0);
         const hasRemoteBranches = project.gitStatus && project.gitStatus.remoteBranches.length > 0;
+        // Unknown state (never checked, or not a Git folder) is not a reason to hide the actions,
+        // but a folder that is known not to be Git has nothing to publish.
+        const notGit = project.gitStatus?.isGitRepo === false;
 
         return (
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button
-              onClick={handleShowCommitModal}
-              disabled={!hasLocalChanges || isLoading || isCommitting}
+              onClick={() => void startPublish('push_local')}
+              disabled={notGit || (project.gitStatus !== null && !hasLocalChanges) || isBusy}
               className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Commit and push local changes"
+              title="Choose changed files to commit, or push commits you already made"
             >
-              {isLoading || isCommitting ? (
+              {isBusy ? (
                 <RefreshCw className="w-4 h-4 animate-spin" />
               ) : (
                 <Upload className="w-4 h-4" />
@@ -623,45 +658,33 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </button>
 
             <button
-              onClick={() => handleSync({ type: 'pull_branches', branches: project.gitStatus?.remoteBranches || [] })}
-              disabled={!hasRemoteBranches || isLoading}
+              onClick={() => setIntegrationMode('pull_branches')}
+              disabled={notGit || !hasRemoteBranches || isBusy}
               className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Pull branch updates without deleting (for iterative work)"
+              title="Bring in branches you choose from GitHub; the branches are kept"
             >
-              {isLoading ? (
-                <RefreshCw className="w-4 h-4 animate-spin" />
-              ) : (
-                <Download className="w-4 h-4" />
-              )}
+              <Download className="w-4 h-4" />
               Pull Updates
             </button>
 
             <button
-              onClick={() => handleSync({ type: 'merge_branches', branches: project.gitStatus?.remoteBranches || [] })}
-              disabled={!hasRemoteBranches || isLoading}
+              onClick={() => setIntegrationMode('merge_branches')}
+              disabled={notGit || !hasRemoteBranches || isBusy}
               className="flex items-center gap-2 px-4 py-2 text-white bg-orange-600 rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Merge remote branches and clean up (finalize completed work)"
+              title="Merge branches you choose into the current branch; the branches are kept"
             >
-              {isLoading ? (
-                <RefreshCw className="w-4 h-4 animate-spin" />
-              ) : (
-                <GitMerge className="w-4 h-4" />
-              )}
-              Finish Branch
+              <GitMerge className="w-4 h-4" />
+              Merge Branches
             </button>
 
             <button
-              onClick={() => handleSync({ type: 'full_sync' })}
-              disabled={isLoading}
+              onClick={() => void startPublish('full_sync')}
+              disabled={notGit || isBusy}
               className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Sync everything: commit, push local changes, and merge remote branches"
+              title="Sync the current branch with its GitHub branch. Other branches are not touched."
             >
-              {isLoading ? (
-                <RefreshCw className="w-4 h-4 animate-spin" />
-              ) : (
-                <RefreshCw className="w-4 h-4" />
-              )}
-              Sync All
+              <RefreshCw className="w-4 h-4" />
+              Sync Branch
             </button>
 
             <button
@@ -705,7 +728,10 @@ export function ProjectCard({ project }: ProjectCardProps) {
 
   return (
     <div
-      className={`bg-white dark:bg-gray-800 rounded-lg shadow-sm border-l-4 ${getStatusColor()} p-6 transition-all hover:shadow-md dark:hover:shadow-lg`}
+      ref={cardRef}
+      data-testid="project-card"
+      data-project={project.name}
+      className={`bg-white dark:bg-gray-800 rounded-lg shadow-sm border-l-4 ${TONE_BORDER[cardStatus.tone]} p-6 transition-all hover:shadow-md dark:hover:shadow-lg`}
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
@@ -723,7 +749,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
               {isFavorite && <Star className="w-4 h-4 fill-yellow-400 text-yellow-400" />}
               {isArchived && <Archive className="w-4 h-4 text-gray-400 dark:text-gray-500" />}
             </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">{getStatusText()}</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400" data-testid="status-text">{cardStatus.text}</p>
           </div>
           {/* Favorite button */}
           <button
@@ -750,13 +776,14 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </button>
           )}
 
-          {/* Refresh button - only show if both GitHub and Local are configured */}
-          {project.githubUrl && project.localPath && (
+          {/* Refresh - any project with a local folder, GitHub link or not */}
+          {project.localPath && (
             <button
               onClick={handleRefreshStatus}
-              disabled={isRefreshing}
+              disabled={isRefreshing || syncingProjects.has(project.id)}
+              aria-label="Refresh status"
               className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
-              title="Refresh status"
+              title="Refresh status: re-reads this folder and checks GitHub"
             >
               <RotateCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
             </button>
@@ -861,24 +888,36 @@ export function ProjectCard({ project }: ProjectCardProps) {
           </div>
         )}
 
-        {/* Git Status Details (if available) */}
-        {project.gitStatus && (
-          <>
-            {project.gitStatus.uncommittedFiles > 0 && (
-              <div className="flex items-center gap-2 text-yellow-600">
-                <GitCommit className="w-4 h-4" />
-                <span>{project.gitStatus.uncommittedFiles} uncommitted file(s)</span>
-              </div>
-            )}
-            {project.gitStatus.remoteBranches.length > 0 && (
-              <div className="flex items-center gap-2 text-orange-600">
-                <GitBranch className="w-4 h-4" />
-                <span>{project.gitStatus.remoteBranches.length} remote branch(es): {project.gitStatus.remoteBranches.join(', ')}</span>
-              </div>
-            )}
-          </>
+        {/* Branch, upstream, ahead/behind and how fresh the GitHub reading is */}
+        <GitStatusSummary project={project} />
+        {project.gitStatus && project.gitStatus.remoteBranches.length > 0 && (
+          <div className="flex items-center gap-2 text-orange-700 dark:text-orange-400">
+            <GitBranch className="w-4 h-4" aria-hidden="true" />
+            <span>
+              {project.gitStatus.remoteBranches.length} other branch(es) on GitHub:{' '}
+              {project.gitStatus.remoteBranches.join(', ')}
+            </span>
+          </div>
         )}
       </div>
+
+      {/* What just happened, kept until the next action */}
+      {notice && (
+        <div
+          className={`mb-4 flex items-start justify-between gap-3 rounded-lg border p-3 text-sm ${NOTICE_STYLE[notice.tone]}`}
+          role={notice.tone === 'error' ? 'alert' : 'status'}
+          data-testid="card-notice"
+          data-tone={notice.tone}
+        >
+          <div className="min-w-0">
+            <p className="font-medium">{notice.title}</p>
+            {notice.detail && <p className="break-words">{notice.detail}</p>}
+          </div>
+          <button onClick={() => setNotice(null)} aria-label="Dismiss message" className="flex-shrink-0 opacity-70 hover:opacity-100">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Actions */}
       {renderActions()}
@@ -908,26 +947,40 @@ export function ProjectCard({ project }: ProjectCardProps) {
         onCreate={handleCreateGitHubRepo}
         projectName={project.name}
       />
-      {pendingValidation && (
-        <ValidationWarningModal
-          isOpen={showValidationModal}
-          onClose={() => {
-            setShowValidationModal(false);
-            setPendingSyncAction(null);
-            setPendingValidation(null);
-          }}
-          onProceed={handleProceedWithSync}
-          validation={pendingValidation}
-          projectPath={project.localPath || ''}
+      {project.localPath && (
+        <CommitModal
+          isOpen={commitKind !== null}
+          onClose={() => setCommitKind(null)}
+          onSubmit={handleModalSubmit}
+          repoPath={project.localPath}
+          projectName={project.name}
+          mode={commitKind ?? 'push_local'}
+          isLoading={isCommitting}
+          submitError={submitError}
+          reloadSignal={reloadSignal}
         />
       )}
-      <CommitModal
-        isOpen={showCommitModal}
-        onClose={() => setShowCommitModal(false)}
-        onCommit={handleCommit}
-        changedFiles={project.gitStatus?.modifiedFiles || []}
+      {pending && (
+        <ValidationWarningModal
+          isOpen
+          onClose={() => setPending(null)}
+          onProceed={handleProceedWithWarnings}
+          onGitignoreUpdated={handleGitignoreUpdated}
+          validation={pending.validation}
+          projectPath={project.localPath || ''}
+          isBusy={isCommitting}
+        />
+      )}
+      <BranchIntegrationModal
+        isOpen={integrationMode !== null}
+        mode={integrationMode ?? 'merge_branches'}
         projectName={project.name}
+        currentBranch={project.gitStatus?.currentBranch}
+        branches={project.gitStatus?.remoteBranches ?? []}
+        checkedAt={project.gitStatus?.remoteCheckedAt}
         isLoading={isCommitting}
+        onConfirm={handleIntegrate}
+        onClose={() => setIntegrationMode(null)}
       />
     </div>
   );

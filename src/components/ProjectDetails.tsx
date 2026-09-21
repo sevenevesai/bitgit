@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Project, BranchInfo, CommitInfo, DiffInfo, StashInfo, TagInfo } from '../types';
 import { invoke } from '@tauri-apps/api/tauri';
 import toast from 'react-hot-toast';
+import { DiffPreview } from './git/DiffPreview';
 import {
   GitBranch,
   GitCommit,
@@ -27,6 +28,7 @@ type TabType = 'branches' | 'commits' | 'changes' | 'stashes' | 'tags';
 export function ProjectDetails({ project, onClose }: ProjectDetailsProps) {
   const [activeTab, setActiveTab] = useState<TabType>('branches');
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Data state
   const [branches, setBranches] = useState<BranchInfo[]>([]);
@@ -45,6 +47,7 @@ export function ProjectDetails({ project, onClose }: ProjectDetailsProps) {
     if (!project.localPath) return;
 
     setIsLoading(true);
+    setLoadError(null);
     try {
       switch (activeTab) {
         case 'branches':
@@ -64,6 +67,8 @@ export function ProjectDetails({ project, onClose }: ProjectDetailsProps) {
           break;
       }
     } catch (error: any) {
+      // Shown in the panel so a failed read is never mistaken for an empty list ("No uncommitted changes").
+      setLoadError(`Could not load ${activeTab}: ${error}`);
       toast.error(`Failed to load ${activeTab}: ${error}`);
     } finally {
       setIsLoading(false);
@@ -90,6 +95,7 @@ export function ProjectDetails({ project, onClose }: ProjectDetailsProps) {
   const loadDiffs = async () => {
     const result = await invoke<DiffInfo[]>('git_get_diff', {
       repoPath: project.localPath,
+      scope: 'all',
     });
     setDiffs(result);
   };
@@ -171,6 +177,10 @@ export function ProjectDetails({ project, onClose }: ProjectDetailsProps) {
             <RefreshCw className="w-6 h-6 animate-spin text-teal-600 dark:text-teal-400" />
             <span className="ml-2 text-gray-600 dark:text-gray-400">Loading...</span>
           </div>
+        ) : loadError ? (
+          <p className="text-sm text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3" role="alert">
+            {loadError}
+          </p>
         ) : (
           <>
             {activeTab === 'branches' && <BranchesTab branches={branches} currentBranch={currentBranch} project={project} onRefresh={loadBranches} />}
@@ -392,36 +402,19 @@ function CommitsTab({ commits }: { commits: CommitInfo[] }) {
   );
 }
 
-// Changes Tab Component
+// Changes Tab Component: every pending change, labelled staged / unstaged / untracked.
+// A partly staged file appears twice on purpose (once per scope).
 function ChangesTab({ diffs }: { diffs: DiffInfo[] }) {
   return (
     <div className="space-y-4">
-      {diffs.map((diff) => (
-        <div key={diff.fileName} className="rounded-lg border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 overflow-hidden">
-          <div className="px-4 py-2 bg-gray-100 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-700">
-            <span className="font-mono text-sm text-gray-900 dark:text-white">{diff.fileName}</span>
-          </div>
-          <div className="p-2 font-mono text-xs max-h-60 overflow-y-auto">
-            {diff.changes.map((change, idx) => (
-              <div
-                key={idx}
-                className={`px-2 py-0.5 ${
-                  change.type === 'add'
-                    ? 'bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200'
-                    : change.type === 'remove'
-                    ? 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200'
-                    : 'text-gray-700 dark:text-gray-300'
-                }`}
-              >
-                <span className="text-gray-500 dark:text-gray-500 mr-4">{change.line}</span>
-                <span className={change.type === 'add' ? 'text-green-700 dark:text-green-300' : change.type === 'remove' ? 'text-red-700 dark:text-red-300' : ''}>
-                  {change.type === 'add' ? '+ ' : change.type === 'remove' ? '- ' : '  '}
-                  {change.content}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
+      {diffs.length > 0 && (
+        <p className="text-xs text-gray-600 dark:text-gray-400">
+          Staged changes are already added to the next commit; unstaged changes and untracked
+          (new) files are not. To publish files, use Push Local and choose them there.
+        </p>
+      )}
+      {diffs.map((diff, i) => (
+        <DiffPreview key={`${diff.fileName}:${diff.scope ?? 'unknown'}:${i}`} diff={diff} />
       ))}
       {diffs.length === 0 && (
         <div className="text-center py-8">
