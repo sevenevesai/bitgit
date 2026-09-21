@@ -15,7 +15,7 @@ interface SaveCheckpointProps {
 }
 
 export function SaveCheckpoint({ state, projectPath, onSaved, onOpenCheckpoint }: SaveCheckpointProps) {
-  const { call, busy } = useRecoveryGate();
+  const { call, busy, repairPending } = useRecoveryGate();
   const nameId = useId();
   const noteId = useId();
   const [label, setLabel] = useState('');
@@ -60,7 +60,7 @@ export function SaveCheckpoint({ state, projectPath, onSaved, onOpenCheckpoint }
   const includedPaths = preview?.coverage.included.map((file) => file.path) ?? [];
   const selectedCount = includedPaths.filter((path) => !excluded.has(path)).length;
   const nameMissing = label.trim() === '';
-  const canSave = !busy && preview !== null && !nameMissing && selectedCount > 0;
+  const canSave = !busy && !repairPending && preview !== null && !nameMissing && selectedCount > 0;
 
   const save = async () => {
     if (!preview) return;
@@ -97,6 +97,12 @@ export function SaveCheckpoint({ state, projectPath, onSaved, onOpenCheckpoint }
         A saved version is a copy of your project files kept on this computer. It does not need GitHub and does not change your files or Git history.
         Nothing checks that the saved code runs.
       </p>
+
+      {repairPending && (
+        <Notice tone="warning" title="Saving is paused">
+          A file repair was interrupted. Undo it using the banner at the top, then you can save again. You can still look at history, compare and recover copies.
+        </Notice>
+      )}
 
       {saved && (
         <Notice

@@ -1,22 +1,26 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
-import { Download, History, Loader2, RefreshCw, Save, ShieldCheck, X } from 'lucide-react';
+import { Clock, Crosshair, Download, History, Loader2, RefreshCw, Save, ShieldCheck, X } from 'lucide-react';
 import type { Project } from '../../types';
-import type { Checkpoint, RecoveryResults, RecoveryState } from '../../types/recovery';
-import { errorMessage, recoveryCall } from '../../lib/recovery';
+import type { Checkpoint, RecoveryReceipt, RecoveryResults, RecoveryState } from '../../types/recovery';
+import { errorMessage, markWorkspaceOpen, projectActivity, recoveryCall } from '../../lib/recovery';
 import type { RecoveryAction, RequestOf } from '../../lib/recovery';
+import { noteRecoveryState } from '../../lib/recovery-automation';
+import { AutomationPanel } from './AutomationPanel';
 import { CheckpointDetail } from './CheckpointDetail';
 import { CheckpointTimeline, sortNewestFirst } from './CheckpointTimeline';
 import { formatRelative, formatTimestamp, safeText, secondaryButton } from './format';
 import { RecoveryGateContext } from './gate';
 import type { BusyInfo, CallOptions, RecoveryGate } from './gate';
 import { Notice } from './Notice';
+import { PendingRepairBanner } from './PendingRepairBanner';
+import { RegressionPanel } from './RegressionPanel';
 import { RemoteRestore } from './RemoteRestore';
 import { SaveCheckpoint } from './SaveCheckpoint';
 import { TabBar, panelId, tabId } from './TabBar';
 import type { TabDef } from './TabBar';
 
-type WorkspaceTab = 'save' | 'history' | 'remote';
+type WorkspaceTab = 'save' | 'history' | 'automation' | 'regression' | 'remote';
 
 const STATE_LABEL = 'Checking saved history…';
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
@@ -41,6 +45,7 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
   const [tab, setTab] = useState<WorkspaceTab>('save');
   const [visited, setVisited] = useState<ReadonlySet<WorkspaceTab>>(new Set<WorkspaceTab>(['save']));
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [rolledBack, setRolledBack] = useState<RecoveryReceipt | null>(null);
 
   const projectId = project.id;
   const projectPath = project.localPath ?? '';
@@ -57,6 +62,11 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
       if (shared) return shared as Promise<RecoveryResults[A]>;
       if (mutating && pending.current > 0) {
         return Promise.reject(new Error('Another recovery action is still running. Wait for it to finish, then try again.'));
+      }
+      // An automatic save that started just before this window opened. It is short; refusing beats queueing
+      // a change the user asked for to run later without their say-so.
+      if (mutating && projectActivity(projectId).backgroundBusy) {
+        return Promise.reject(new Error('An automatic save is running for this project. Wait a moment, then try again.'));
       }
       pending.current += 1;
       const start = async (): Promise<RecoveryResults[A]> => {
@@ -80,7 +90,8 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
     [projectId],
   );
 
-  const gate = useMemo<RecoveryGate>(() => ({ busy, call }), [busy, call]);
+  const repairPending = Boolean(state?.pendingRepair);
+  const gate = useMemo<RecoveryGate>(() => ({ busy, call, repairPending }), [busy, call, repairPending]);
 
   // Every refresh is a real state call; nothing is cached between opens.
   const reload = useCallback(async () => {
@@ -89,14 +100,18 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
       setState(next);
       setStateError(null);
       setCheckedAt(new Date().toISOString());
+      noteRecoveryState(projectId, next);
     } catch (error) {
       setStateError(errorMessage(error));
     }
-  }, [call]);
+  }, [call, projectId]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // While this window is open the background observer leaves the project alone.
+  useEffect(() => markWorkspaceOpen(projectId), [projectId]);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -109,6 +124,26 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
   }, []);
 
   const closeLocked = busy?.mutating === true;
+
+  // onKeyDown below only sees keys while focus is inside the dialog. A focused button that disables or
+  // replaces itself (Save after saving, "Run check…" becoming its confirmation) drops focus to <body>,
+  // so Escape and Tab would stop working. This catches exactly that case.
+  const latest = useRef({ closeLocked, onClose });
+  latest.current = { closeLocked, onClose };
+  useEffect(() => {
+    const rescue = (event: globalThis.KeyboardEvent) => {
+      const dialog = dialogRef.current;
+      if (!dialog || dialog.contains(document.activeElement)) return;
+      if (event.key === 'Escape') {
+        if (!latest.current.closeLocked) latest.current.onClose();
+      } else if (event.key === 'Tab') {
+        event.preventDefault();
+        dialog.focus();
+      }
+    };
+    document.addEventListener('keydown', rescue);
+    return () => document.removeEventListener('keydown', rescue);
+  }, []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
@@ -164,6 +199,8 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
   const tabs: TabDef<WorkspaceTab>[] = [
     { id: 'save', label: 'Save', icon: <Save className="w-4 h-4" aria-hidden="true" /> },
     { id: 'history', label: `History${state ? ` (${state.checkpoints.length})` : ''}`, icon: <History className="w-4 h-4" aria-hidden="true" /> },
+    { id: 'automation', label: 'Automatic saves', icon: <Clock className="w-4 h-4" aria-hidden="true" /> },
+    { id: 'regression', label: 'Find a regression', icon: <Crosshair className="w-4 h-4" aria-hidden="true" /> },
     { id: 'remote', label: 'Restore from remote', icon: <Download className="w-4 h-4" aria-hidden="true" /> },
   ];
 
@@ -253,6 +290,53 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
         </div>
 
         <RecoveryGateContext.Provider value={gate}>
+          {(state?.pendingRepair || rolledBack || state?.settingsError) && (
+            <div className="px-4 pt-3 space-y-2">
+              {state?.pendingRepair && (
+                <PendingRepairBanner
+                  pending={state.pendingRepair}
+                  checkpoints={state.checkpoints}
+                  onOpenCheckpoint={openCheckpoint}
+                  onRolledBack={setRolledBack}
+                  onChanged={reload}
+                />
+              )}
+              {rolledBack && !state?.pendingRepair && (
+                <Notice
+                  tone="success"
+                  title={`The interrupted repair was undone — ${rolledBack.fileCount} file${rolledBack.fileCount === 1 ? '' : 's'} put back, verified ${formatTimestamp(rolledBack.verifiedAt)}`}
+                  actions={
+                    <>
+                      {rolledBack.safetyCheckpointId && (
+                        <button type="button" className={secondaryButton} onClick={() => openCheckpoint(rolledBack.safetyCheckpointId as string)}>
+                          Open safety copy
+                        </button>
+                      )}
+                      <button type="button" className={secondaryButton} onClick={() => setRolledBack(null)}>
+                        Dismiss
+                      </button>
+                    </>
+                  }
+                >
+                  Saving and repairing are available again. The safety copy taken before that repair is still in History.
+                </Notice>
+              )}
+              {state?.settingsError && (
+                <Notice
+                  tone="warning"
+                  title="Automatic-save settings need to be saved again"
+                  actions={
+                    <button type="button" className={secondaryButton} onClick={() => showTab('automation')}>
+                      Open Automatic saves
+                    </button>
+                  }
+                >
+                  {state.settingsError}
+                  {'\nYour saved versions are all still listed. Automatic saves stay off for this project until you save the settings again.'}
+                </Notice>
+              )}
+            </div>
+          )}
           <div className="px-4 pt-3">
             <TabBar prefix={tabPrefix} label="Recovery sections" tabs={tabs} active={tab} onChange={showTab} />
           </div>
@@ -285,6 +369,18 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
                   )}
                 </div>
               </div>,
+            )}
+            {panel('automation', <AutomationPanel projectId={projectId} state={state} onChanged={reload} />)}
+            {panel(
+              'regression',
+              <RegressionPanel
+                projectId={projectId}
+                projectName={project.name}
+                projectPath={projectPath}
+                state={state}
+                onOpenCheckpoint={openCheckpoint}
+                onChanged={reload}
+              />,
             )}
             {panel(
               'remote',

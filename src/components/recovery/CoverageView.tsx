@@ -10,6 +10,8 @@ export interface CoverageSelection {
   excluded: ReadonlySet<string>;
   onChange: (next: Set<string>) => void;
   disabled?: boolean;
+  // Wording for callers that are not saving one version (automatic-save exclusions).
+  labels?: { heading: string; help: string };
 }
 
 interface CoverageViewProps {
@@ -109,7 +111,7 @@ export function CoverageView({ coverage, selection }: CoverageViewProps) {
 
       <details open={Boolean(selection)} className="border border-gray-200 dark:border-gray-700 rounded-lg">
         <summary className="px-3 py-2 text-sm font-medium cursor-pointer text-gray-800 dark:text-gray-200">
-          {selection ? 'Choose files to save' : 'Included files'} ({included.length})
+          {selection ? (selection.labels?.heading ?? 'Choose files to save') : 'Included files'} ({included.length})
         </summary>
         <div className="px-3 pb-3 space-y-2">
           {included.length === 0 ? (
@@ -142,7 +144,7 @@ export function CoverageView({ coverage, selection }: CoverageViewProps) {
               {selection && (
                 <p className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
                   <Info className="w-3 h-3" aria-hidden="true" />
-                  Unchecked files are left out of this saved version.
+                  {selection.labels?.help ?? 'Unchecked files are left out of this saved version.'}
                 </p>
               )}
               <div className="max-h-64 overflow-y-auto">

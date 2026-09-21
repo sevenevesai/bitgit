@@ -7,13 +7,57 @@ export type RecoveryAction = RecoveryRequest['action'];
 type RequestByAction = { [R in RecoveryRequest as R['action']]: R };
 export type RequestOf<A extends RecoveryAction> = RequestByAction[A];
 
+// In-flight calls and open workspaces per project. Every recovery call goes through
+// recoveryCall, so this is the one place that can say whether a project is busy; the
+// background observer consults it instead of guessing from component state.
+const inflight = new Map<string, { interactive: number; background: number }>();
+const openWorkspaces = new Map<string, number>();
+
+function track(projectId: string, background: boolean): () => void {
+  const entry = inflight.get(projectId) ?? { interactive: 0, background: 0 };
+  inflight.set(projectId, entry);
+  const key = background ? 'background' : 'interactive';
+  entry[key] += 1;
+  return () => {
+    entry[key] -= 1;
+    if (entry.interactive + entry.background === 0 && inflight.get(projectId) === entry) inflight.delete(projectId);
+  };
+}
+
+export interface ProjectActivity {
+  workspaceOpen: boolean;
+  interactiveBusy: boolean;
+  backgroundBusy: boolean;
+}
+
+export function projectActivity(projectId: string): ProjectActivity {
+  const entry = inflight.get(projectId);
+  return {
+    workspaceOpen: (openWorkspaces.get(projectId) ?? 0) > 0,
+    interactiveBusy: (entry?.interactive ?? 0) > 0,
+    backgroundBusy: (entry?.background ?? 0) > 0,
+  };
+}
+
+// Returns the release function. Counted, so two windows for one project cannot unpause each other.
+export function markWorkspaceOpen(projectId: string): () => void {
+  openWorkspaces.set(projectId, (openWorkspaces.get(projectId) ?? 0) + 1);
+  return () => {
+    const remaining = (openWorkspaces.get(projectId) ?? 1) - 1;
+    if (remaining <= 0) openWorkspaces.delete(projectId);
+    else openWorkspaces.set(projectId, remaining);
+  };
+}
+
 // `& { action: A }` lets TypeScript infer A from the literal, so each call site gets
 // that action's own request shape and result type.
 export function recoveryCall<A extends RecoveryAction>(
   projectId: string,
   request: RequestOf<A> & { action: A },
+  options?: { background?: boolean },
 ): Promise<RecoveryResults[A]> {
-  return invoke<RecoveryResults[A]>('recovery_command', { projectId, request });
+  const release = track(projectId, options?.background === true);
+  return invoke<RecoveryResults[A]>('recovery_command', { projectId, request }).finally(release);
 }
 
 const URL_USERINFO = /(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi;
@@ -44,20 +88,29 @@ export function looksStale(message: string): boolean {
   return /stale|fingerprint|changed (since|during)|concurrent/i.test(message);
 }
 
+// Drive letter (C:\ or C:/), UNC share (\\server\share) or POSIX root: a folder on this computer.
+const LOCAL_ABSOLUTE_PATH = /^(?:[a-z]:[\\/]|\\\\[^\\/]|\/)/i;
+const CREDENTIAL_MESSAGE = 'Remove the username, password or token from the URL. BitGit never puts credentials in remote URLs.';
+
 // The engine enforces protocol and credential rules; this rejects the obvious mistakes
 // before anything is sent.
 export function validateRemoteUrl(raw: string): string | null {
   const url = raw.trim();
   if (!url) return 'Enter the remote repository URL.';
-  if (/[\s\u0000-\u001f]/.test(url)) return 'The remote URL cannot contain spaces or control characters.';
+  if (/[\u0000-\u001f\u007f]/.test(url)) return 'The remote URL cannot contain control characters.';
+  // A bare repository in a folder on this computer is a valid remote, and folder names may hold spaces.
+  if (LOCAL_ABSOLUTE_PATH.test(url)) return null;
+  if (/^["']|["']$/.test(url)) return 'Remove the quotation marks around the location.';
+  if (/\s/.test(url)) return 'A remote URL cannot contain spaces. For a folder on this computer, enter its full path.';
   if (/^[a-z][a-z0-9+.-]*::/i.test(url)) return 'Remote helper URLs are not supported.';
   const withUserinfo = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)@/i.exec(url);
   if (withUserinfo) {
     const scheme = withUserinfo[1].toLowerCase();
     const userinfo = withUserinfo[2];
-    if (scheme === 'http' || scheme === 'https' || userinfo.includes(':')) {
-      return 'Remove the username, password or token from the URL. BitGit never puts credentials in remote URLs.';
-    }
+    if (scheme === 'http' || scheme === 'https' || userinfo.includes(':')) return CREDENTIAL_MESSAGE;
   }
+  // scp-style user:secret@host:path
+  if (/^[^\s/@:]+:[^\s/@]+@/.test(url)) return CREDENTIAL_MESSAGE;
+  if (/^[a-z][a-z0-9+.-]*:\/\/[^?#]*[?#]/i.test(url)) return 'Remove the ? or # part of the URL. It can carry credentials and is not accepted.';
   return null;
 }

@@ -271,6 +271,7 @@ export function CompareView({ checkpoint, sourceAvailable, onChanged, onOpenChec
               comparedAt={comparedAt}
               selected={selectedChanges}
               onRepaired={afterRepair}
+              onFailed={onChanged}
               onCompareAgain={() => void compare()}
             />
           )}

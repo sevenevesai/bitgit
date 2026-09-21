@@ -1,22 +1,24 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Cloud, FileText, FolderInput, GitCompare } from 'lucide-react';
+import { ClipboardCheck, Cloud, FileText, FolderInput, GitCompare } from 'lucide-react';
 import type { Checkpoint, RecoveryState } from '../../types/recovery';
 import { redactSecrets } from '../../lib/recovery';
 import { BackupPanel } from './BackupPanel';
 import { CompareView } from './CompareView';
 import { CoverageView } from './CoverageView';
-import { formatBytes, formatRelative, formatTimestamp, kindBadgeClass, kindLabel, safeMultiline, safeText, shortId } from './format';
+import { EvidencePanel } from './EvidencePanel';
+import { backupStatus, formatBytes, formatRelative, formatTimestamp, kindBadgeClass, kindLabel, safeMultiline, safeText, shortId } from './format';
 import { RecoverCopy } from './RecoverCopy';
 import { TabBar, panelId, tabId } from './TabBar';
 import type { TabDef } from './TabBar';
 
-type DetailTab = 'overview' | 'compare' | 'recover' | 'backup';
+type DetailTab = 'overview' | 'compare' | 'recover' | 'evidence' | 'backup';
 
-const TABS: TabDef<DetailTab>[] = [
+const tabsFor = (checkpoint: Checkpoint): TabDef<DetailTab>[] => [
   { id: 'overview', label: 'Details', icon: <FileText className="w-4 h-4" aria-hidden="true" /> },
   { id: 'compare', label: 'Compare & repair', icon: <GitCompare className="w-4 h-4" aria-hidden="true" /> },
   { id: 'recover', label: 'Recover copy', icon: <FolderInput className="w-4 h-4" aria-hidden="true" /> },
+  { id: 'evidence', label: `Notes & checks${checkpoint.evidence.length > 0 ? ` (${checkpoint.evidence.length})` : ''}`, icon: <ClipboardCheck className="w-4 h-4" aria-hidden="true" /> },
   { id: 'backup', label: 'Remote backup', icon: <Cloud className="w-4 h-4" aria-hidden="true" /> },
 ];
 
@@ -42,6 +44,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 // Saved locally, copied to a remote, and recovered are separate facts with separate times.
 function Facts({ checkpoint }: { checkpoint: Checkpoint }) {
   const { backup } = checkpoint;
+  const status = backup ? backupStatus(backup) : null;
   return (
     <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
       <Fact label="Saved locally">
@@ -61,9 +64,16 @@ function Facts({ checkpoint }: { checkpoint: Checkpoint }) {
         {backup ? (
           <>
             <span className="font-mono break-all">{safeText(redactSecrets(backup.remoteUrl))}</span>
-            <span className="block text-xs text-gray-500 dark:text-gray-400">
-              last recorded as verified {formatTimestamp(backup.verifiedAt)} (historical; use Remote backup to re-check)
-            </span>
+            {status?.state === 'unconfirmed' ? (
+              <span className="block text-xs text-yellow-700 dark:text-yellow-400">
+                Not confirmed: the latest check{status.checkedAt ? ` (${formatTimestamp(status.checkedAt)})` : ''} failed. It was last confirmed{' '}
+                {formatTimestamp(status.lastVerifiedAt)}, before that failure. Use Remote backup to see the error and re-check.
+              </span>
+            ) : (
+              <span className="block text-xs text-gray-500 dark:text-gray-400">
+                last confirmed {formatTimestamp(status?.checkedAt)} (historical; use Remote backup to re-check)
+              </span>
+            )}
           </>
         ) : (
           'Not copied to a remote'
@@ -101,7 +111,7 @@ export function CheckpointDetail({ checkpoint, state, projectName, projectPath, 
       <div>
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white break-words">{safeText(checkpoint.label) || '(unnamed)'}</h3>
       </div>
-      <TabBar prefix={prefix} label="Saved version actions" tabs={TABS} active={tab} onChange={show} />
+      <TabBar prefix={prefix} label="Saved version actions" tabs={tabsFor(checkpoint)} active={tab} onChange={show} />
 
       {panel(
         'overview',
@@ -130,6 +140,7 @@ export function CheckpointDetail({ checkpoint, state, projectName, projectPath, 
           onRecovered={onChanged}
         />,
       )}
+      {panel('evidence', <EvidencePanel checkpoint={checkpoint} onChanged={onChanged} />)}
       {panel('backup', <BackupPanel checkpoint={checkpoint} defaultRemoteUrl={githubUrl} onChanged={onChanged} />)}
     </div>
   );

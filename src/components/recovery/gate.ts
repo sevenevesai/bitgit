@@ -16,6 +16,8 @@ export interface CallOptions {
 // anyway; gating in the UI avoids self-inflicted lock contention and lost results.
 export interface RecoveryGate {
   busy: BusyInfo | null;
+  // An interrupted repair blocks saving and repairing until it is undone; reading and recovering copies still work.
+  repairPending: boolean;
   call<A extends RecoveryAction>(
     label: string,
     request: RequestOf<A> & { action: A },
