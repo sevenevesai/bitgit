@@ -1,12 +1,14 @@
 use crate::app_settings::{self, EditorConfig, EditorPreset};
 use crate::credentials::CredentialManager;
-use crate::git_service::{GitService, StatusInfo as GitStatusInfo, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo};
+use crate::git_service::{GitService, PublishOptions, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo};
 use crate::models::*;
 use crate::project_cache;
+use crate::project_sync::{self, LocalRepoImport};
+use crate::recovery_request;
 use crate::scanner::RepositoryScanner;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -15,9 +17,6 @@ use std::os::windows::process::CommandExt;
 
 // Global Git service instance (Arc allows multiple references without dropping)
 static GIT_SERVICE: Lazy<Mutex<Option<Arc<GitService>>>> = Lazy::new(|| Mutex::new(None));
-
-// Repository cache
-static REPOSITORIES: Lazy<Mutex<HashMap<String, Repository>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Helper to safely acquire a mutex lock, handling poison errors gracefully.
 /// If the lock is poisoned (previous holder panicked), we recover by accessing the data anyway.
@@ -51,139 +50,127 @@ pub fn greet(name: &str) -> String {
     format!("Hello, {}! Welcome to BitGit!", name)
 }
 
-#[tauri::command]
-pub async fn get_repositories() -> Result<Vec<Repository>, String> {
-    let repos = safe_lock(&REPOSITORIES)?;
-    Ok(repos.values().cloned().collect())
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339()
 }
 
-#[tauri::command]
-pub async fn check_repository_status(repo_id: String) -> Result<RepositoryStatus, String> {
-    let repos = safe_lock(&REPOSITORIES)?;
-    let repo = repos.get(&repo_id)
-        .ok_or_else(|| format!("Repository not found: {}", repo_id))?
-        .clone();
-    drop(repos);
-
-    // Check if local path exists
-    let local_path = repo.local_path
-        .as_ref()
-        .ok_or_else(|| "Repository has no local path".to_string())?;
-
-    let service = get_git_service()?;
-    let status_info = service.check_status(local_path)
-        .map_err(|e| format!("Failed to check status: {}", e))?;
-
-    let sync_status = determine_sync_status(&status_info);
-
-    Ok(RepositoryStatus {
-        is_git_repo: true,
-        has_remote: true,
-        uncommitted_files: status_info.uncommitted_files,
-        untracked_files: status_info.untracked_files,
-        modified_files: status_info.modified_files,
-        unpushed_commits: status_info.unpushed_commits,
-        remote_branches: status_info.remote_branches,
-        sync_status,
-        last_checked: chrono::Utc::now().to_rfc3339(),
-    })
+/// Read one saved project from the cache.
+fn find_project(project_id: &str) -> Result<Project, String> {
+    project_cache::load_projects()
+        .map_err(|e| format!("Failed to load projects: {}", e))?
+        .into_iter()
+        .find(|p| p.id == project_id)
+        .ok_or_else(|| format!("Project not found: {}", project_id))
 }
 
-#[tauri::command]
-pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResult, String> {
-    let repos = safe_lock(&REPOSITORIES)?;
-    let repo = repos.get(&id)
-        .ok_or_else(|| format!("Repository not found: {}", id))?
-        .clone();
-    drop(repos);
+/// Re-check a project's local repository and persist the result. GitHub is not
+/// required, so local-only sources are checked too. A failed check is stored as
+/// `Unavailable` so an older synced status cannot be shown as current.
+fn refresh_project_status(project_id: &str) -> Result<Project, String> {
+    let project = find_project(project_id)?;
+    let Some(local_path) = project.local_path.clone() else {
+        return Ok(project);
+    };
 
-    // Check if local path exists
-    let local_path = repo.local_path
-        .as_ref()
-        .ok_or_else(|| "Repository has no local path".to_string())?;
+    let check = get_git_service()
+        .and_then(|service| service.check_status(&local_path).map_err(|e| e.to_string()));
+    if let Err(error) = &check {
+        eprintln!("[Rust] Status check failed for project {}: {}", project.id, error);
+    }
+
+    let status = project_sync::status_from_check(check, project.git_status.as_ref(), &now_rfc3339());
+    // Re-read under the cache lock: the check is slow and other commands may have
+    // edited the project meanwhile.
+    project_cache::update_project(project_id, |p| project_sync::apply_git_status(p, status))
+        .map_err(|e| format!("Failed to save project: {}", e))
+}
+
+/// Run a sync action for a saved project. Results report only what the service
+/// returned, and `last_synced` advances only when data actually moved.
+fn run_sync(project_id: &str, action: SyncAction) -> Result<SyncResult, String> {
+    let project = find_project(project_id)?;
+    let local_path = project.local_path
+        .as_deref()
+        .ok_or_else(|| "Project has no local path".to_string())?;
 
     let service = get_git_service()?;
 
     // Get GitHub URL as Option<&str> for passing to git service
-    let remote_url = repo.github_url.as_deref();
+    let remote_url = project.github_url.as_deref();
 
-    match action {
-        SyncAction::PushLocal { commit_message, commit_description } => {
-            let result = service.push_local(
+    let result = match &action {
+        SyncAction::PushLocal { commit_message, commit_description, selected_files, allow_warnings } => {
+            let options = PublishOptions {
+                selected_files: selected_files.clone(),
+                allow_warnings: *allow_warnings,
+            };
+            let pushed = service.push_local(
                 local_path,
                 remote_url,
                 commit_message.as_deref(),
                 commit_description.as_deref(),
+                &options,
             ).map_err(|e| format!("Push failed: {}", e))?;
-
-            let _new_status = service.check_status(local_path)
-                .map_err(|e| format!("Failed to check status: {}", e))?;
-
-            Ok(SyncResult {
-                success: true,
-                message: "Successfully pushed local changes".to_string(),
-                details: SyncDetails {
-                    committed: Some(result.committed),
-                    pushed: Some(1),
-                    merged: None,
-                    deleted: None,
-                    errors: None,
-                },
-            })
+            project_sync::push_outcome(&pushed)
         }
         SyncAction::MergeBranches { branches } => {
-            let merged = service.merge_branches(local_path, &branches, remote_url)
+            let merged = service.merge_branches(local_path, branches, remote_url)
                 .map_err(|e| format!("Merge failed: {}", e))?;
-
-            Ok(SyncResult {
-                success: true,
-                message: format!("Successfully merged {} branches", merged.len()),
-                details: SyncDetails {
-                    committed: None,
-                    pushed: None,
-                    merged: Some(merged.clone()),
-                    deleted: Some(merged),
-                    errors: None,
-                },
-            })
+            project_sync::merge_outcome(merged)
         }
         SyncAction::PullBranches { branches } => {
-            let pulled = service.pull_branches(local_path, &branches, remote_url)
+            let pulled = service.pull_branches(local_path, branches, remote_url)
                 .map_err(|e| format!("Pull failed: {}", e))?;
-
-            Ok(SyncResult {
-                success: true,
-                message: format!("Successfully pulled {} branches", pulled.len()),
-                details: SyncDetails {
-                    committed: None,
-                    pushed: Some(1), // Main branch is pushed
-                    merged: Some(pulled.clone()),
-                    deleted: None, // Branches are NOT deleted
-                    errors: None,
-                },
-            })
+            project_sync::pull_outcome(pulled)
         }
-        SyncAction::FullSync { commit_message, commit_description } => {
-            let result = service.full_sync(
+        SyncAction::FullSync { commit_message, commit_description, selected_files, allow_warnings } => {
+            let options = PublishOptions {
+                selected_files: selected_files.clone(),
+                allow_warnings: *allow_warnings,
+            };
+            let synced = service.full_sync(
                 local_path,
                 remote_url,
                 commit_message.as_deref(),
                 commit_description.as_deref(),
+                &options,
             ).map_err(|e| format!("Full sync failed: {}", e))?;
+            project_sync::full_sync_outcome(synced)
+        }
+    };
 
-            Ok(SyncResult {
-                success: result.success,
-                message: result.message,
-                details: SyncDetails {
-                    committed: result.committed,
-                    pushed: result.committed.map(|_| 1),
-                    merged: result.merged.clone(),
-                    deleted: result.merged,
-                    errors: result.errors,
-                },
-            })
+    if project_sync::advances_last_synced(&action, &result) {
+        let now = now_rfc3339();
+        if let Err(e) = project_cache::update_project(project_id, |p| p.last_synced = Some(now)) {
+            eprintln!("[Rust] Warning: sync succeeded but last-synced was not saved: {}", e);
         }
     }
+
+    Ok(result)
+}
+
+// The three commands below predate the persistent project cache. They now read and
+// write the same saved projects as the dashboard, so nothing lives only in memory.
+
+#[tauri::command]
+pub async fn get_repositories() -> Result<Vec<Repository>, String> {
+    project_cache::load_projects()
+        .map_err(|e| format!("Failed to load projects: {}", e))
+}
+
+#[tauri::command]
+pub async fn check_repository_status(repo_id: String) -> Result<RepositoryStatus, String> {
+    let project = refresh_project_status(&repo_id)?;
+    if project.local_path.is_none() {
+        return Err("Repository has no local path".to_string());
+    }
+    project.git_status
+        .ok_or_else(|| "Repository status is unavailable".to_string())
+}
+
+#[tauri::command]
+pub async fn sync_repository(id: String, action: SyncAction) -> Result<SyncResult, String> {
+    run_sync(&id, action)
 }
 
 #[tauri::command]
@@ -260,139 +247,68 @@ pub async fn scan_directories(
     Ok(repo_paths)
 }
 
-// Helper functions
+// Import helpers
 
-fn determine_sync_status(status: &GitStatusInfo) -> SyncStatus {
-    let has_local_changes = status.uncommitted_files > 0 || status.unpushed_commits > 0;
-    let has_remote_branches = !status.remote_branches.is_empty();
-
-    if has_local_changes && has_remote_branches {
-        SyncStatus::Both
-    } else if has_local_changes {
-        SyncStatus::LocalChanges
-    } else if has_remote_branches {
-        SyncStatus::RemoteBranches
-    } else {
-        SyncStatus::Synced
-    }
+fn repo_name_from_path(path: &str) -> String {
+    PathBuf::from(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Unknown")
+        .to_string()
 }
 
-// Function to add a repository to the cache
-pub fn add_repository_to_cache(repo: Repository) {
-    let mut repos = REPOSITORIES.lock()
-        .expect("Repository cache mutex poisoned - unrecoverable");
-    repos.insert(repo.id.clone(), repo);
-}
-
+/// Import scanned repositories into the saved projects the dashboard loads. A folder
+/// that is already a project keeps its id and metadata; only its git status is refreshed.
 #[tauri::command]
 pub async fn add_repositories(repo_paths: Vec<String>) -> Result<Vec<Repository>, String> {
-    let service = get_git_service()?;
-    let mut added_repos = Vec::new();
+    let service = get_git_service();
+    let mut seen = HashSet::new();
+    let mut imports = Vec::new();
 
     for path in repo_paths {
-        // Extract repository name from path
-        let path_buf = PathBuf::from(&path);
-        let name = path_buf
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("Unknown")
-            .to_string();
+        let key = project_sync::normalize_path_key(&path);
+        if key.is_empty() || !seen.insert(key) {
+            continue;
+        }
 
-        // Generate unique ID
-        let id = format!("{}-{}", name, chrono::Utc::now().timestamp());
-
-        // Check repository status
-        let (git_status, project_status) = match service.check_status(&path) {
-            Ok(status_info) => {
-                let sync_status = determine_sync_status(&status_info);
-                let git_status = GitStatus {
-                    is_git_repo: true,
-                    has_remote: true,
-                    uncommitted_files: status_info.uncommitted_files,
-                    untracked_files: status_info.untracked_files,
-                    modified_files: status_info.modified_files,
-                    unpushed_commits: status_info.unpushed_commits,
-                    remote_branches: status_info.remote_branches,
-                    sync_status: sync_status.clone(),
-                    last_checked: chrono::Utc::now().to_rfc3339(),
-                };
-                let project_status = match sync_status {
-                    SyncStatus::Synced => ProjectStatus::Synced,
-                    _ => ProjectStatus::LocalOnly,
-                };
-                (Some(git_status), project_status)
-            }
-            Err(_) => {
-                // If status check fails, assume local only
-                (None, ProjectStatus::LocalOnly)
-            }
+        // Status checks fetch from the remote, so they run before the cache lock is taken.
+        let check = match &service {
+            Ok(service) => service.check_status(&path).map_err(|e| e.to_string()),
+            Err(error) => Err(error.clone()),
         };
+        if let Err(error) = &check {
+            eprintln!("[Rust] Status check failed while importing {}: {}", path, error);
+        }
 
-        let repo = Repository {
-            id: id.clone(),
-            name,
-            github_owner: None,
-            github_repo: None,
-            github_url: None,
-            local_path: Some(path),
-            project_status,
-            git_status,
-            created_at: chrono::Utc::now().to_rfc3339(),
-            last_synced: None,
-            // Priority 3 fields
-            description: None,
-            archived: None,
-            favorite: None,
-            last_activity: None,
-            statistics: None,
-            template: None,
-        };
-
-        add_repository_to_cache(repo.clone());
-        added_repos.push(repo);
+        imports.push(LocalRepoImport { name: repo_name_from_path(&path), path, check });
     }
 
-    Ok(added_repos)
+    let now = now_rfc3339();
+    project_cache::modify_projects(|projects| {
+        imports
+            .into_iter()
+            .map(|import| project_sync::merge_local_import(projects, import, &now))
+            .collect::<Vec<_>>()
+    })
+    .map_err(|e| format!("Failed to save imported projects: {}", e))
 }
 
+/// Import the user's GitHub repositories into the saved projects. Repositories that
+/// match an existing project's GitHub link (linked or not) are not duplicated.
 #[tauri::command]
 pub async fn fetch_github_repos(token: String) -> Result<Vec<Repository>, String> {
     let service = get_git_service()?;
     let github_repos = service.list_github_repos(&token)
         .map_err(|e| format!("Failed to fetch GitHub repos: {}", e))?;
 
-    let mut added_repos = Vec::new();
-
-    for gh_repo in github_repos {
-        // Generate unique ID
-        let id = format!("{}-{}", gh_repo.name, chrono::Utc::now().timestamp());
-
-        // Create project with GitHub info only (no local path)
-        let repo = Repository {
-            id: id.clone(),
-            name: gh_repo.name,
-            github_owner: Some(gh_repo.owner),
-            github_repo: Some(gh_repo.full_name.clone()),
-            github_url: Some(gh_repo.clone_url),
-            local_path: None, // No local path yet
-            project_status: ProjectStatus::GithubOnly,
-            git_status: None, // No git status without local path
-            created_at: chrono::Utc::now().to_rfc3339(),
-            last_synced: None,
-            // Priority 3 fields
-            description: None,
-            archived: None,
-            favorite: None,
-            last_activity: None,
-            statistics: None,
-            template: None,
-        };
-
-        add_repository_to_cache(repo.clone());
-        added_repos.push(repo);
-    }
-
-    Ok(added_repos)
+    let now = now_rfc3339();
+    project_cache::modify_projects(|projects| {
+        github_repos
+            .iter()
+            .map(|repo| project_sync::merge_github_import(projects, repo, &now))
+            .collect::<Vec<_>>()
+    })
+    .map_err(|e| format!("Failed to save GitHub repositories: {}", e))
 }
 
 // ============================================================================
@@ -470,63 +386,10 @@ pub async fn delete_project(project_id: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to delete project: {}", e))
 }
 
-/// Check status for a fully configured project (both GitHub and Local)
+/// Check status for a project with a local repository (GitHub is optional)
 #[tauri::command]
 pub async fn check_project_status(project_id: String) -> Result<Project, String> {
-    eprintln!("[Rust] check_project_status called for project: {}", project_id);
-
-    // Load the project
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    let mut project = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
-
-    eprintln!("[Rust] Project found: {} (local: {:?}, github: {:?})",
-        project.name, project.local_path, project.github_url);
-
-    // Only check status if both GitHub and Local are configured
-    if let (Some(ref local_path), Some(_)) = (&project.local_path, &project.github_url) {
-        eprintln!("[Rust] Checking git status for: {}", local_path);
-        let service = get_git_service()?;
-        let status_info = service.check_status(local_path)
-            .map_err(|e| format!("Failed to check status: {}", e))?;
-
-        eprintln!("[Rust] Status info: uncommitted={}, unpushed={}, branches={}",
-            status_info.uncommitted_files, status_info.unpushed_commits, status_info.remote_branches.len());
-
-        let sync_status = determine_sync_status(&status_info);
-
-        // Update git status
-        project.git_status = Some(GitStatus {
-            is_git_repo: true,
-            has_remote: true,
-            uncommitted_files: status_info.uncommitted_files,
-            untracked_files: status_info.untracked_files,
-            modified_files: status_info.modified_files,
-            unpushed_commits: status_info.unpushed_commits,
-            remote_branches: status_info.remote_branches,
-            sync_status: sync_status.clone(),
-            last_checked: chrono::Utc::now().to_rfc3339(),
-        });
-
-        // Update project status based on git status
-        project.project_status = match sync_status {
-            SyncStatus::Synced => ProjectStatus::Synced,
-            SyncStatus::LocalChanges => ProjectStatus::NeedsPush,
-            SyncStatus::RemoteBranches => ProjectStatus::NeedsMerge,
-            SyncStatus::Both => ProjectStatus::NeedsSync,
-            SyncStatus::NotConnected => ProjectStatus::Ready,
-        };
-
-        // Save updated project
-        project_cache::save_project(project.clone())
-            .map_err(|e| format!("Failed to save project: {}", e))?;
-    }
-
-    Ok(project)
+    refresh_project_status(&project_id)
 }
 
 /// Result of editor availability detection
@@ -825,24 +688,12 @@ pub async fn clone_repository(
     service.clone_repository(&github_url, &local_path)
         .map_err(|e| format!("Failed to clone repository: {}", e))?;
 
-    // Load and update the project with the new local path
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    let mut project = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
-
-    // Update project with local path
-    project.local_path = Some(local_path);
-    project.project_status = ProjectStatus::Ready;
-
-    // Save updated project
-    project_cache::save_project(project.clone())
-        .map_err(|e| format!("Failed to save project: {}", e))?;
-
-    Ok(project)
+    // Update the stored project with the new local path
+    project_cache::update_project(&project_id, |project| {
+        project.local_path = Some(local_path);
+        project.project_status = ProjectStatus::Ready;
+    })
+    .map_err(|e| format!("Failed to save project: {}", e))
 }
 
 /// Create a new GitHub repository and push local repository to it
@@ -855,16 +706,8 @@ pub async fn create_github_repository(
 ) -> Result<Project, String> {
     let service = get_git_service()?;
 
-    // Load the project
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    let mut project = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
-
-    let local_path = project.local_path.as_ref()
+    let local_path = find_project(&project_id)?
+        .local_path
         .ok_or_else(|| "Project has no local path".to_string())?;
 
     // Create GitHub repository
@@ -880,29 +723,27 @@ pub async fn create_github_repository(
         None
     };
 
-    // Update project with GitHub info
-    project.github_url = Some(github_url);
-    project.github_owner = github_owner;
-    project.github_repo = github_repo;
-    project.project_status = ProjectStatus::Ready;
-
     // Initialize git repo if not already initialized
-    service.init_repository(local_path)
+    service.init_repository(&local_path)
         .map_err(|e| format!("Failed to initialize git repository: {}", e))?;
 
     // Add remote and push
-    service.add_remote(local_path, "origin", &project.github_url.as_ref().unwrap())
+    service.add_remote(&local_path, "origin", &github_url)
         .map_err(|e| format!("Failed to add remote: {}", e))?;
 
     // Push to GitHub
-    service.push_to_remote(local_path, "origin", "main")
+    service.push_to_remote(&local_path, "origin", "main")
         .map_err(|e| format!("Failed to push to GitHub: {}", e))?;
 
-    // Save updated project
-    project_cache::save_project(project.clone())
-        .map_err(|e| format!("Failed to save project: {}", e))?;
-
-    Ok(project)
+    // Record the GitHub link on the stored project (re-read under the cache lock: the
+    // network calls above are slow and other commands may have edited it meanwhile)
+    project_cache::update_project(&project_id, |project| {
+        project.github_url = Some(github_url);
+        project.github_owner = github_owner;
+        project.github_repo = github_repo;
+        project.project_status = ProjectStatus::Ready;
+    })
+    .map_err(|e| format!("Failed to save project: {}", e))
 }
 
 /// Validate files before sync to prevent push failures
@@ -933,99 +774,7 @@ pub async fn validate_before_sync(project_id: String) -> Result<PreSyncValidatio
 /// Sync a project (replacement for sync_repository that works with projects)
 #[tauri::command]
 pub async fn sync_project(project_id: String, action: SyncAction) -> Result<SyncResult, String> {
-    // Load project from cache
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    let project = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
-
-    // Check if local path exists
-    let local_path = project.local_path
-        .as_ref()
-        .ok_or_else(|| "Project has no local path".to_string())?;
-
-    let service = get_git_service()?;
-
-    // Get GitHub URL as Option<&str> for passing to git service
-    let remote_url = project.github_url.as_deref();
-
-    match action {
-        SyncAction::PushLocal { commit_message, commit_description } => {
-            let result = service.push_local(
-                local_path,
-                remote_url,
-                commit_message.as_deref(),
-                commit_description.as_deref(),
-            ).map_err(|e| format!("Push failed: {}", e))?;
-
-            Ok(SyncResult {
-                success: true,
-                message: "Successfully pushed local changes".to_string(),
-                details: SyncDetails {
-                    committed: Some(result.committed),
-                    pushed: Some(1),
-                    merged: None,
-                    deleted: None,
-                    errors: None,
-                },
-            })
-        }
-        SyncAction::MergeBranches { branches } => {
-            let merged = service.merge_branches(local_path, &branches, remote_url)
-                .map_err(|e| format!("Merge failed: {}", e))?;
-
-            Ok(SyncResult {
-                success: true,
-                message: format!("Successfully merged {} branches", merged.len()),
-                details: SyncDetails {
-                    committed: None,
-                    pushed: None,
-                    merged: Some(merged.clone()),
-                    deleted: Some(merged),
-                    errors: None,
-                },
-            })
-        }
-        SyncAction::PullBranches { branches } => {
-            let pulled = service.pull_branches(local_path, &branches, remote_url)
-                .map_err(|e| format!("Pull failed: {}", e))?;
-
-            Ok(SyncResult {
-                success: true,
-                message: format!("Successfully pulled {} branches", pulled.len()),
-                details: SyncDetails {
-                    committed: None,
-                    pushed: Some(1), // Main branch is pushed
-                    merged: Some(pulled.clone()),
-                    deleted: None, // Branches are NOT deleted
-                    errors: None,
-                },
-            })
-        }
-        SyncAction::FullSync { commit_message, commit_description } => {
-            let result = service.full_sync(
-                local_path,
-                remote_url,
-                commit_message.as_deref(),
-                commit_description.as_deref(),
-            ).map_err(|e| format!("Full sync failed: {}", e))?;
-
-            Ok(SyncResult {
-                success: result.success,
-                message: result.message,
-                details: SyncDetails {
-                    committed: result.committed,
-                    pushed: result.committed.map(|_| 1),
-                    merged: result.merged.clone(),
-                    deleted: result.merged,
-                    errors: result.errors,
-                },
-            })
-        }
-    }
+    run_sync(&project_id, action)
 }
 
 // ==================== ADVANCED GIT FEATURES ====================
@@ -1157,6 +906,9 @@ pub async fn git_get_current_branch(repo_path: String) -> Result<String, String>
 }
 
 // ==================== PROJECT MANAGEMENT (PRIORITY 3) ====================
+//
+// Each command edits the stored project in place (`update_project`) so a slow
+// operation elsewhere cannot overwrite these fields with a stale copy.
 
 /// Update project metadata (description, favorite, archived)
 #[tauri::command]
@@ -1166,73 +918,56 @@ pub async fn update_project_metadata(
     favorite: Option<bool>,
     archived: Option<bool>,
 ) -> Result<Project, String> {
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
+    project_cache::update_project(&project_id, |project| {
+        // Update fields if provided
+        if description.is_some() {
+            project.description = description;
+        }
+        if favorite.is_some() {
+            project.favorite = favorite;
+        }
+        if archived.is_some() {
+            project.archived = archived;
+        }
 
-    let mut project = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
-
-    // Update fields if provided
-    if description.is_some() {
-        project.description = description;
-    }
-    if favorite.is_some() {
-        project.favorite = favorite;
-    }
-    if archived.is_some() {
-        project.archived = archived;
-    }
-
-    // Update last activity
-    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
-
-    // Save updated project
-    project_cache::save_project(project.clone())
-        .map_err(|e| format!("Failed to save project: {}", e))?;
-
-    Ok(project)
+        // Update last activity
+        project.last_activity = Some(now_rfc3339());
+    })
+    .map_err(|e| format!("Failed to save project: {}", e))
 }
 
 /// Toggle project favorite status
 #[tauri::command]
 pub async fn toggle_project_favorite(project_id: String) -> Result<Project, String> {
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    let mut project = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
-
-    project.favorite = Some(!project.favorite.unwrap_or(false));
-    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
-
-    project_cache::save_project(project.clone())
-        .map_err(|e| format!("Failed to save project: {}", e))?;
-
-    Ok(project)
+    project_cache::update_project(&project_id, |project| {
+        project.favorite = Some(!project.favorite.unwrap_or(false));
+        project.last_activity = Some(now_rfc3339());
+    })
+    .map_err(|e| format!("Failed to save project: {}", e))
 }
 
 /// Toggle project archived status
 #[tauri::command]
 pub async fn toggle_project_archived(project_id: String) -> Result<Project, String> {
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
+    project_cache::update_project(&project_id, |project| {
+        project.archived = Some(!project.archived.unwrap_or(false));
+        project.last_activity = Some(now_rfc3339());
+    })
+    .map_err(|e| format!("Failed to save project: {}", e))
+}
 
-    let mut project = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
-
-    project.archived = Some(!project.archived.unwrap_or(false));
-    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
-
-    project_cache::save_project(project.clone())
-        .map_err(|e| format!("Failed to save project: {}", e))?;
-
-    Ok(project)
+/// Drop the `Cargo.lock` ignore rule from a Rust template: application lockfiles stay
+/// tracked so saved history can reproduce the dependency set. Other lines are kept
+/// byte-for-byte. The rule is defined in the UI's template list (`src/types/index.ts`);
+/// remove it there and this guard becomes a no-op.
+fn keep_cargo_lock_tracked(template_id: &str, gitignore: &str) -> String {
+    if template_id != "rust" {
+        return gitignore.to_string();
+    }
+    gitignore
+        .split_inclusive('\n')
+        .filter(|line| !matches!(line.trim(), "Cargo.lock" | "/Cargo.lock"))
+        .collect()
 }
 
 /// Apply a template to a project (write .gitignore and other files)
@@ -1245,13 +980,7 @@ pub async fn apply_project_template(
     use std::fs;
     use std::path::Path;
 
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    let mut project = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
+    let project = find_project(&project_id)?;
 
     // Check if local path exists
     let local_path = project.local_path
@@ -1261,18 +990,16 @@ pub async fn apply_project_template(
     // Write .gitignore file if content is provided
     if !gitignore_content.is_empty() {
         let gitignore_path = Path::new(local_path).join(".gitignore");
-        fs::write(&gitignore_path, gitignore_content)
+        fs::write(&gitignore_path, keep_cargo_lock_tracked(&template_id, &gitignore_content))
             .map_err(|e| format!("Failed to write .gitignore: {}", e))?;
     }
 
     // Update project template
-    project.template = Some(template_id);
-    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
-
-    project_cache::save_project(project.clone())
-        .map_err(|e| format!("Failed to save project: {}", e))?;
-
-    Ok(project)
+    project_cache::update_project(&project_id, |project| {
+        project.template = Some(template_id);
+        project.last_activity = Some(now_rfc3339());
+    })
+    .map_err(|e| format!("Failed to save project: {}", e))
 }
 
 /// Increment project statistics
@@ -1281,19 +1008,15 @@ pub async fn increment_project_stats(
     project_id: String,
     stat_type: String,
 ) -> Result<Project, String> {
-    use crate::models::ProjectStatistics;
+    if !["sync", "commit", "push", "merge", "pull"].contains(&stat_type.as_str()) {
+        return Err(format!("Unknown stat type: {}", stat_type));
+    }
 
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
+    project_cache::update_project(&project_id, |project| {
+        let now = now_rfc3339();
 
-    let mut project = projects
-        .into_iter()
-        .find(|p| p.id == project_id)
-        .ok_or_else(|| format!("Project not found: {}", project_id))?;
-
-    // Initialize statistics if not present
-    if project.statistics.is_none() {
-        project.statistics = Some(ProjectStatistics {
+        // Initialize statistics if not present
+        let stats = project.statistics.get_or_insert_with(|| ProjectStatistics {
             total_syncs: 0,
             total_commits: 0,
             total_pushes: 0,
@@ -1302,10 +1025,6 @@ pub async fn increment_project_stats(
             last_sync_date: None,
             last_commit_date: None,
         });
-    }
-
-    if let Some(ref mut stats) = project.statistics {
-        let now = chrono::Utc::now().to_rfc3339();
 
         match stat_type.as_str() {
             "sync" => {
@@ -1316,25 +1035,82 @@ pub async fn increment_project_stats(
                 stats.total_commits += 1;
                 stats.last_commit_date = Some(now.clone());
             }
-            "push" => {
-                stats.total_pushes += 1;
+            "push" => stats.total_pushes += 1,
+            "merge" => stats.total_merges += 1,
+            "pull" => stats.total_pulls += 1,
+            _ => {} // rejected before the update
+        }
+
+        project.last_activity = Some(now);
+    })
+    .map_err(|e| format!("Failed to save project: {}", e))
+}
+
+// ==================== RECOVERY ====================
+
+/// Pass the stored GitHub token to the service for remote recovery actions. It stays in
+/// the service's memory and is never logged or persisted here. Returns the token so the
+/// caller can redact it from error text. Local recovery works without one.
+fn forward_stored_token(service: &GitService) -> Option<String> {
+    let manager = match CredentialManager::new() {
+        Ok(manager) => manager,
+        Err(e) => {
+            eprintln!("[Rust] Recovery continues without a GitHub token: {}", e);
+            return None;
+        }
+    };
+
+    match manager.get_stored_credential() {
+        Ok(Some((_, token))) => {
+            if let Err(e) = service.set_github_token(&token) {
+                eprintln!(
+                    "[Rust] Could not pass the GitHub token to recovery: {}",
+                    recovery_request::redact_secret(&e.to_string(), &token)
+                );
+                return None;
             }
-            "merge" => {
-                stats.total_merges += 1;
-            }
-            "pull" => {
-                stats.total_pulls += 1;
-            }
-            _ => return Err(format!("Unknown stat type: {}", stat_type)),
+            Some(token)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("[Rust] Recovery continues without a GitHub token: {}", e);
+            None
         }
     }
+}
 
-    project.last_activity = Some(chrono::Utc::now().to_rfc3339());
+/// Forward a recovery request for a saved project to the Git service, which owns the
+/// vault, destinations and receipts. The request must name a recognised action with
+/// only its documented fields; the source path comes from the saved project, never the
+/// caller. The source need not exist, so old checkpoints of a deleted project stay usable.
+#[tauri::command]
+pub async fn recovery_command(
+    project_id: String,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let request = recovery_request::validate_recovery_request(request)?;
 
-    project_cache::save_project(project.clone())
-        .map_err(|e| format!("Failed to save project: {}", e))?;
+    let repo_path = find_project(&project_id)?
+        .local_path
+        .ok_or_else(|| "Project has no local path".to_string())?;
+    recovery_request::validate_repo_path(&repo_path)?;
 
-    Ok(project)
+    // The service call holds the service lock until the whole response arrives, so run
+    // it off the async runtime's worker threads.
+    tauri::async_runtime::spawn_blocking(move || {
+        let service = get_git_service()?;
+        let token = if request.needs_remote() { forward_stored_token(&service) } else { None };
+
+        service.recovery(&repo_path, request.into_request()).map_err(|e| {
+            let message = format!("Recovery failed: {}", e);
+            match &token {
+                Some(token) => recovery_request::redact_secret(&message, token),
+                None => message,
+            }
+        })
+    })
+    .await
+    .map_err(|e| format!("Recovery task failed: {}", e))?
 }
 
 // ==================== ANALYTICS FEATURES ====================
@@ -2099,4 +1875,34 @@ pub async fn generate_analytics_heatmap() -> Result<ContributionHeatmap, String>
         longest_streak,
         most_productive_day,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RUST_TEMPLATE: &str = "# Cargo\n/target/\nCargo.lock\n\n# IDE\n.vscode/\n";
+
+    #[test]
+    fn rust_template_keeps_cargo_lock_tracked() {
+        let written = keep_cargo_lock_tracked("rust", RUST_TEMPLATE);
+        assert_eq!(written, "# Cargo\n/target/\n\n# IDE\n.vscode/\n");
+        assert!(!written.lines().any(|line| line.contains("Cargo.lock")));
+    }
+
+    #[test]
+    fn cargo_lock_guard_preserves_line_endings_and_other_rules() {
+        let written = keep_cargo_lock_tracked("rust", "/target/\r\n/Cargo.lock\r\n*.swp\r\n");
+        assert_eq!(written, "/target/\r\n*.swp\r\n");
+
+        // A rule that merely mentions the name in a comment or a longer path is not touched.
+        let unrelated = "# Cargo.lock stays\nvendor/Cargo.lock\n";
+        assert_eq!(keep_cargo_lock_tracked("rust", unrelated), unrelated);
+    }
+
+    #[test]
+    fn other_templates_are_written_unchanged() {
+        assert_eq!(keep_cargo_lock_tracked("node", RUST_TEMPLATE), RUST_TEMPLATE);
+        assert_eq!(keep_cargo_lock_tracked("rust", ""), "");
+    }
 }

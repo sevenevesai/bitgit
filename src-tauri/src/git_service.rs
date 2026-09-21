@@ -159,23 +159,15 @@ impl GitService {
         remote_url: Option<&str>,
         commit_message: Option<&str>,
         commit_description: Option<&str>,
+        options: &PublishOptions,
     ) -> Result<PushResult> {
-        let mut payload = serde_json::json!({ "repoPath": repo_path });
-        if let Some(url) = remote_url {
-            payload["remoteUrl"] = serde_json::json!(url);
-        }
-        if let Some(msg) = commit_message {
-            payload["commitMessage"] = serde_json::json!(msg);
-        }
-        if let Some(desc) = commit_description {
-            payload["commitDescription"] = serde_json::json!(desc);
-        }
+        let payload = publish_payload(repo_path, remote_url, commit_message, commit_description, options);
         let result = self.execute("pushLocal", payload)?;
         let push_result: PushResult = serde_json::from_value(result)?;
         Ok(push_result)
     }
 
-    pub fn merge_branches(&self, repo_path: &str, branches: &[String], remote_url: Option<&str>) -> Result<Vec<String>> {
+    pub fn merge_branches(&self, repo_path: &str, branches: &[String], remote_url: Option<&str>) -> Result<MergeResult> {
         let mut payload = serde_json::json!({
             "repoPath": repo_path,
             "branches": branches
@@ -185,7 +177,7 @@ impl GitService {
         }
         let result = self.execute("mergeBranches", payload)?;
         let merged: MergeResult = serde_json::from_value(result)?;
-        Ok(merged.merged)
+        Ok(merged)
     }
 
     pub fn pull_branches(&self, repo_path: &str, branches: &[String], remote_url: Option<&str>) -> Result<Vec<String>> {
@@ -207,23 +199,22 @@ impl GitService {
         remote_url: Option<&str>,
         commit_message: Option<&str>,
         commit_description: Option<&str>,
+        options: &PublishOptions,
     ) -> Result<FullSyncResult> {
-        let mut payload = serde_json::json!({ "repoPath": repo_path });
-        if let Some(url) = remote_url {
-            payload["remoteUrl"] = serde_json::json!(url);
-        }
-        if let Some(msg) = commit_message {
-            payload["commitMessage"] = serde_json::json!(msg);
-        }
-        if let Some(desc) = commit_description {
-            payload["commitDescription"] = serde_json::json!(desc);
-        }
+        let payload = publish_payload(repo_path, remote_url, commit_message, commit_description, options);
         let result = self.execute("fullSync", payload)?;
         let sync_result: FullSyncResult = serde_json::from_value(result)?;
         Ok(sync_result)
     }
 
-    #[allow(dead_code)]
+    /// Forwards an already-validated recovery request. The service owns the vault
+    /// location, so only the source path and the request travel over IPC.
+    pub fn recovery(&self, repo_path: &str, request: serde_json::Value) -> Result<serde_json::Value> {
+        let payload = serde_json::json!({ "repoPath": repo_path, "request": request });
+        self.execute("recovery", payload)
+    }
+
+    /// Holds the token in the service process memory only; callers must not log it.
     pub fn set_github_token(&self, token: &str) -> Result<()> {
         let payload = serde_json::json!({ "token": token });
         self.execute("setGithubToken", payload)?;
@@ -540,10 +531,58 @@ impl Drop for GitService {
     }
 }
 
-// Response types matching Git service output
+/// What a publish may commit. `selected_files: None` pushes existing commits only.
+#[derive(Debug, Clone, Default)]
+pub struct PublishOptions {
+    pub selected_files: Option<Vec<String>>,
+    pub allow_warnings: bool,
+}
+
+fn publish_payload(
+    repo_path: &str,
+    remote_url: Option<&str>,
+    commit_message: Option<&str>,
+    commit_description: Option<&str>,
+    options: &PublishOptions,
+) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "repoPath": repo_path,
+        "allowWarnings": options.allow_warnings,
+    });
+    if let Some(url) = remote_url {
+        payload["remoteUrl"] = serde_json::json!(url);
+    }
+    if let Some(msg) = commit_message {
+        payload["commitMessage"] = serde_json::json!(msg);
+    }
+    if let Some(desc) = commit_description {
+        payload["commitDescription"] = serde_json::json!(desc);
+    }
+    if let Some(files) = &options.selected_files {
+        payload["selectedFiles"] = serde_json::json!(files);
+    }
+    payload
+}
+
+// Response types matching Git service output. Fields the service added later are
+// optional so an older service build still decodes.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusInfo {
+    #[serde(default)]
+    pub is_git_repo: Option<bool>,
+    #[serde(default)]
+    pub has_remote: Option<bool>,
+    #[serde(default)]
+    pub current_branch: Option<String>,
+    #[serde(default)]
+    pub upstream: Option<String>,
+    #[serde(default)]
+    pub behind_commits: u32,
+    #[serde(default)]
+    pub remote_checked_at: Option<String>,
+    #[serde(default)]
+    pub remote_error: Option<String>,
     pub uncommitted_files: u32,
     pub untracked_files: u32,
     pub modified_files: Vec<String>,
@@ -557,9 +596,18 @@ pub struct PushResult {
     pub pushed: bool,
 }
 
+impl PushResult {
+    /// The service reports whether a push happened, not how many; a push is one update.
+    pub fn pushed_count(&self) -> u32 {
+        if self.pushed { 1 } else { 0 }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MergeResult {
     pub merged: Vec<String>,
+    #[serde(default)]
+    pub deleted: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -571,8 +619,15 @@ pub struct PullResult {
 pub struct FullSyncResult {
     pub success: bool,
     pub message: String,
+    #[serde(default)]
     pub committed: Option<u32>,
+    #[serde(default)]
+    pub pushed: Option<u32>,
+    #[serde(default)]
     pub merged: Option<Vec<String>>,
+    #[serde(default)]
+    pub deleted: Option<Vec<String>>,
+    #[serde(default)]
     pub errors: Option<Vec<String>>,
 }
 
@@ -678,4 +733,97 @@ pub struct AggregateStats {
     pub total_tags: u32,
     pub total_stashes: u32,
     pub contributors: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_payload_omits_selection_when_none() {
+        let payload = publish_payload("C:/src/app", None, None, None, &PublishOptions::default());
+        assert_eq!(payload["repoPath"], "C:/src/app");
+        assert_eq!(payload["allowWarnings"], false);
+        assert!(payload.get("selectedFiles").is_none(), "no selection must not become an empty/all selection");
+        assert!(payload.get("remoteUrl").is_none());
+    }
+
+    #[test]
+    fn publish_payload_carries_options_and_commit_text() {
+        let options = PublishOptions {
+            selected_files: Some(vec!["src/a.rs".to_string(), "b.txt".to_string()]),
+            allow_warnings: true,
+        };
+        let payload = publish_payload(
+            "C:/src/app",
+            Some("https://github.com/o/app.git"),
+            Some("msg"),
+            Some("desc"),
+            &options,
+        );
+        assert_eq!(payload["selectedFiles"], serde_json::json!(["src/a.rs", "b.txt"]));
+        assert_eq!(payload["allowWarnings"], true);
+        assert_eq!(payload["remoteUrl"], "https://github.com/o/app.git");
+        assert_eq!(payload["commitMessage"], "msg");
+        assert_eq!(payload["commitDescription"], "desc");
+    }
+
+    #[test]
+    fn publish_payload_keeps_an_explicit_empty_selection() {
+        let options = PublishOptions { selected_files: Some(Vec::new()), allow_warnings: false };
+        let payload = publish_payload("p", None, None, None, &options);
+        assert_eq!(payload["selectedFiles"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn status_info_decodes_new_service_output() {
+        let info: StatusInfo = serde_json::from_value(serde_json::json!({
+            "isGitRepo": true, "hasRemote": true, "currentBranch": "main",
+            "upstream": "origin/main", "behindCommits": 2,
+            "remoteCheckedAt": "2026-09-21T00:00:00Z", "remoteError": null,
+            "uncommittedFiles": 1, "untrackedFiles": 0, "modifiedFiles": ["a"],
+            "unpushedCommits": 3, "remoteBranches": ["feature"]
+        }))
+        .unwrap();
+        assert_eq!(info.is_git_repo, Some(true));
+        assert_eq!(info.current_branch.as_deref(), Some("main"));
+        assert_eq!(info.upstream.as_deref(), Some("origin/main"));
+        assert_eq!(info.behind_commits, 2);
+        assert_eq!(info.remote_error, None);
+    }
+
+    #[test]
+    fn status_info_decodes_older_service_output() {
+        let info: StatusInfo = serde_json::from_value(serde_json::json!({
+            "uncommittedFiles": 0, "untrackedFiles": 0, "modifiedFiles": [],
+            "unpushedCommits": 0, "remoteBranches": []
+        }))
+        .unwrap();
+        assert_eq!(info.is_git_repo, None);
+        assert_eq!(info.has_remote, None);
+        assert_eq!(info.remote_checked_at, None);
+        assert_eq!(info.behind_commits, 0);
+    }
+
+    #[test]
+    fn push_count_follows_the_reported_bool() {
+        assert_eq!(PushResult { committed: 2, pushed: true }.pushed_count(), 1);
+        assert_eq!(PushResult { committed: 2, pushed: false }.pushed_count(), 0);
+    }
+
+    #[test]
+    fn full_sync_result_does_not_invent_pushed_or_deleted() {
+        let result: FullSyncResult = serde_json::from_value(serde_json::json!({
+            "success": true, "message": "ok", "committed": 1, "merged": []
+        }))
+        .unwrap();
+        assert_eq!(result.pushed, None);
+        assert_eq!(result.deleted, None);
+
+        let result: FullSyncResult = serde_json::from_value(serde_json::json!({
+            "success": true, "message": "ok", "committed": 1, "pushed": 0
+        }))
+        .unwrap();
+        assert_eq!(result.pushed, Some(0));
+    }
 }
