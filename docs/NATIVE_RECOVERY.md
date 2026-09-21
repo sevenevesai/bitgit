@@ -91,6 +91,8 @@ Other repositories run concurrently, and commands without a path share one lane.
 `getAnalyticsSnapshots` skip ordering; a command added to that set must take no Git locks and touch no
 service state, or same-repository operations will fail on `index.lock`.
 
+A stray promise rejection belongs to no request: the service reports it redacted on stderr and keeps
+serving (`ipc-resilience.test.mjs`). An uncaught exception still exits, since its state is unknown.
 When the service exits, waiting callers fail at once and the next request restarts it. Service memory
 (the token) is lost on restart, so callers send the token before each use. A request unanswered for 30
 minutes fails without restarting the service: a restart would kill other repositories' running operations.

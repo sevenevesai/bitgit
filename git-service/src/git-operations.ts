@@ -57,7 +57,7 @@ function redactSecrets(text: string): string {
   return text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s@]*@/gi, '$1***@');
 }
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   return redactSecrets(error instanceof Error ? error.message : String(error));
 }
 

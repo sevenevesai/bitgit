@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as readline from 'readline';
-import { GitOperations, cloneRepository, initRepository, addRemote, pushToRemote, getAnalyticsSnapshots } from './git-operations.js';
+import { GitOperations, cloneRepository, initRepository, addRemote, pushToRemote, getAnalyticsSnapshots, errorText } from './git-operations.js';
 import { GitHubAPI } from './github-api.js';
 import { RecoveryService } from './recovery-service.js';
 
@@ -63,6 +63,12 @@ export class IPCServer {
         this.log(`Uncaught exception: ${err.message}`);
         process.exit(1);
       }
+    });
+
+    // Requests settle inside handleCommand, so a stray rejection belongs to no request; exiting would
+    // only kill other repositories' running operations. Git error text can carry credentialed URLs.
+    process.on('unhandledRejection', (reason: unknown) => {
+      this.log(`Unhandled rejection: ${errorText(reason)}`);
     });
   }
 
