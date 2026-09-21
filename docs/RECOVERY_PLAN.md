@@ -2,78 +2,65 @@
 
 ## Goal
 
-Deliver the full recovery roadmap authorized on 2026-09-21: milestones, explicit coverage,
-comparison and safe recovery, verified remote backups, reliable visual Git, automatic saves,
-version-bound evidence, guided regression finding, selective file repair, and a harness CLI.
-Audience and rationale: [product review](PRODUCT_REVIEW.md). Contracts and invariants:
-[recovery design](RECOVERY_DESIGN.md). Conditional research is implemented as deterministic,
-inspectable workflows; no model service is required.
+Deliver the full roadmap authorized on 2026-09-21: named milestones and coverage, comparison,
+safe recovered copies, verified remote backup/import, reliable visual Git, automatic saves,
+exact-version evidence/checks, guided regression finding, selective file repair and a harness CLI.
+Audience/rationale: [product review](PRODUCT_REVIEW.md). Invariants/API:
+[recovery design](RECOVERY_DESIGN.md). No model service is required.
 
-## Wave 1: trustworthy foundation
+## Integration status
 
-- [x] CORE: checkpoint capture/list/compare/recovered-copy slice; 10 disposable-repository tests pass.
-- [ ] GIT: fix status, clean pushes, service validation, selected commits, safe full sync and conflicts.
-- [ ] NATIVE: connect recovery IPC; fix persistent imports/status/results and application lockfiles.
-- [ ] Verify foundation with disposable repositories, independent review and native smoke.
+All code remains on `feat/recovery-integration` in `S:/BitGit-wt-integration` until final review.
+Checked items below mean implemented and parent-verified in that candidate, not released.
 
-## Wave 2: complete recovery workflow
+- [x] Checkpoint capture/list/compare, explicit coverage and byte-exact recovered copies.
+- [x] Selective file repair, safety checkpoints, stale guards and explicit interrupted-repair undo.
+- [x] Verified remote export/import and fresh-vault recovery after source loss.
+- [x] Git status, selected publishing, service validation, clean pushes and safe current-upstream sync.
+- [x] Native recovery IPC, persistent imports, honest status/results and damaged-cache preservation.
+- [x] Base recovery UI; actual native save/compare/selected repair/recover/remote-import flow exercised.
+- [x] Automatic idle/deduplicated saves, evidence/checks, regression state and JSON harness CLI backend.
+- [ ] Complete and verify automatic-save, evidence/check and regression UI workflows.
+- [ ] Complete and verify visual Git selection/diffs/status, explicit branches and bulk outcomes.
+- [ ] Fresh independent review of resolved foundation findings and the complete backend/extensions.
+- [ ] Resolve findings and run final service/UI/native gates on the integrated tree.
+- [ ] Restart and drive the latest native app with isolated data, including extension workflows.
+- [ ] Update user/developer docs, record verification limits, land and re-verify main.
+- [ ] Close remaining workers and report shipped commits and available orchestration costs.
 
-- [x] REMOTE: verified checkpoint export/import; fresh-vault recovery and failure receipt tests pass.
-- [x] REPAIR: selected files, safety checkpoints, stale checks and explicit interrupted-repair undo.
-- [ ] UI: local-project recovery workspace, coverage selection, timeline, comparison, recovered copy.
-- [ ] UI: Git file selection/diffs, branch/upstream/freshness, refresh and honest operation outcomes.
-- [ ] Verify integrated recovery and remote round trip with disposable fixtures.
+## Current evidence and pickup
 
-## Wave 3: roadmap extensions
+Candidate `624a1fb` includes fixes for foundation review H1/H2/M1/M2/M3/M4/L1; the fresh verifier
+must confirm them. Parent also closed a tag-ref race, made cache replacement atomic on Windows,
+and added Windows Job Object supervision for exact-version checks.
+Parent gates: 131 service tests pass before the last tag-race test; that regression passes separately.
+Native 85 tests and cargo check pass. Final expected service count is 132. Frontend extension
+workers are still running. Findings source: `RECOVERY_FOUNDATION_REVIEW.md` (frozen earlier tree).
 
-- [ ] AUTOMATION: opt-in idle capture, deduplication, visible keep-all retention and JSON harness CLI.
-- [ ] EVIDENCE: milestone notes/screenshots, isolated explicit checks, timeout and exact-version results.
-- [ ] REGRESSION: persisted good/bad/skip search, isolated candidate recovery and honest boundaries.
-- [ ] UI: automatic-save settings, evidence/check controls, regression journey and remote restore.
-- [ ] Verify automation, CLI, evidence and regression scenarios with tests and native smoke.
+Native smoke root: `%TEMP%/bitgit-native-smoke-20260921-01`; app-data override isolates cache,
+vault and credentials. Own Vite/CDP ports 5177/9227. Earlier binary passed source-loss and fresh-vault
+remote recovery using a disposable bare remote; it must be rebuilt/restarted for current changes.
+No real GitHub credentials or network publishing have been tested or authorized.
 
-## Completion
+## Active work and ownership
 
-- [ ] Fresh verifier reviews implementation, destructive-operation guards and scenario coverage.
-- [ ] Resolve findings, run service/UI/native gates and drive the full app with isolated data.
-- [ ] Update user/developer documentation, record actual verification limits and commits.
-- [ ] Close workers; report available orchestration cost without inventing unavailable usage.
+| Worker | Session | Worktree / owned area |
+|---|---|---|
+| UI-EXTENSIONS | 31849348-eba3-439f-85ba-422228cab47d | S:/BitGit-wt-ui-extensions; recovery UI/lib and App observer |
+| UI-GIT | a2f8d279-c2d0-4c4b-a068-e487642314ce | S:/BitGit-wt-ui-git; Git components, store and frontend Git types |
+| MAP-FINAL-REVIEW | 0591d74c-5ecb-490d-af81-2f17e9397201 | S:/BitGit-map-final-review; read-only verifier map |
 
-## Ownership and process
+GIT and EXTENSIONS implementations are integrated; retain their sessions until verification is
+recorded. RECOVERY-UI and NATIVE workers are closed after parent gates and integration. Earlier
+maps and the foundation verifier are closed; their outcomes and costs remain in Lloom history.
+Parent session: `aad26266-17c8-4043-a9eb-8fb1b6c45240`; Codex usage attribution is unavailable.
 
-Parent owns strategy, this plan/design, shared types, first recovery slice, integration and landing.
-Haiku maps precede implementation briefs. Sonnet implements bounded feature slices; a fresh Opus
-verifier reviews the recovery safety boundaries. Each worker uses an isolated branch/worktree
-outside `S:/BitGit`. Workers do not edit this plan, merge, push, remove worktrees or touch user edits.
-Merge order follows the waves; rebase and verify before landing. Project `--no-ff` convention
-overrides the orchestration skill's fast-forward default.
+Parent owns strategy, plan/design, shared contracts, novel safety mechanisms, integration and landing.
+Haiku maps precede bounded Sonnet implementation briefs; fresh Opus contexts verify nontrivial work.
+Workers use isolated worktrees, explicit-file commits and no merges/pushes. Rebase and run gates
+before landing. The project's `--no-ff` convention overrides the skill's fast-forward default.
 
-Existing user changes: `docs/HOW_TO_USE.md`, `.claude/*` and `.lloom/*`; preserve and exclude from
-task commits. Our review docs are included with this plan. No remote publishing is authorized.
-
-## Active roster
-
-Parent is implementing the first recovery slice. Managed worker roster:
-
-| Worker | Tier | Session | Branch / worktree |
-|---|---|---|---|
-| MAP-FOUNDATION (complete) | Haiku | 887b8629-ec4a-4155-ac71-852b9d87e3d2 | chore/recovery-map-foundation / S:/BitGit-map-foundation |
-| GIT | Sonnet | 7f798e4c-8449-4586-a090-82292648ebc7 | feat/recovery-git-reliability / S:/BitGit-wt-git |
-| NATIVE | Sonnet | 3ab76b41-0479-41a4-80b8-62eaae33cb11 | feat/recovery-native / S:/BitGit-wt-native |
-| RECOVERY-UI | Sonnet | 432d6bb9-795d-4462-a711-f33dce18fa92 | feat/recovery-workspace / S:/BitGit-wt-recovery-ui |
-| MAP-EXTENSIONS (complete) | Haiku | 07a972ca-9e56-4eca-818c-df6bdc8a5dad | chore/recovery-map-extensions / S:/BitGit-map-extensions |
-| EXTENSIONS | Sonnet | 4ed8d08a-669e-4f8d-92ca-753caac9275f | feat/recovery-extensions / S:/BitGit-wt-extensions |
-
-Parent Lloom session:
-`aad26266-17c8-4043-a9eb-8fb1b6c45240`; live Codex usage attribution unavailable at kickoff.
-
-## Gates and pickup notes
-
-Service recovery gates pass 19 tests; integrated native runtime remains unverified.
-Native candidate rebased as `c728c88`; parent patches in its worktree separate listing from import,
-route cache/vault through the app-data helper and extend the request validator. Review and landing
-remain. Parent baseline native tests pass 7/7 after correcting invalid-token expectations.
-Service tests will use Node's built-in runner with disposable repos and isolated Git configuration.
-Existing defects are documented with reproductions in `PRODUCT_REVIEW_FINDINGS.md`.
-Browser-assisted GitHub authorization requires an application client ID; use existing secure token
-setup unless one is already configured. Do not fabricate credentials or register an external app.
+Preserve user edits in `docs/HOW_TO_USE.md`, `.claude/*` and `.lloom/*`; exclude them from task commits.
+Browser GitHub authorization needs a registered client ID. Use existing secure token setup unless
+the user provides one; do not fabricate credentials or register an external app. Research proposals
+for semantic AI repair and user recruitment remain validation ideas, not shipped capability claims.
