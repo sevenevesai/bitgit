@@ -22,7 +22,8 @@ In the dialog:
 - Conflicted files, folders/nested repositories and names starting with `-` cannot be chosen.
 - The message and description are optional; an empty message becomes `Update <date time>`.
 - **Choose all**, **Choose none** and **Reload** are explicit actions. Reload keeps chosen files that are
-  still pending and never chooses new arrivals.
+  still pending and never chooses new arrivals. Failed previews remain blocked across Reload;
+  open that file's preview and retry to check its complete current diff.
 - If a chosen file's preview failed, publishing stays blocked until it is retried or unchosen.
 
 The exact list is sent to `validate_before_sync` and then to `sync_project` as `selectedFiles`.

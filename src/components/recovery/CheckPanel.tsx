@@ -159,7 +159,7 @@ export function CheckPanel({ checkpoint, onRecorded }: CheckPanelProps) {
       {limitProblem && <p className="text-xs text-red-600 dark:text-red-400">{limitProblem}</p>}
 
       {error && (
-        <Notice tone="error" title="The check did not run">
+        <Notice tone="error" title="The check needs attention">
           {error}
         </Notice>
       )}

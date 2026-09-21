@@ -277,6 +277,9 @@ export async function runCheckpointCheck(service: RecoveryService, request: Extr
 
   const entry: CheckpointEvidence = { id: randomUUID(), recordedAt: service.now(), kind: 'command', description: redact(notes.join(' '), service).slice(0, MAX_DESCRIPTION),
     outcome, checkpointId: checkpoint.id, command: recordedCommand, exitCode: result.timedOut ? null : result.exitCode, output: output.text, workingCopyPath: workingCopy };
-  await appendEvidence(service, checkpoint.id, entry);
+  try { await appendEvidence(service, checkpoint.id, entry); } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(redact(`${ran}. The result could not be recorded. ${reason}\nThe check copy is kept at: ${workingCopy}`, service));
+  }
   return entry;
 }

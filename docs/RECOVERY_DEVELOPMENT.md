@@ -59,6 +59,8 @@ through `src-tauri/src/gitignore.rs`; the frontend has no general filesystem wri
 The helper preserves existing bytes, refuses unreadable/link/nonfile targets, reserves an exclusive
 lock, checks for intervening edits and atomically replaces the file. A missing file is created
 exclusively. Do not turn a read error into an empty file or widen the Tauri filesystem allowlist.
+If a crash leaves `.gitignore.lock`, stop editors and BitGit, confirm no edit still owns it, and
+preserve the file before moving it aside. BitGit never guesses that an existing lock is stale.
 
 The user chose the secure token setup for this release. Browser sign-in is deferred until a GitHub
 OAuth application is registered; no client ID or credentials should be invented or committed.

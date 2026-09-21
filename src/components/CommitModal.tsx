@@ -61,7 +61,7 @@ export function CommitModal({
         const pending = new Set(result.filter((c) => !unselectableReason(c)).map((c) => c.path));
         return new Set([...prev].filter((path) => pending.has(path)));
       });
-      setPreviewErrors({});
+      setPreviewErrors(previous => Object.fromEntries(Object.entries(previous).filter(([path]) => result.some(change => change.path === path))));
       setGeneration((g) => g + 1);
     } catch (error: any) {
       if (id !== latestRead.current) return;
@@ -86,6 +86,7 @@ export function CommitModal({
     setMessage(suggestedMessage.current);
     setDescription('');
     setSelected(new Set());
+    setPreviewErrors({});
     setChanges(null);
     void readChanges();
     const timer = setTimeout(() => {
@@ -316,6 +317,7 @@ export function CommitModal({
                     disabled={isLoading}
                     onToggle={toggle}
                     onPreviewError={setPreviewError}
+                    previousError={previewErrors[change.path]}
                   />
                 ))}
               </ul>

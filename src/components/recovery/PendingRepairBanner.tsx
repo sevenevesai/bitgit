@@ -12,11 +12,12 @@ interface PendingRepairBannerProps {
   onOpenCheckpoint: (id: string) => void;
   onRolledBack: (receipt: RecoveryReceipt) => void;
   onChanged: () => Promise<void>;
+  onUndoError: (message: string | null) => void;
 }
 
 // Shown whenever the engine reports an unfinished repair, including after BitGit was closed mid-repair.
 // Undoing is always an explicit click; reading state never rewrites files.
-export function PendingRepairBanner({ pending, checkpoints, onOpenCheckpoint, onRolledBack, onChanged }: PendingRepairBannerProps) {
+export function PendingRepairBanner({ pending, checkpoints, onOpenCheckpoint, onRolledBack, onChanged, onUndoError }: PendingRepairBannerProps) {
   const { call, busy } = useRecoveryGate();
   const [confirming, setConfirming] = useState(false);
   const [working, setWorking] = useState(false);
@@ -27,6 +28,7 @@ export function PendingRepairBanner({ pending, checkpoints, onOpenCheckpoint, on
 
   const undo = async () => {
     setError(null);
+    onUndoError(null);
     setWorking(true);
     try {
       const receipt = await call('Undoing the interrupted repair…', { action: 'repairRollback' }, { mutating: true });
@@ -34,6 +36,7 @@ export function PendingRepairBanner({ pending, checkpoints, onOpenCheckpoint, on
       onRolledBack(receipt);
     } catch (undoError) {
       setError(errorMessage(undoError));
+      onUndoError(errorMessage(undoError));
     } finally {
       try { await onChanged(); } catch (refreshError) {
         setError(previous => [previous, `Could not refresh repair status: ${errorMessage(refreshError)}`].filter(Boolean).join('\n'));

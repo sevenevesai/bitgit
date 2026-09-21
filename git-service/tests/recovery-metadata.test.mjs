@@ -107,3 +107,27 @@ test('oversized serialized evidence is refused without changing the existing rec
   assert.equal(checkpoint.metadataError, undefined);
   assert.deepEqual(checkpoint.evidence, [entry]);
 });
+
+test('a completed check reports the retained copy when its result exceeds receipt capacity', async t => {
+  const { service, saved } = await fixture(t);
+  const entry = await service.dispatch({ action: 'evidence', checkpointId: saved.id, description: 'Keep this observation', outcome: 'passed' });
+  const evidence = Array.from({ length: 106 }, () => ({ ...entry, id: randomUUID(), output: '\u0000'.repeat(32768) }));
+  await service.updateMetadata(saved.id, { evidence });
+  let failure;
+  await assert.rejects(service.dispatch({ action: 'runCheck', checkpointId: saved.id,
+    command: 'node -e "process.stdout.write(String.fromCharCode(1).repeat(32768))"' }), error => {
+    failure = error;
+    return /The result could not be recorded/.test(error.message);
+  });
+  assert.match(failure.message, /exited with code 0/);
+  const workingCopy = failure.message.split('The check copy is kept at: ')[1];
+  assert.ok(workingCopy);
+  t.after(async () => {
+    const holder = path.dirname(workingCopy);
+    assert.ok(holder.startsWith(path.resolve(os.tmpdir()) + path.sep + 'bitgit-check-'));
+    await fs.rm(holder, { recursive: true, force: true });
+  });
+  assert.equal(await fs.readFile(path.join(workingCopy, 'app.txt'), 'utf8'), 'saved bytes\r\n');
+  assert.deepEqual((await service.readMetadata(saved.id)).evidence, evidence);
+  assert.equal((await service.dispatch({ action: 'state' })).checkpoints[0].metadataError, undefined);
+});

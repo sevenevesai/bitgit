@@ -36,13 +36,16 @@ interface FileChangeRowProps {
   onToggle: (path: string) => void;
   // A failed preview of a chosen file blocks publishing, so the parent needs to know.
   onPreviewError: (path: string, error: string | null) => void;
+  previousError?: string;
 }
 
-export function FileChangeRow({ repoPath, change, checked, disabled, onToggle, onPreviewError }: FileChangeRowProps) {
+export function FileChangeRow({ repoPath, change, checked, disabled, onToggle, onPreviewError, previousError }: FileChangeRowProps) {
   const scopes = availableScopes(change);
   const [open, setOpen] = useState(false);
-  const [scope, setScope] = useState<PreviewScope>(scopes[0] ?? 'all');
-  const [previews, setPreviews] = useState<Record<string, PreviewState>>({});
+  const [scope, setScope] = useState<PreviewScope>(previousError ? 'all' : scopes[0] ?? 'all');
+  // A list reload forgets successful previews, but a failed file needs a successful whole-file
+  // retry before publishing. The parent owns this failure across row remounts.
+  const [previews, setPreviews] = useState<Record<string, PreviewState>>(previousError ? { all: { loading: false, error: previousError, diffs: null } } : {});
   const blockedReason = unselectableReason(change);
   const partlyStaged = Boolean(change.staged && change.unstaged);
   const current = previews[scope];
@@ -71,8 +74,6 @@ export function FileChangeRow({ repoPath, change, checked, disabled, onToggle, o
     onPreviewError(change.path, previewError);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewError]);
-
-  useEffect(() => () => onPreviewError(change.path, null), [change.path]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <li

@@ -46,6 +46,7 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
   const [visited, setVisited] = useState<ReadonlySet<WorkspaceTab>>(new Set<WorkspaceTab>(['save']));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rolledBack, setRolledBack] = useState<RecoveryReceipt | null>(null);
+  const [undoError, setUndoError] = useState<string | null>(null);
 
   const projectId = project.id;
   const projectPath = project.localPath ?? '';
@@ -278,6 +279,12 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
               {stateError}
             </Notice>
           )}
+          {undoError && !state?.pendingRepair && (
+            <Notice tone="warning" title="Last undo attempt"
+              actions={<button type="button" className={secondaryButton} onClick={() => setUndoError(null)}>Dismiss</button>}>
+              {undoError}
+            </Notice>
+          )}
           {state && !state.sourceAvailable && (
             <Notice tone="warning" title="The project folder was not found">
               <span className="font-mono break-all">{safeText(projectPath)}</span>
@@ -300,6 +307,7 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
                   onOpenCheckpoint={openCheckpoint}
                   onRolledBack={setRolledBack}
                   onChanged={reload}
+                  onUndoError={setUndoError}
                 />
               )}
               {rolledBack && !state?.pendingRepair && (

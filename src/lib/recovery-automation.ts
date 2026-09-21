@@ -167,7 +167,7 @@ function applyState(projectId: string, state: RecoveryState) {
     idleMinutes: state.settings.idleMinutes,
     settingsError: state.settingsError ?? null,
     repairPending: Boolean(state.pendingRepair || state.repairJournalError),
-    ...(!state.settingsError && !state.settings.automaticEnabled ? { error: null } : {}),
+    ...((state.settingsError || state.pendingRepair || state.repairJournalError || !state.settings.automaticEnabled) ? { error: null } : {}),
   });
   stateCheckedAt.set(projectId, Date.now());
   if (!state.settingsError && !state.pendingRepair && !state.repairJournalError) {
