@@ -5,9 +5,10 @@ review and its follow-up; see [the plan](RECOVERY_PLAN.md).
 
 ## Parent checks observed
 
-- Service: 137 tests passed on `cb87ea9`, including remote re-export and damaged metadata recovery.
-- Native: all 86 tests and `cargo check` passed on `b7bd708`, including the validation field-name
-  boundary regression from `658f524`.
+- Service: all 139 tests passed on `c357ce9`, including remote re-export, damaged metadata recovery,
+  redaction expansion and serialized receipt limits.
+- Native: all 92 tests and `cargo check` passed on `c357ce9`, including the validation field-name
+  boundary regression from `658f524` and scoped ignore-file writes.
 - UI and service builds pass after integration. Worker browser evidence: 119 visual-Git assertions
   with recorded native-command stand-ins; 169 recovery assertions forwarding to the real engine.
   Those are browser harness results, separate from the actual desktop evidence below.
@@ -64,6 +65,15 @@ The integrated desktop UI then exercised the remaining journeys with actual Taur
 Native publishing first exposed the Node `totalStagedSizeMB` versus serde `totalStagedSizeMb`
 mismatch. The app correctly refused publication. `658f524` adds deserialize aliases for both size
 fields while keeping the frontend names; the same native publish then succeeded with exact bytes.
+
+The release reviewer identified the legacy ignore action's missing filesystem permission. Parent
+native smoke confirmed the exact allowlist failure. With `c357ce9`, **Add to .gitignore** used the
+saved project's scoped Rust command: existing bytes and CRLF endings survived, `.env` disappeared
+from the refreshed selection, and HEAD, unrelated staging, remote ref and `.env` bytes were unchanged.
+A read-only `.gitignore` returned a preservation error; making the disposable fixture writable and
+retrying added exactly one pattern. Native results and capture: `native-ignore-result.json` and
+`native-ignore-fixed.png` in the same smoke directory. A first harness assertion expected two
+suggestions instead of the actual one; the corrected full journey passed.
 
 A concurrent native request for another project took 6,067 ms during a five-second check before
 the scoped service fix. After it, the request returned in 762 ms while the check continued (6,425 ms

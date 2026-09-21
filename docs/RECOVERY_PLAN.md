@@ -34,12 +34,12 @@ Candidate `cb87ea9` includes both final UI branches and fixes for complete-revie
 Independent review confirmed all foundation findings resolved. N3 ownership-lock crash recovery
 remains a documented manual procedure. Parent native smoke found a validation field-name mismatch;
 `658f524` fixes it with a boundary regression test and a successful actual selected-file publish.
-Parent gates: 137 service tests, 85 native tests plus the new boundary test, UI/service builds and
-cargo check pass. VERIFY-RELEASE returned six findings in `RECOVERY_RELEASE_REVIEW.md`. Parent fixes
+Parent gates on `c357ce9`: 139 service tests, 92 native tests, UI/service builds and cargo check pass.
+VERIFY-RELEASE returned six findings in `RECOVERY_RELEASE_REVIEW.md`. Parent fixes
 cover scoped native ignore writes, stale automation/undo state, bounded receipt writes, persistent
 failed-preview blocking and two stale guide claims. Native ignore failure was reproduced; its fixed
-workflow and the independent follow-up remain pending. New gates include 92 passing Rust tests and
-five metadata tests; final full service run is pending. No main landing until final verification.
+workflow preserved existing rules, staging, HEAD and remote. The independent follow-up remains
+pending. No main landing until final verification.
 Historical reports identify their frozen snapshots.
 
 Native smoke root: `%TEMP%/bitgit-native-smoke-20260921-01`; app-data override isolates cache,
