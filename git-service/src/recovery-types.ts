@@ -76,6 +76,7 @@ export interface RecoveryReceipt {
 export interface RecoverySettings {
   automaticEnabled: boolean;
   idleMinutes: number;
+  excludedPaths?: string[];
   // No automatic pruning in v1: manual, safety, and automatic checkpoints are retained.
   retention: 'keep_all';
 }

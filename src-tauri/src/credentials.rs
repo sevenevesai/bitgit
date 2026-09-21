@@ -10,9 +10,7 @@ const CREDENTIAL_RESOURCE: &str = "BitGit_GitHub_Token";
 const KEYRING_SERVICE: &str = "bitgit";
 
 fn get_config_dir() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir()
-        .context("Failed to get config directory")?
-        .join("BitGit");
+    let config_dir = crate::app_data::config_dir()?;
 
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir)?;
@@ -46,6 +44,9 @@ impl CredentialManager {
     }
 
     pub fn save_token(&self, username: &str, token: &str) -> Result<()> {
+        if crate::app_data::isolated_smoke() {
+            anyhow::bail!("Credential writes are disabled in isolated smoke runs");
+        }
         // Validate token format
         if !token.starts_with("ghp_") && !token.starts_with("github_pat_") {
             return Err(anyhow::anyhow!("Invalid GitHub token format"));
@@ -94,6 +95,9 @@ impl CredentialManager {
     }
 
     pub fn get_token(&self, username: &str) -> Result<String> {
+        if crate::app_data::isolated_smoke() {
+            anyhow::bail!("Stored credentials are unavailable in isolated smoke runs");
+        }
         #[cfg(target_os = "windows")]
         {
             use windows::core::HSTRING;
@@ -124,6 +128,9 @@ impl CredentialManager {
 
     #[allow(dead_code)]
     pub fn delete_token(&self, username: &str) -> Result<()> {
+        if crate::app_data::isolated_smoke() {
+            anyhow::bail!("Credential writes are disabled in isolated smoke runs");
+        }
         #[cfg(target_os = "windows")]
         {
             use windows::core::HSTRING;
@@ -150,6 +157,7 @@ impl CredentialManager {
     }
 
     pub fn has_token(&self, username: &str) -> bool {
+        if crate::app_data::isolated_smoke() { return false; }
         #[cfg(target_os = "windows")]
         {
             use windows::core::HSTRING;
@@ -202,22 +210,10 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "windows")]
-    fn test_credential_manager() {
+    fn invalid_token_is_rejected_before_credential_storage() {
         let manager = CredentialManager::new().unwrap();
-        let username = "test_user";
-        let token = "test_token_placeholder";
-
-        // Save token
-        manager.save_token(username, token).unwrap();
-
-        // Retrieve token
-        let retrieved = manager.get_token(username).unwrap();
-        assert_eq!(retrieved, token);
-
-        // Delete token
-        manager.delete_token(username).unwrap();
-
-        // Verify deleted
-        assert!(!manager.has_token(username));
+        let result = manager.save_token("bitgit-invalid-format-test", "invalid-token");
+        assert!(result.is_err());
+        // No real credential or username file is created, overwritten, read or deleted.
     }
 }

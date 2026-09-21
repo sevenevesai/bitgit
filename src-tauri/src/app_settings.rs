@@ -48,9 +48,7 @@ pub struct AppSettings {
 
 /// Get the path to the settings file
 fn get_settings_path() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir()
-        .context("Failed to get config directory")?
-        .join("BitGit");
+    let config_dir = crate::app_data::config_dir()?;
 
     // Ensure directory exists
     fs::create_dir_all(&config_dir).context("Failed to create config directory")?;

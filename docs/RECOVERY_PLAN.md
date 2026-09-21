@@ -68,6 +68,9 @@ Parent Lloom session:
 ## Gates and pickup notes
 
 Service recovery gates pass 19 tests; integrated native runtime remains unverified.
+Native candidate `48ad95f` needs integration review: separate GitHub listing from import; route its
+cache and recovery vault through the new app-data helper; extend validation for `repairRollback`
+and automatic exclusions. Parent fixed the old credential test to assert invalid-token rejection.
 Service tests will use Node's built-in runner with disposable repos and isolated Git configuration.
 Existing defects are documented with reproductions in `PRODUCT_REVIEW_FINDINGS.md`.
 Browser-assisted GitHub authorization requires an application client ID; use existing secure token

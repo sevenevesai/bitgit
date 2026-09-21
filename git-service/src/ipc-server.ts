@@ -97,8 +97,8 @@ export class IPCServer {
         }
 
         case 'recovery': {
-          const { repoPath, request } = command.payload;
-          const recovery = new RecoveryService(repoPath, { githubToken: this.githubToken });
+          const { repoPath, request, vaultRoot } = command.payload;
+          const recovery = new RecoveryService(repoPath, { githubToken: this.githubToken, vaultRoot });
           return { id: command.id, success: true, data: await recovery.dispatch(request) };
         }
 
