@@ -3,6 +3,9 @@
 Research date: 2026-09-21. Code reviewed at `14b6aa6` plus the working tree.
 See [implementation findings](PRODUCT_REVIEW_FINDINGS.md) for builds, reproduced failures, and
 source references. Broader demand remains unvalidated; only the user's own usage history was available.
+This is the research snapshot before implementation. The subsequently authorized delivery and its
+remaining gates are tracked in [RECOVERY_PLAN.md](RECOVERY_PLAN.md); evidence is in
+[RECOVERY_VERIFICATION.md](RECOVERY_VERIFICATION.md).
 
 ## Recommendation
 
