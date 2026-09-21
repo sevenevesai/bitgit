@@ -14,7 +14,7 @@ export const exists = async (file: string): Promise<boolean> => {
 export function safeRelative(file: string): string {
   const parts = file.split('/');
   if (!file || path.isAbsolute(file) || parts.some(part => !part || part === '.' || part === '..'
-    || /^\.git$/i.test(part) || /[\\\x00-\x1f<>:"|?*]/.test(part) || /[. ]$/.test(part)
+    || /^(?:\.git|git~[0-9]+)$/i.test(part) || /[\\\x00-\x1f<>:"|?*]/.test(part) || /[. ]$/.test(part)
     || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part))) {
     throw new Error(`Unsupported or unsafe file path: ${file}`);
   }

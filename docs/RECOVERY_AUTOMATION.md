@@ -50,6 +50,8 @@ Screenshots must be an absolute path to a regular file (no links, including pare
 recognised as PNG, JPEG or WebP by their bytes (SVG and executables are refused whatever the name). The
 bytes are copied to `<vault>/evidence/<checkpointId>/<evidenceId>/screenshot.<ext>`, re-read and
 hash-checked; `screenshotPath` is that copy. Editing or deleting the original changes nothing.
+`evidenceImage` takes `checkpointId` and `evidenceId`, returning a raster `dataUrl` for that saved
+entry only. It refuses paths outside that entry's vault directory; callers cannot request arbitrary files.
 
 **Coverage boundary:** evidence and screenshots are local metadata in the vault. A remote checkpoint
 backup contains only the saved source snapshot, not evidence added later, and a fresh-vault import
@@ -66,9 +68,13 @@ requested; save, list, recover and `autoTick` never execute anything.
   can reach the network and any file you can. Your source folder and the vault are not used as its cwd.
 - The environment is yours minus `GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_PAT`, redirecting `GIT_*` variables,
   and any variable containing the service's GitHub token. There is no stdin.
-- On timeout the command's own process tree is killed (`taskkill /PID <pid> /T /F` on Windows, its
-  process group elsewhere) and the run waits for it to end. Background processes a command starts and
-  leaves running after a normal exit are not tracked.
+- Windows checks use a PowerShell supervisor and a Windows Job Object. The shell is created suspended,
+  assigned before execution, and its job is terminated on timeout or when descendants outlive it.
+  Closing the supervisor also closes the job. Supervisor startup adds time outside the command limit;
+  blocked PowerShell or job setup fails the check without running it. This manages ordinary child
+  processes, not programs deliberately launching work through external services or scheduled tasks.
+  Elsewhere, cleanup targets the command's process group; detached groups are outside that boundary.
+  A run with surviving background children or unconfirmed cleanup cannot be recorded as passed.
 - Output keeps the last 32 KiB. Known credential shapes (GitHub/AWS/API tokens, private keys,
   `password=`/`token=` values, bearer headers, URL passwords, the service token) are redacted in the
   command, output and description. Redaction is best-effort.

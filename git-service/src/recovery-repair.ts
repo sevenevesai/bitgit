@@ -47,10 +47,16 @@ async function sourceBytes(service: RecoveryService, relative: string): Promise<
   // Check every existing ancestor even if the final file is absent.
   let current = service.repoPath;
   await assertNoLinks(path.parse(current).root, current);
+  const realRoot = await fs.realpath(service.repoPath);
   for (const part of relative.split('/')) {
     current = path.join(current, part);
     if (!(await exists(current))) return null;
     if ((await fs.lstat(current)).isSymbolicLink()) throw new Error(`Cannot repair a linked path: ${relative}`);
+    const realCurrent = await fs.realpath(current);
+    const resolvedParts = path.relative(realRoot, realCurrent).split(path.sep);
+    if (!within(realRoot, realCurrent) || resolvedParts.some(part => part.toLowerCase() === '.git')) {
+      throw new Error(`Cannot repair Git metadata or an aliased path: ${relative}`);
+    }
   }
   const stat = await fs.lstat(absolute);
   if (!stat.isFile()) throw new Error(`Repair destination is not a regular file: ${relative}`);

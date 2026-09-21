@@ -30,6 +30,48 @@ const fixtures = async t => {
   return { root, repo, git, write, service: new RecoveryService(repo, { vaultRoot }) };
 };
 
+test('source ignore configuration is honored without changing staged entries', async t => {
+  const { root, repo, service, git, write } = await fixtures(t);
+  await fs.writeFile(path.join(repo, '.git', 'info', 'exclude'), 'local-notes.txt\n');
+  const excludes = path.join(root, 'configured-global-ignore');
+  await fs.writeFile(excludes, 'global-ignored.txt\napp.txt\n');
+  git('config', 'core.excludesFile', excludes);
+  await write('local-notes.txt', 'private notes');
+  await write('global-ignored.txt', 'excluded by configured file');
+  await write('app.txt', 'staged'); git('add', 'app.txt'); await write('app.txt', 'working');
+  const index = await fs.readFile(path.join(repo, '.git', 'index'));
+  const saved = await service.dispatch({ action: 'create', label: 'Respect ignore configuration' });
+  assert.deepEqual(saved.coverage.included.map(file => file.path), ['app.txt']);
+  for (const name of ['local-notes.txt', 'global-ignored.txt']) {
+    assert.ok(saved.coverage.excluded.some(file => file.path === name && file.reason === 'Ignored by Git rules'));
+  }
+  assert.deepEqual(await fs.readFile(path.join(repo, '.git', 'index')), index);
+  await service.dispatch({ action: 'recover', checkpointId: saved.id, destination: path.join(root, 'copy') });
+  assert.equal(await fs.readFile(path.join(root, 'copy', 'app.txt'), 'utf8'), 'working');
+});
+
+test('Git aliases are excluded and every published safety checkpoint is readable', async t => {
+  const { repo, root, service, write } = await fixtures(t);
+  for (const file of ['GIT~1/hooks/pre-commit', 'notes/git~2/data', '.git./config', '.git::$INDEX_ALLOCATION/config']) assert.throws(() => safeRelative(file), /unsafe/);
+  const saved = await service.dispatch({ action: 'create', label: 'Before changes' });
+  await fs.mkdir(path.join(repo, 'notes', 'git~1'), { recursive: true });
+  await fs.writeFile(path.join(repo, 'notes', 'git~1', 'data.txt'), 'unsupported');
+  await write('app.txt', 'new version');
+  const comparison = await service.dispatch({ action: 'compare', checkpointId: saved.id });
+  const repaired = await service.dispatch({ action: 'repair', checkpointId: saved.id, paths: ['app.txt'], expectedFingerprint: comparison.currentFingerprint });
+  await service.dispatch({ action: 'recover', checkpointId: repaired.safetyCheckpointId, destination: path.join(root, 'safety-copy') });
+  assert.equal(await fs.readFile(path.join(root, 'safety-copy', 'app.txt'), 'utf8'), 'new version');
+  assert.equal(await fs.readFile(path.join(repo, 'notes', 'git~1', 'data.txt'), 'utf8'), 'unsupported');
+});
+
+test('a successful Git exit that silently omits entries cannot publish an unreadable checkpoint', async t => {
+  const { service } = await fixtures(t);
+  const original = service.git.bind(service);
+  service.git = async (args, input, env) => args[0] === 'update-index' ? Buffer.alloc(0) : original(args, input, env);
+  await assert.rejects(service.dispatch({ action: 'create', label: 'Must not be published' }), /tree does not match/);
+  assert.equal((await service.dispatch({ action: 'state' })).checkpoints.length, 0);
+});
+
 test('checkpoint captures exact working bytes and untracked source without changing HEAD or staging', async t => {
   const { root, repo, service, git, write } = await fixtures(t);
   await write('app.txt', 'staged version\r\n'); git('add', 'app.txt');

@@ -122,8 +122,12 @@ export class RecoveryService {
         coverage: captured.coverage, entries: captured.files.map(file => ({ path: file.path, mode: file.mode, sizeBytes: file.bytes.length, sha256: file.sha256 })) };
       const commitOid = (await this.git(['commit-tree', treeOid], JSON.stringify(manifest))).toString('utf8').trim();
       if (!validOid(commitOid)) throw new Error('Invalid checkpoint commit');
+      const checkpoint = { ...this.checkpointFromManifest(manifest), commitOid, treeOid, backup: null, evidence: [], recoveredAt: null };
+      // update-index can warn and still exit 0 after ignoring a path. A save or safety
+      // copy is published only after the same complete byte validation used for recovery.
+      await this.readSnapshot(checkpoint);
       await this.git(['update-ref', `refs/checkpoints/${id}`, commitOid, '0000000000000000000000000000000000000000']);
-      return { ...this.checkpointFromManifest(manifest), commitOid, treeOid, backup: null, evidence: [], recoveredAt: null };
+      return checkpoint;
     } finally { await fs.rm(staging, { recursive: true, force: true }); }
   }
   checkpointFromManifest(manifest: CheckpointManifest): Omit<Checkpoint, 'commitOid' | 'treeOid' | 'backup' | 'evidence' | 'recoveredAt'> {

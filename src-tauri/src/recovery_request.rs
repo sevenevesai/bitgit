@@ -267,6 +267,7 @@ mod tests {
             json!({"action": "compare", "checkpointId": "c1"}),
             json!({"action": "recover", "checkpointId": "c1", "destination": "D:/recovered"}),
             json!({"action": "repair", "checkpointId": "c1", "paths": ["src/a.rs"], "expectedFingerprint": "f"}),
+            json!({"action": "repairRollback"}),
             json!({"action": "backup", "checkpointId": "c1", "remoteUrl": "https://github.com/o/r.git"}),
             json!({"action": "verifyBackup", "checkpointId": "c1"}),
             json!({"action": "remoteList", "remoteUrl": "https://github.com/o/r.git"}),
@@ -275,6 +276,7 @@ mod tests {
             json!({"action": "autoTick"}),
             json!({"action": "evidence", "checkpointId": "c1", "description": "works", "outcome": "passed",
                    "screenshotPath": "C:/shots/a.png"}),
+            json!({"action": "evidenceImage", "checkpointId": "c1", "evidenceId": "e1"}),
             json!({"action": "runCheck", "checkpointId": "c1", "command": "npm test", "timeoutSeconds": 60}),
             json!({"action": "regressionStart", "goodId": "a", "badId": "b"}),
             json!({"action": "regressionObserve", "sessionId": "s", "checkpointId": "c", "outcome": "good"}),
@@ -282,7 +284,7 @@ mod tests {
         ];
         assert_eq!(
             requests.len(),
-            17,
+            19,
             "one request per action in RecoveryRequest"
         );
         for request in requests {

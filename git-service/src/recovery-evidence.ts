@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { assertNoLinks, sha256 } from './recovery-io.js';
 import { captureSource } from './recovery-capture.js';
+import { WINDOWS_CHECK_SCRIPT } from './recovery-windows-check.js';
 import type { RecoveryService } from './recovery-service.js';
 import type { CheckpointEvidence, RecoveryRequest } from './recovery-types.js';
 
@@ -103,7 +104,7 @@ export async function recordEvidence(service: RecoveryService, request: Extract<
   return entry;
 }
 
-interface ShellResult { exitCode: number | null; signal: string | null; timedOut: boolean; stopped: boolean; error?: string; output: Buffer; truncated: boolean; }
+interface ShellResult { exitCode: number | null; signal: string | null; timedOut: boolean; stopped: boolean; background: boolean; error?: string; output: Buffer; truncated: boolean; }
 
 export async function readEvidenceImage(service: RecoveryService, checkpointId: string, evidenceId: string): Promise<{ dataUrl: string }> {
   const checkpoint = await service.readCheckpoint(checkpointId);
@@ -137,11 +138,11 @@ function killTree(child: ChildProcess): Promise<void> {
   });
 }
 
-function runShell(command: string, cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv): Promise<ShellResult> {
+function runShell(command: string, cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv, args?: string[]): Promise<ShellResult> {
   return new Promise(resolve => {
     const chunks: Buffer[] = [], timers: NodeJS.Timeout[] = [];
-    let kept = 0, truncated = false, timedOut = false, settled = false, spawnError: string | undefined;
-    const child = spawn(command, { cwd, env, shell: true, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    let kept = 0, truncated = false, timedOut = false, settled = false, background = false, spawnError: string | undefined;
+    const child = spawn(command, args ?? [], { cwd, env, shell: !args, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     const collect = (chunk: Buffer) => {
       chunks.push(chunk); kept += chunk.length;
       while (chunks.length > 1 && kept - chunks[0].length >= RAW_OUTPUT_LIMIT) { kept -= chunks.shift()!.length; truncated = true; }
@@ -152,17 +153,40 @@ function runShell(command: string, cwd: string, timeoutMs: number, env: NodeJS.P
       if (settled) return;
       settled = true;
       timers.forEach(clearTimeout);
-      resolve({ exitCode, signal, timedOut, stopped, error: spawnError, output: Buffer.concat(chunks), truncated });
+      resolve({ exitCode, signal, timedOut, stopped, background, error: spawnError, output: Buffer.concat(chunks), truncated });
     };
     timers.push(setTimeout(() => {
       timedOut = true;
       void killTree(child).then(() => { if (!settled) timers.push(setTimeout(() => finish(null, null, false), KILL_WAIT_MS)); });
     }, timeoutMs));
     child.on('error', error => { spawnError = error.message; finish(null, null, true); });
-    // A descendant that outlives the shell can hold the pipes open; stop waiting on its output only.
-    child.on('exit', () => { if (!settled) timers.push(setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, PIPE_GRACE_MS)); });
+    child.on('exit', () => {
+      if (process.platform !== 'win32' && child.pid) {
+        try { process.kill(-child.pid, 0); background = true; void killTree(child); } catch { /* group is gone */ }
+      }
+      if (!settled) timers.push(setTimeout(() => { background = true; child.stdout.destroy(); child.stderr.destroy(); }, PIPE_GRACE_MS));
+    });
     child.on('close', (code, signal) => finish(timedOut ? null : code, signal, true));
   });
+}
+
+async function runManagedCheck(command: string, cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv): Promise<ShellResult> {
+  if (process.platform !== 'win32') return runShell(command, cwd, timeoutMs, env);
+  const holder = path.dirname(cwd);
+  const helper = path.join(holder, 'supervise.ps1'), report = path.join(holder, 'process-result.json');
+  await fs.writeFile(helper, WINDOWS_CHECK_SCRIPT, { flag: 'wx' });
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const result = await runShell(powershell, cwd, timeoutMs + 20_000,
+    { ...env, BITGIT_CHECK_COMMAND_BASE64: Buffer.from(command).toString('base64') },
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', helper, '-ResultPath', report, '-TimeoutMs', String(timeoutMs)]);
+  try {
+    const metadata = JSON.parse(await fs.readFile(report, 'utf8'));
+    if (typeof metadata.timedOut !== 'boolean' || typeof metadata.stopped !== 'boolean' || typeof metadata.background !== 'boolean'
+      || (metadata.exitCode !== null && !Number.isInteger(metadata.exitCode))) throw new Error('Invalid process result');
+    return { ...result, ...metadata };
+  } catch {
+    return { ...result, stopped: false, error: result.error || 'The check supervisor did not confirm its result' };
+  }
 }
 
 function checkEnvironment(service: RecoveryService): NodeJS.ProcessEnv {
@@ -193,9 +217,15 @@ async function sourceChanges(service: RecoveryService, directory: string, expect
   const known = new Set(expected.map(entry => entry.path));
   const changes: string[] = [];
   for (const entry of expected) {
-    const file = current.get(entry.path);
-    if (!file) changes.push(`${entry.path} was removed or is no longer eligible`);
-    else if (file.sha256 !== entry.sha256 || (process.platform !== 'win32' && file.mode !== entry.mode)) changes.push(`${entry.path} was changed`);
+    // A tracked file may match .gitignore. Recovery intentionally omits .git, so verify
+    // every manifest entry directly rather than dropping it from a new-folder scan.
+    const file = path.join(directory, ...entry.path.split('/'));
+    try {
+      await assertNoLinks(directory, file);
+      const stat = await fs.lstat(file);
+      const mode = stat.mode & 0o111 ? '100755' : '100644';
+      if (!stat.isFile() || sha256(await fs.readFile(file)) !== entry.sha256 || (process.platform !== 'win32' && mode !== entry.mode)) changes.push(`${entry.path} was changed`);
+    } catch { changes.push(`${entry.path} was removed or could not be verified`); }
   }
   for (const file of current.keys()) if (!known.has(file)) changes.push(`${file} was added`);
   return changes;
@@ -217,7 +247,7 @@ export async function runCheckpointCheck(service: RecoveryService, request: Extr
   }
 
   const started = Date.now();
-  const result = await runShell(command, workingCopy, timeoutSeconds * 1000, checkEnvironment(service));
+  const result = await runManagedCheck(command, workingCopy, timeoutSeconds * 1000, checkEnvironment(service));
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
   let changes: string[] = [], verificationError: string | null = null;
   try { changes = await sourceChanges(service, workingCopy, manifest.entries); } catch (error) {
@@ -230,8 +260,10 @@ export async function runCheckpointCheck(service: RecoveryService, request: Extr
     : result.exitCode !== null ? `The command exited with code ${result.exitCode} after ${seconds} s`
     : `The command was terminated by ${result.signal ?? 'a signal'} after ${seconds} s`;
   const failed = result.error !== undefined || result.timedOut || result.exitCode !== 0;
-  const outcome: CheckpointEvidence['outcome'] = failed ? 'failed' : changes.length || verificationError ? 'untested' : 'passed';
+  const outcome: CheckpointEvidence['outcome'] = failed ? 'failed' : changes.length || verificationError || result.background || !result.stopped ? 'untested' : 'passed';
   const notes = [ran + ' in a fresh recovered copy of this checkpoint. This result covers only that command and checkpoint.'];
+  if (result.background) notes.push('Background descendants outlived the command; their cleanup was requested and this run cannot certify the checkpoint.');
+  if (!result.stopped) notes.push('The command process tree could not be confirmed stopped.');
   if (changes.length) notes.push(`The command altered the recovered copy (${listChanges(changes)})${failed ? '.' : ', so the run is recorded as untested.'}`);
   if (verificationError) notes.push(`The recovered copy could not be verified after the command (${verificationError})${failed ? '.' : ', so the run is recorded as untested.'}`);
   if (output.truncated) notes.push('Only the last 32 KiB of output is kept.');

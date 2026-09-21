@@ -14,7 +14,9 @@ listing or recovering checkpoints. Never initialize or modify the source reposit
 Capture records the actual working files, including eligible untracked files, without changing
 HEAD, branches, remotes, or the real index. Enumerate candidates without following links or entering
 nested repositories. Honor Git ignore rules and tracked files, then apply the shared protection
-policy. Include application lockfiles by default. Record every exclusion and the coverage limits.
+policy. For a Git source, enumerate through its own configuration so `.git/info/exclude` and
+`core.excludesFile` apply to untracked files. Include application lockfiles by default. Record
+every exclusion and the coverage limits.
 Secret screening is a heuristic, not a guarantee. Databases, credentials, dependencies, external
 services, and deployment state are outside source recovery.
 
@@ -23,7 +25,9 @@ if the inspected fingerprint is stale. This detects concurrent edits; it is not 
 atomic snapshot. Bound capture size and refuse ambiguous or unsafe paths. Store byte-exact blobs
 without clean filters or line-ending conversion. Use a temporary index in the vault, write a tree,
 then an independent commit with a versioned manifest in its message and an immutable checkpoint
-ref. Independent commits prevent backing up one milestone from uploading unrelated older snapshots.
+ref. Read the entire snapshot back against its manifest before publishing the ref: Git can silently
+omit unsafe index paths while returning success. Independent commits prevent backing up one
+milestone from uploading unrelated older snapshots.
 
 Serialize mutations for a vault across UI and CLI processes. Report active lock contention; recover
 abandoned locks only when the owning process is gone. Receipts/settings use atomic writes. No
@@ -42,7 +46,10 @@ shell. The explicitly requested check command is the only recovery API that exec
 Comparison describes the effect of restoring the checkpoint: add, replace, delete. Render text
 previews with size limits and binary markers. Do not infer feature boundaries from file names.
 Default recovery creates a new, previously nonexistent folder outside the source/vault. Reject
-links, traversal, reserved paths, and collisions. Write into a private temporary sibling folder,
+links, traversal, reserved paths, and collisions. Reject `.git` and Windows `git~<digits>` aliases
+in every path component; repair also checks canonical parents to keep writes out of Git metadata.
+The [Git path validator](https://raw.githubusercontent.com/git/git/master/path.c) explains the
+short-name alias boundary. Write into a private temporary sibling folder,
 verify every restored file hash, then publish the completed folder. Keep the current project intact.
 Do not copy `.git`, run hooks, install dependencies, or claim the recovered application works.
 

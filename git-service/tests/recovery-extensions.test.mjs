@@ -287,12 +287,21 @@ test('screenshots are copied into the vault, verified by type, and independent o
   assert.deepEqual(await fs.readFile(entry.screenshotPath), PNG, 'deleting the original does not remove the evidence');
   const reopened = (await new RecoveryService(service.repoPath, { vaultRoot: path.join(root, 'vault') }).dispatch({ action: 'state' })).checkpoints[0].evidence[0];
   assert.equal(reopened.screenshotPath, entry.screenshotPath);
+  const imageRequest = { action: 'evidenceImage', checkpointId: checkpoint.id, evidenceId: entry.id };
+  assert.deepEqual(await service.dispatch(imageRequest), { dataUrl: `data:image/png;base64,${PNG.toString('base64')}` });
+  await assert.rejects(service.dispatch({ ...imageRequest, evidenceId: '../outside' }), /Invalid evidence ID/);
+  const otherCheckpoint = await save('Another version', 'different');
+  await assert.rejects(service.dispatch({ ...imageRequest, checkpointId: otherCheckpoint.id }), /no screenshot/);
+  const checkpointWithEvidence = await service.readCheckpoint(checkpoint.id);
+  await service.updateMetadata(checkpoint.id, { evidence: [{ ...entry, screenshotPath: path.join(root, 'outside.png') }] });
+  await assert.rejects(service.dispatch(imageRequest), /Invalid saved screenshot path/);
+  await service.updateMetadata(checkpoint.id, { evidence: checkpointWithEvidence.evidence });
   const again = await record(await put('again.png', PNG));
   assert.notEqual(path.dirname(again.screenshotPath), path.dirname(entry.screenshotPath), 'each evidence entry has its own directory');
 
   assert.ok((await record(await put('photo.dat', JPEG))).screenshotPath.endsWith('.jpg'), 'the type comes from the bytes, not the name');
   assert.ok((await record(await put('modern.bin', WEBP))).screenshotPath.endsWith('.webp'));
-  const count = (await state()).checkpoints[0].evidence.length;
+  const count = (await service.readCheckpoint(checkpoint.id)).evidence.length;
 
   const rejected = [
     [await put('vector.png', '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'), /PNG, JPEG or WebP/],
@@ -310,11 +319,27 @@ test('screenshots are copied into the vault, verified by type, and independent o
     if (!['EPERM', 'EACCES', 'ENOSYS'].includes(error.code)) throw error;
     t.diagnostic(`symlink rejection not exercised: ${error.code}`);
   }
-  assert.equal((await state()).checkpoints[0].evidence.length, count, 'rejected screenshots record nothing');
+  assert.equal((await service.readCheckpoint(checkpoint.id)).evidence.length, count, 'rejected screenshots record nothing');
   assert.deepEqual((await fs.readdir(path.join(service.vaultPath, 'evidence', checkpoint.id))).length, count, 'and leave no copies behind');
 });
 
 // ---------- explicit checks ----------
+
+test('a check whose descendant outlives its shell cannot certify the checkpoint', async t => {
+  const { service, write, save } = await fixtures(t);
+  await write('background.js', "const { spawn } = require('node:child_process');\n"
+    + "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { detached: process.platform === 'win32', stdio: 'ignore' });\n"
+    + "console.log('ORPHAN_PID=' + child.pid); child.unref(); process.exit(0);\n");
+  const checkpoint = await save('Background check');
+  const evidence = await service.dispatch({ action: 'runCheck', checkpointId: checkpoint.id, command: 'node background.js', timeoutSeconds: 30 });
+  keepCopy(t, evidence);
+  const descendant = Number(evidence.output.match(/ORPHAN_PID=(\d+)/)?.[1]);
+  assert.ok(descendant > 0, 'the fixture started its own descendant');
+  t.after(() => { if (alive(descendant)) process.kill(descendant); });
+  assert.equal(evidence.outcome, 'untested', evidence.description);
+  assert.match(evidence.description, /background|descendant|confirmed stopped/);
+  if (process.platform === 'win32') assert.equal(alive(descendant), false, 'the job stopped its detached descendant');
+});
 
 const checkFixture = async (t, options) => {
   const context = await fixtures(t, options);
@@ -337,6 +362,20 @@ const checkFixture = async (t, options) => {
   };
   return { ...context, checkpoint, check };
 };
+
+test('checks still verify saved tracked files that match ignore rules in the recovered copy', async t => {
+  const { service, write, git, save } = await fixtures(t, { git: true });
+  await write('.gitignore', 'app.txt\n');
+  git('add', '.gitignore'); git('commit', '-m', 'Ignore only future untracked files');
+  const checkpoint = await save('Tracked but ignored');
+  const passed = await service.dispatch({ action: 'runCheck', checkpointId: checkpoint.id, command: 'node -e "process.exit(0)"' });
+  keepCopy(t, passed);
+  assert.equal(passed.outcome, 'passed', passed.description);
+  const changed = await service.dispatch({ action: 'runCheck', checkpointId: checkpoint.id,
+    command: 'node -e "require(\'node:fs\').writeFileSync(\'app.txt\', \'modified\')"' });
+  keepCopy(t, changed);
+  assert.equal(changed.outcome, 'untested');
+});
 
 test('a passing check records exact-version evidence and leaves source and history untouched', async t => {
   const { service, repo, check, checkpoint, state, save } = await checkFixture(t);
