@@ -1,12 +1,12 @@
 # Recovery verification
 
-Implementation evidence for the recovery roadmap. Final landing remains pending the release
-review and its follow-up; see [the plan](RECOVERY_PLAN.md).
+Implementation evidence for the completed recovery roadmap. The [plan](RECOVERY_PLAN.md) records
+landing status; [orchestration costs](RECOVERY_ORCHESTRATION.md) record available usage estimates.
 
 ## Parent checks observed
 
-- Service: all 139 tests passed on `c357ce9`, including remote re-export, damaged metadata recovery,
-  redaction expansion and serialized receipt limits.
+- Service: all 140 tests passed on `9347942`, including remote re-export, damaged metadata recovery,
+  redaction expansion, serialized receipt limits and retained-copy reporting after a check.
 - Native: all 92 tests and `cargo check` passed on `c357ce9`, including the validation field-name
   boundary regression from `658f524` and scoped ignore-file writes.
 - UI and service builds pass after integration. Worker browser evidence: 119 visual-Git assertions
@@ -15,6 +15,14 @@ review and its follow-up; see [the plan](RECOVERY_PLAN.md).
 - Independent complete review confirmed foundation H1/H2/M1/M2/M3/M4/L1 resolved. Its N1/N2/N4/N5
   corrections are in `cb87ea9`; N3 is a documented lock-recovery limit. Reports name frozen snapshots:
   [foundation](RECOVERY_FOUNDATION_REVIEW.md), [complete](RECOVERY_COMPLETE_REVIEW.md).
+- Independent [release review](RECOVERY_RELEASE_REVIEW.md) resolved F1-F6 with 27 focused checks,
+  then R1-R4 with 10 focused checks on `9347942`. Parent inspected the resulting UI captures.
+  No finding remains open. These checks used a stand-in Tauri boundary and the real validator/engine.
+
+Integration was rebased onto main while retaining merge history; its complete file tree matched
+the preserved `archive/recovery-candidate-verified` snapshot exactly. Both builds, all 139 then-current
+service tests, 92 Rust tests and `cargo check` passed again on `adf1ba6`. The subsequent small feedback
+fix `9347942` passed both builds and the complete 140-test service suite; Rust sources were unchanged.
 
 All repositories/remotes used for testing were disposable. Tests did not publish to GitHub or use
 real credentials. Service tests use Node's built-in runner; Windows shell globs must be expanded
@@ -90,6 +98,8 @@ Probe receipts and Peek captures are retained in the smoke directory; tests used
 - Remote checkpoint backup carries saved source; later local evidence/screenshots are not included.
 - An empty ownership lock or orphaned reclaim guard can require manual recovery after a crash;
   [the procedure](RECOVERY_DESIGN.md#damaged-local-metadata) requires stopping all vault users first.
+- A crash-left `.gitignore.lock` also requires preserving and moving the abandoned lock after
+  confirming no editor owns it; see [development guidance](RECOVERY_DEVELOPMENT.md).
 - The user chose secure token setup for this release; browser sign-in follows OAuth registration.
 - No participant usability study, semantic AI repair, browser OAuth registration or release signing
   is claimed. Recovery covers eligible source, not databases, dependencies or deployed services.

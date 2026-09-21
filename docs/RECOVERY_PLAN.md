@@ -11,7 +11,7 @@ Audience/rationale: [product review](PRODUCT_REVIEW.md). Invariants/API:
 ## Integration status
 
 All code remains on `feat/recovery-integration` in `S:/BitGit-wt-integration` until final review.
-Checked items below mean implemented and parent-verified in that candidate, not released.
+All implementation and independent review gates passed; local landing and session closure remain.
 
 - [x] Checkpoint capture/list/compare, explicit coverage and byte-exact recovered copies.
 - [x] Selective file repair, safety checkpoints, stale guards and explicit interrupted-repair undo.
@@ -23,24 +23,19 @@ Checked items below mean implemented and parent-verified in that candidate, not 
 - [x] Complete and verify automatic-save, evidence/check and regression UI workflows.
 - [x] Complete and verify visual Git selection/diffs/status, explicit branches and bulk outcomes.
 - [x] Fresh independent review of resolved foundation findings and the complete backend/extensions.
-- [ ] Resolve findings and run final service/UI/native gates on the integrated tree.
+- [x] Resolve findings and run final service/UI/native gates on the integrated tree.
 - [x] Restart and drive the latest native app with isolated data, including extension workflows.
 - [ ] Update user/developer docs, record verification limits, land and re-verify main.
 - [ ] Close remaining workers and report shipped commits and available orchestration costs.
 
 ## Current evidence and pickup
 
-Candidate `cb87ea9` includes both final UI branches and fixes for complete-review N1/N2/N4/N5.
-Independent review confirmed all foundation findings resolved. N3 ownership-lock crash recovery
-remains a documented manual procedure. Parent native smoke found a validation field-name mismatch;
-`658f524` fixes it with a boundary regression test and a successful actual selected-file publish.
-Parent gates on `c357ce9`: 139 service tests, 92 native tests, UI/service builds and cargo check pass.
-VERIFY-RELEASE returned six findings in `RECOVERY_RELEASE_REVIEW.md`. Parent fixes
-cover scoped native ignore writes, stale automation/undo state, bounded receipt writes, persistent
-failed-preview blocking and two stale guide claims. Native ignore failure was reproduced; its fixed
-workflow preserved existing rules, staging, HEAD and remote. The independent follow-up remains
-pending. No main landing until final verification.
-Historical reports identify their frozen snapshots.
+Source candidate `9347942` passed 140 service tests and both builds. Unchanged Rust sources passed
+92 tests and cargo check on the rebased tree. Independent review resolved every foundation, N, F
+and R finding requiring a code fix; abandoned ownership locks remain documented manual procedures.
+The release reviewer confirmed all F findings with 27 focused checks and R findings with 10 more.
+Historical reports identify their frozen snapshots. Integration is based on main; no source changes
+remain pending. Land locally, re-verify the landed tree and close the final reviewer.
 
 Native smoke root: `%TEMP%/bitgit-native-smoke-20260921-01`; app-data override isolates cache,
 vault and credentials. Own Vite/CDP ports 5177/9227. Earlier binary passed source-loss and fresh-vault

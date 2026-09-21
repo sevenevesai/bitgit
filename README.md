@@ -285,7 +285,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Status
 
 **Build Version:** 1.0.0
-**Status:** Active development; recovery roadmap implementation under verification
+**Status:** Recovery roadmap implemented and verified on Windows; see [verification and limits](docs/RECOVERY_VERIFICATION.md)
 **Platform:** Windows 10/11 (macOS/Linux support planned)
 
 **Repository:** https://github.com/sevenevesai/bitgit
