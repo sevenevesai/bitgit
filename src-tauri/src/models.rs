@@ -173,6 +173,7 @@ pub struct PreSyncValidation {
     pub can_proceed: bool,
     pub has_warnings: bool,
     pub total_staged_size: u64,
+    #[serde(alias = "totalStagedSizeMB")]
     pub total_staged_size_mb: f64,
     pub issues: Vec<FileValidationIssue>,
     pub suggested_gitignore: Vec<String>,
@@ -187,6 +188,7 @@ pub struct FileValidationIssue {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "sizeMB")]
     pub size_mb: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<String>,
@@ -205,6 +207,24 @@ pub enum ValidationSeverity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validation_accepts_service_mb_acronyms_and_serializes_frontend_names() {
+        // Node's existing wire fields use MB; serde's camelCase fields sent to the UI use Mb.
+        let value = serde_json::json!({
+            "canProceed": true, "hasWarnings": true, "totalStagedSize": 62914560,
+            "totalStagedSizeMB": 60.0, "suggestedGitignore": ["large.bin"],
+            "issues": [{"filePath": "large.bin", "severity": "warning", "reason": "Large file",
+                "sizeBytes": 62914560, "sizeMB": 60.0}]
+        });
+        let decoded: PreSyncValidation = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.total_staged_size_mb, 60.0);
+        assert_eq!(decoded.issues[0].size_mb, Some(60.0));
+        let frontend = serde_json::to_value(decoded).unwrap();
+        assert_eq!(frontend["totalStagedSizeMb"], 60.0);
+        assert_eq!(frontend["issues"][0]["sizeMb"], 60.0);
+        assert!(serde_json::from_value::<PreSyncValidation>(frontend).is_ok());
+    }
 
     // A cache entry as written before the branch/upstream/remote-check fields existed.
     const OLD_CACHE_ENTRY: &str = r#"[{
