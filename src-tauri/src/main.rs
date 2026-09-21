@@ -6,8 +6,11 @@ mod app_settings;
 mod commands;
 mod credentials;
 mod git_service;
+mod gitignore;
 mod models;
 mod project_cache;
+mod project_sync;
+mod recovery_request;
 mod scanner;
 
 use commands::*;
@@ -41,7 +44,10 @@ fn main() {
             clone_repository,
             create_github_repository,
             validate_before_sync,
+            add_gitignore_patterns,
             sync_project,
+            // Recovery
+            recovery_command,
             // Advanced Git features
             git_get_branches,
             git_create_branch,
@@ -49,6 +55,7 @@ fn main() {
             git_delete_branch,
             git_get_commit_history,
             git_get_diff,
+            git_get_file_changes,
             git_create_stash,
             git_list_stashes,
             git_apply_stash,

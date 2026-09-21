@@ -35,7 +35,7 @@ export function CreateRepoModal({ isOpen, onClose, onCreate, projectName }: Crea
               Create a new GitHub repository for <span className="font-semibold">"{projectName}"</span>
             </p>
             <p className="text-sm text-gray-500">
-              Choose the visibility for your new repository:
+              Choose the visibility for an empty remote repository. You will review and select files before publishing code.
             </p>
           </div>
 

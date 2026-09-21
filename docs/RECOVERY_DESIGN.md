@@ -14,7 +14,9 @@ listing or recovering checkpoints. Never initialize or modify the source reposit
 Capture records the actual working files, including eligible untracked files, without changing
 HEAD, branches, remotes, or the real index. Enumerate candidates without following links or entering
 nested repositories. Honor Git ignore rules and tracked files, then apply the shared protection
-policy. Include application lockfiles by default. Record every exclusion and the coverage limits.
+policy. For a Git source, enumerate through its own configuration so `.git/info/exclude` and
+`core.excludesFile` apply to untracked files. Include application lockfiles by default. Record
+every exclusion and the coverage limits.
 Secret screening is a heuristic, not a guarantee. Databases, credentials, dependencies, external
 services, and deployment state are outside source recovery.
 
@@ -23,7 +25,9 @@ if the inspected fingerprint is stale. This detects concurrent edits; it is not 
 atomic snapshot. Bound capture size and refuse ambiguous or unsafe paths. Store byte-exact blobs
 without clean filters or line-ending conversion. Use a temporary index in the vault, write a tree,
 then an independent commit with a versioned manifest in its message and an immutable checkpoint
-ref. Independent commits prevent backing up one milestone from uploading unrelated older snapshots.
+ref. Read the entire snapshot back against its manifest before publishing the ref: Git can silently
+omit unsafe index paths while returning success. Independent commits prevent backing up one
+milestone from uploading unrelated older snapshots.
 
 Serialize mutations for a vault across UI and CLI processes. Report active lock contention; recover
 abandoned locks only when the owning process is gone. Receipts/settings use atomic writes. No
@@ -42,7 +46,10 @@ shell. The explicitly requested check command is the only recovery API that exec
 Comparison describes the effect of restoring the checkpoint: add, replace, delete. Render text
 previews with size limits and binary markers. Do not infer feature boundaries from file names.
 Default recovery creates a new, previously nonexistent folder outside the source/vault. Reject
-links, traversal, reserved paths, and collisions. Write into a private temporary sibling folder,
+links, traversal, reserved paths, and collisions. Reject `.git` and Windows `git~<digits>` aliases
+in every path component; repair also checks canonical parents to keep writes out of Git metadata.
+The [Git path validator](https://raw.githubusercontent.com/git/git/master/path.c) explains the
+short-name alias boundary. Write into a private temporary sibling folder,
 verify every restored file hash, then publish the completed folder. Keep the current project intact.
 Do not copy `.git`, run hooks, install dependencies, or claim the recovered application works.
 
@@ -62,6 +69,8 @@ ref, without force or branch integration/deletion. Show the chosen destination b
 Read the exact ref back from the remote and match its object ID before recording a backup receipt.
 A historical receipt says when it was checked; verification failures remain visible. This proves
 the remote ref, not application health. Recovery performs an independent byte verification.
+After verifying an imported parentless commit and all its bytes, remove only that commit's shallow
+boundary. It can then be exported to another remote without including unrelated history.
 
 Remote discovery/import must work into a new vault, enabling recovery on another machine. Validate
 imported manifests, object types, bounds and paths as untrusted input; reject symlinks/submodules.
@@ -91,6 +100,8 @@ Node IPC `recovery` takes `{repoPath, request}` and returns the action's `Recove
 `RecoveryService.dispatch(request)` is shared by IPC and the JSON CLI. The native
 `recovery_command(project_id, request)` resolves a saved project's local path and forwards it;
 the browser cannot choose arbitrary vault roots. Native commands validate recognized actions.
+Long checks use a scoped service process that is stopped and reaped on return. Other projects use
+the shared service; the same vault remains serialized across both processes and the CLI.
 The CLI accepts `--repo <absolute path>` and a JSON request on stdin, prints one JSON response,
 and sets a nonzero exit code on failure. No server/listening port or arbitrary agent orchestration.
 
@@ -110,3 +121,23 @@ fresh-vault import, automatic idle/dedup behavior, evidence isolation and timeou
 semantics, and JSON CLI round trips. Native smoke uses isolated app data and disposable projects.
 Builds: `npm run build`, `npm --prefix git-service run build`, `cargo check` in `src-tauri`.
 Compilation does not replace driving the native save/compare/restore journey.
+
+## Damaged local metadata
+
+Immutable manifests and snapshot bytes remain authoritative. Unreadable receipt annotations set
+`Checkpoint.metadataError` without hiding history or preventing compare/new-copy recovery. Receipt
+writers refuse before running checks, repairing files or exporting. A completed recovered copy
+returns `warnings` if its receipt cannot be saved; it must not be reported as a failed restore.
+Unreadable repair journals set `RecoveryState.repairJournalError`; create, repair, rollback and
+automatic ticks stay blocked. Never infer journal contents or overwrite damaged originals.
+Metadata replacement syncs its temporary file before rename; this is not a power-loss guarantee.
+Receipt writes use the reader's schema and 20 MiB serialized-byte limit before replacement, so
+redaction expansion and JSON escaping cannot invalidate previously readable metadata. Commands
+lengthened by redaction are bounded with an explicit truncation marker in their evidence record.
+
+An empty ownership lock or orphaned `.reclaim` guard requires manual recovery: close BitGit and
+stop all harness calls using that vault, confirm no process still owns it, then preserve a copy of
+the vault and move only `operation.lock` and `operation.lock.reclaim` aside. Never clear a live lock
+or infer staleness from age. This rare crash case remains a known limitation of the lock protocol.
+For unreadable receipts or repair journals, recover a new copy from History before troubleshooting
+the preserved metadata. Without a valid journal, automatic in-place undo cannot be trusted.

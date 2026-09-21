@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 import { useAppStore } from '../stores/useAppStore';
 import { ProjectCard } from './ProjectCard';
 import { SettingsModal } from './SettingsModal';
 import { AddProjectModal } from './AddProjectModal';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
+import { BulkResultPanel } from './git/BulkResultPanel';
+import type { BulkProjectResult, PublishAction } from '../types';
 import { Plus, RefreshCw, Settings, Sun, Moon, CheckSquare, Square, Upload, Search, Filter, BarChart3, FolderGit2 } from 'lucide-react';
 
 export function Dashboard() {
-  console.log('[Dashboard] Rendering...');
   const {
     projects,
     isLoading,
@@ -19,10 +21,15 @@ export function Dashboard() {
     selectAll,
     clearSelection,
     syncSelected,
+    refreshAllProjects,
+    requestReview,
     startBackgroundChecking,
     stopBackgroundChecking,
   } = useAppStore();
-  console.log('[Dashboard] State:', { projects, isLoading, projectCount: projects?.length });
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const isRefreshingRef = useRef(false);
+  const [isBulkRunning, setIsBulkRunning] = useState(false);
+  const [bulk, setBulk] = useState<{ kind: PublishAction['type']; results: BulkProjectResult[] } | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -76,20 +83,62 @@ export function Dashboard() {
       return a.name.localeCompare(b.name);
     });
 
+  // Re-reads Git state (and GitHub) for every project with a local folder. It does not reload the
+  // list, so open dialogs on the cards are not torn down.
+  const handleRefreshAll = useCallback(async () => {
+    if (isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
+    setIsRefreshing(true);
+    try {
+      const summary = await refreshAllProjects();
+      const problems = summary.unavailable + summary.failed;
+      const skippedNote = summary.skipped > 0 ? ` ${summary.skipped} skipped because an operation is running.` : '';
+      if (summary.checked === 0) {
+        toast(`No projects were checked.${skippedNote || ' None has a local folder yet.'}`);
+      } else if (problems > 0) {
+        toast.error(
+          `Checked ${summary.checked} project(s); ${problems} could not be fully checked (GitHub unreachable or not a Git folder). See each project's status.${skippedNote}`,
+          { duration: 7000 }
+        );
+      } else {
+        toast.success(`Checked ${summary.checked} project(s).${skippedNote}`);
+      }
+    } finally {
+      isRefreshingRef.current = false;
+      setIsRefreshing(false);
+    }
+  }, [refreshAllProjects]);
+
+  const handleBulk = async (kind: PublishAction['type']) => {
+    setIsBulkRunning(true);
+    setBulk(null);
+    try {
+      const results = await syncSelected({ type: kind });
+      if (results.length > 0) setBulk({ kind, results });
+    } finally {
+      setIsBulkRunning(false);
+    }
+  };
+
+  const handleReview = (projectId: string) => {
+    if (!filteredProjects.some((p) => p.id === projectId)) {
+      toast('Show this project in the list (clear filters or show archived) to review it.');
+      return;
+    }
+    requestReview({ id: projectId, kind: bulk?.kind ?? 'push_local' });
+  };
+
   useEffect(() => {
-    console.log('[Dashboard] Loading projects and settings on mount...');
     loadProjects();
     loadEditorSettings();
 
     // Start background status checking if enabled
     if (settings.ui.refreshInterval > 0) {
-      console.log('[Dashboard] Starting background checking...');
       startBackgroundChecking();
     }
 
     // Cleanup: stop background checking when component unmounts
     return () => {
-      console.log('[Dashboard] Stopping background checking...');
       stopBackgroundChecking();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -112,10 +161,10 @@ export function Dashboard() {
       const target = e.target as HTMLElement;
       const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
 
-      // Ctrl+R: Refresh
+      // Ctrl+R: Refresh (re-reads Git state, not just the saved list)
       if (e.ctrlKey && e.key === 'r') {
         e.preventDefault();
-        loadProjects();
+        void handleRefreshAll();
         return;
       }
 
@@ -157,7 +206,7 @@ export function Dashboard() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [loadProjects, projects.length, hasSelection, selectAll, clearSelection, toggleTheme]);
+  }, [handleRefreshAll, projects.length, hasSelection, selectAll, clearSelection, toggleTheme]);
 
   if (isLoading) {
     return (
@@ -258,11 +307,12 @@ export function Dashboard() {
               </button>
 
               <button
-                onClick={() => loadProjects()}
-                className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                title="Refresh projects (Ctrl+R)"
+                onClick={() => void handleRefreshAll()}
+                disabled={isRefreshing}
+                className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+                title="Refresh: re-read every project's Git state and check GitHub (Ctrl+R)"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
                 Refresh
               </button>
 
@@ -395,18 +445,22 @@ export function Dashboard() {
               </div>
               <div className="flex gap-2">
                 <button
-                  onClick={() => syncSelected({ type: 'push_local' })}
-                  className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 dark:bg-teal-700 rounded-lg hover:bg-teal-700 dark:hover:bg-teal-800 transition-colors"
+                  onClick={() => void handleBulk('push_local')}
+                  disabled={isBulkRunning}
+                  className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 dark:bg-teal-700 rounded-lg hover:bg-teal-700 dark:hover:bg-teal-800 transition-colors disabled:opacity-50"
+                  title="Push commits you already made. Projects with uncommitted changes are held back for you to review."
                 >
                   <Upload className="w-4 h-4" />
-                  Bulk Push Local
+                  Bulk Push Commits
                 </button>
                 <button
-                  onClick={() => syncSelected({ type: 'full_sync' })}
-                  className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 dark:bg-blue-700 rounded-lg hover:bg-blue-700 dark:hover:bg-blue-800 transition-colors"
+                  onClick={() => void handleBulk('full_sync')}
+                  disabled={isBulkRunning}
+                  className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 dark:bg-blue-700 rounded-lg hover:bg-blue-700 dark:hover:bg-blue-800 transition-colors disabled:opacity-50"
+                  title="Sync each project's current branch with GitHub. Projects with uncommitted changes are held back for you to review."
                 >
                   <RefreshCw className="w-4 h-4" />
-                  Bulk Full Sync
+                  Bulk Sync Branches
                 </button>
               </div>
             </div>
@@ -415,6 +469,14 @@ export function Dashboard() {
       )}
 
       <main className="container mx-auto px-8 py-8">
+        {currentView === 'projects' && bulk && (
+          <BulkResultPanel
+            title={bulk.kind === 'full_sync' ? 'Bulk sync results' : 'Bulk push results'}
+            results={bulk.results}
+            onReview={handleReview}
+            onDismiss={() => setBulk(null)}
+          />
+        )}
         {/* Conditionally render Analytics Dashboard or Projects List */}
         {currentView === 'analytics' ? (
           <AnalyticsDashboard />

@@ -6,6 +6,7 @@ import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { RecoveryService } from '../dist/recovery-service.js';
 import { validateBackupRemote } from '../dist/recovery-remote.js';
+import { sha256 } from '../dist/recovery-io.js';
 
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bitgit-recovery-remote-'));
@@ -21,6 +22,33 @@ async function fixture(t) {
   const saved = await service.dispatch({ action: 'create', label: 'Ready to recover', note: 'A named source milestone' });
   return { root, source, remote, service, saved };
 }
+
+test('an imported NTFS alias cannot enter local history or overwrite Git hooks', async t => {
+  const { root, remote, service, saved } = await fixture(t);
+  const bytes = Buffer.from('untrusted hook bytes');
+  const oid = async (args, input) => (await service.git(args, input)).toString().trim();
+  const blob = await oid(['hash-object', '-w', '--stdin'], bytes);
+  const hooks = await oid(['mktree', '-z'], `100644 blob ${blob}\tpre-commit\0`);
+  const gitTree = await oid(['mktree', '-z'], `040000 tree ${hooks}\thooks\0`);
+  const tree = await oid(['mktree', '-z'], `040000 tree ${gitTree}\tGIT~1\0`);
+  const { manifest } = await service.readManifest(saved.commitOid);
+  const file = 'GIT~1/hooks/pre-commit';
+  manifest.entries = [{ path: file, mode: '100644', sizeBytes: bytes.length, sha256: sha256(bytes) }];
+  manifest.coverage.included = [{ path: file, sizeBytes: bytes.length }];
+  manifest.coverage.excluded = [];
+  manifest.coverage.totalBytes = bytes.length;
+  manifest.fingerprint = sha256(JSON.stringify([[file, '100644', sha256(bytes)]]));
+  const forged = await oid(['commit-tree', tree], JSON.stringify(manifest));
+  const ref = `refs/heads/bitgit-checkpoints/${service.vaultKey}/${saved.id}`;
+  await service.git(['push', remote, `${forged}:${ref}`]);
+  const victim = path.join(root, 'victim');
+  const init = spawnSync('git', ['init', victim], { encoding: 'utf8', windowsHide: true });
+  assert.equal(init.status, 0, init.stderr);
+  const fresh = new RecoveryService(victim, { vaultRoot: path.join(root, 'fresh-vault') });
+  await assert.rejects(fresh.dispatch({ action: 'remoteImport', remoteUrl: remote, ref }), /unsafe file path/);
+  assert.equal((await fresh.dispatch({ action: 'state' })).checkpoints.length, 0);
+  assert.equal(await fs.stat(path.join(victim, '.git', 'hooks', 'pre-commit')).then(() => true, () => false), false);
+});
 
 test('backup verifies an independent ref and imports into a fresh vault after source loss', async t => {
   const { root, source, remote, service, saved } = await fixture(t);
@@ -50,6 +78,32 @@ test('failed remote recheck persists the failure without inventing a new verifie
   const checkpoint = (await service.dispatch({ action: 'state' })).checkpoints[0];
   assert.equal(checkpoint.backup.verifiedAt, receipt.verifiedAt);
   assert.match(checkpoint.backup.lastCheckError, /not verified/);
+});
+
+test('an imported checkpoint can be backed up again and recovered on a third machine', async t => {
+  const { root, remote, service, saved } = await fixture(t);
+  const first = await service.dispatch({ action: 'backup', checkpointId: saved.id, remoteUrl: remote });
+  const secondRemote = path.join(root, 'second.git');
+  assert.equal(spawnSync('git', ['init', '--bare', secondRemote], { windowsHide: true }).status, 0);
+  const second = new RecoveryService(path.join(root, 'missing-second'), { vaultRoot: path.join(root, 'second-vault') });
+  await second.dispatch({ action: 'remoteImport', remoteUrl: remote, ref: first.ref });
+  assert.equal(await fs.stat(path.join(second.gitDir, 'shallow')).then(() => true, () => false), false);
+  const backup = await second.dispatch({ action: 'backup', checkpointId: saved.id, remoteUrl: secondRemote });
+  const third = new RecoveryService(path.join(root, 'missing-third'), { vaultRoot: path.join(root, 'third-vault') });
+  const imported = await third.dispatch({ action: 'remoteImport', remoteUrl: secondRemote, ref: backup.ref });
+  const destination = path.join(root, 'third-recovered');
+  await third.dispatch({ action: 'recover', checkpointId: imported.id, destination });
+  assert.equal(await fs.readFile(path.join(destination, 'app.txt'), 'utf8'), 'known bytes\r\n');
+});
+
+test('backup repairs a legacy shallow root boundary without discarding other boundaries', async t => {
+  const { remote, service, saved, source } = await fixture(t);
+  await fs.writeFile(path.join(source, 'app.txt'), 'other boundary');
+  const another = await service.dispatch({ action: 'create', label: 'Other root' });
+  const shallow = path.join(service.gitDir, 'shallow');
+  await fs.writeFile(shallow, `${saved.commitOid}\n${another.commitOid}\n`);
+  await service.dispatch({ action: 'backup', checkpointId: saved.id, remoteUrl: remote });
+  assert.equal(await fs.readFile(shallow, 'utf8'), `${another.commitOid}\n`);
 });
 
 test('backup never forces replacement of a conflicting remote checkpoint', async t => {

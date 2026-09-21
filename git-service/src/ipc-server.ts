@@ -103,37 +103,37 @@ export class IPCServer {
         }
 
         case 'validateBeforeSync': {
-          const { repoPath } = command.payload;
+          const { repoPath, selectedFiles, allowWarnings } = command.payload;
           const git = new GitOperations(repoPath);
-          const validation = await git.validateBeforeSync();
+          const validation = await git.validateBeforeSync({ selectedFiles, allowWarnings });
           return { id: command.id, success: true, data: validation };
         }
 
         case 'pushLocal': {
-          const { repoPath, remoteUrl, commitMessage, commitDescription } = command.payload;
+          const { repoPath, remoteUrl, commitMessage, commitDescription, selectedFiles, allowWarnings } = command.payload;
           const git = new GitOperations(repoPath);
-          const result = await git.pushLocal(remoteUrl, commitMessage, commitDescription);
+          const result = await git.pushLocal(remoteUrl, commitMessage, commitDescription, { selectedFiles, allowWarnings });
           return { id: command.id, success: true, data: result };
         }
 
         case 'mergeBranches': {
-          const { repoPath, branches, remoteUrl } = command.payload;
+          const { repoPath, branches, remoteUrl, selectedFiles, allowWarnings } = command.payload;
           const git = new GitOperations(repoPath);
-          const merged = await git.mergeBranches(branches, remoteUrl);
+          const merged = await git.mergeBranches(branches, remoteUrl, { selectedFiles, allowWarnings });
           return { id: command.id, success: true, data: { merged } };
         }
 
         case 'pullBranches': {
-          const { repoPath, branches, remoteUrl } = command.payload;
+          const { repoPath, branches, remoteUrl, selectedFiles, allowWarnings } = command.payload;
           const git = new GitOperations(repoPath);
-          const pulled = await git.pullBranches(branches, remoteUrl);
+          const pulled = await git.pullBranches(branches, remoteUrl, { selectedFiles, allowWarnings });
           return { id: command.id, success: true, data: { pulled } };
         }
 
         case 'fullSync': {
-          const { repoPath, remoteUrl, commitMessage, commitDescription } = command.payload;
+          const { repoPath, remoteUrl, commitMessage, commitDescription, selectedFiles, allowWarnings } = command.payload;
           const git = new GitOperations(repoPath);
-          const result = await git.fullSync(remoteUrl, commitMessage, commitDescription);
+          const result = await git.fullSync(remoteUrl, commitMessage, commitDescription, { selectedFiles, allowWarnings });
           return { id: command.id, success: true, data: result };
         }
 
@@ -187,8 +187,8 @@ export class IPCServer {
         }
 
         case 'pushToRemote': {
-          const { localPath, remoteName, branch } = command.payload;
-          await pushToRemote(localPath, remoteName, branch);
+          const { localPath, remoteName, branch, selectedFiles, allowWarnings } = command.payload;
+          await pushToRemote(localPath, remoteName, branch, { selectedFiles, allowWarnings });
           return { id: command.id, success: true };
         }
 
@@ -228,10 +228,15 @@ export class IPCServer {
           return { id: command.id, success: true, data: commits };
         }
 
+        case 'getFileChanges': {
+          const git = new GitOperations(command.payload.repoPath);
+          return { id: command.id, success: true, data: await git.getFileChanges() };
+        }
+
         case 'getDiff': {
-          const { repoPath, filePath } = command.payload;
+          const { repoPath, filePath, scope } = command.payload;
           const git = new GitOperations(repoPath);
-          const diffs = await git.getDiff(filePath);
+          const diffs = await git.getDiff(filePath, scope);
           return { id: command.id, success: true, data: diffs };
         }
 

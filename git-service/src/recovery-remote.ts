@@ -1,5 +1,6 @@
 import * as path from 'node:path';
-import { gitRun, within } from './recovery-io.js';
+import * as fs from 'node:fs/promises';
+import { assertNoLinks, atomicWrite, gitRun, within } from './recovery-io.js';
 import type { RecoveryService } from './recovery-service.js';
 import type { BackupReceipt, Checkpoint, RemoteCheckpoint } from './recovery-types.js';
 
@@ -59,7 +60,9 @@ async function verifyRef(service: RecoveryService, remote: string, ref: string, 
 export async function backupCheckpoint(service: RecoveryService, id: string, value: string): Promise<BackupReceipt> {
   const remote = validateBackupRemote(service, value);
   const checkpoint = await service.readCheckpoint(id);
+  await service.readMetadata(id); // Refuse before publishing when its receipt cannot be preserved.
   await service.readSnapshot(checkpoint); // Check bounds, hashes and current protection policy before sending.
+  await clearVerifiedRootBoundary(service, checkpoint.commitOid);
   const ref = `refs/heads/bitgit-checkpoints/${service.vaultKey}/${checkpoint.id}`;
   await remoteGit(service, ['push', '--porcelain', remote, `${checkpoint.commitOid}:${ref}`], remote);
   await verifyRef(service, remote, ref, checkpoint.commitOid);
@@ -68,6 +71,7 @@ export async function backupCheckpoint(service: RecoveryService, id: string, val
   return receipt;
 }
 export async function verifyBackup(service: RecoveryService, id: string): Promise<BackupReceipt> {
+  await service.readMetadata(id);
   const checkpoint = await service.readCheckpoint(id), receipt = checkpoint.backup;
   if (!receipt) throw new Error('This checkpoint has no recorded remote backup');
   const remote = validateBackupRemote(service, receipt.remoteUrl);
@@ -96,6 +100,7 @@ export async function importRemoteCheckpoint(service: RecoveryService, value: st
   const checkpoint: Checkpoint = { ...service.checkpointFromManifest(manifest), commitOid, treeOid, backup: null, evidence: [], recoveredAt: null };
   await service.readSnapshot(checkpoint);
   await verifyRef(service, remote, ref, commitOid);
+  await clearVerifiedRootBoundary(service, commitOid);
   // An existing ID is immutable, including imports from a different destination.
   let existing: Checkpoint | null = null;
   try { existing = await service.readCheckpoint(checkpoint.id); } catch {
@@ -103,7 +108,27 @@ export async function importRemoteCheckpoint(service: RecoveryService, value: st
     if (refs) throw new Error('A local checkpoint with this ID is unreadable; import cannot overwrite it');
   }
   if (existing && existing.commitOid !== commitOid) throw new Error('A different local checkpoint already uses this ID');
+  await service.readMetadata(checkpoint.id);
   if (!existing) await service.git(['update-ref', `refs/checkpoints/${checkpoint.id}`, commitOid, '0000000000000000000000000000000000000000']);
   await service.updateMetadata(checkpoint.id, { backup: { remoteUrl: remote, ref, commitOid, verifiedAt: service.now(), lastCheckedAt: service.now(), lastCheckError: null } });
   return service.readCheckpoint(checkpoint.id);
+}
+
+// A depth-limited fetch marks even a root commit as shallow. Once its complete snapshot
+// and lack of parents are verified, that one boundary is unnecessary and prevents export
+// to a new remote. Preserve every other shallow boundary, including rejected imports.
+async function clearVerifiedRootBoundary(service: RecoveryService, oid: string): Promise<void> {
+  const header = (await service.git(['cat-file', '-p', oid])).toString('utf8').split('\n\n')[0];
+  if (/^parent /m.test(header)) throw new Error('Checkpoint commits must not include unrelated source history');
+  const file = path.join(service.gitDir, 'shallow');
+  let text: string;
+  try { await assertNoLinks(service.gitDir, file); text = await fs.readFile(file, 'utf8'); } catch (error: any) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  const rows = text.split(/\r?\n/).filter(Boolean);
+  if (!rows.includes(oid)) return;
+  const remaining = rows.filter(row => row !== oid);
+  if (remaining.length) await atomicWrite(file, remaining.join('\n') + '\n');
+  else await fs.rm(file);
 }

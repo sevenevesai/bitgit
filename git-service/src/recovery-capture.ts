@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { assertNoLinks, gitRun, safeRelative, sha256 } from './recovery-io.js';
+import { assertNoLinks, exists, gitRun, safeRelative, sha256 } from './recovery-io.js';
 import { COVERAGE_LIMITS, exclusionReason, MAX_CAPTURE_BYTES, MAX_CAPTURE_FILES } from './recovery-policy.js';
 import type { Coverage } from './recovery-types.js';
 
@@ -20,9 +20,6 @@ export async function captureSource(repoPath: string, gitDir: string): Promise<C
   if (!(await fs.stat(repoPath)).isDirectory()) throw new Error('The source folder is not available');
   await assertNoLinks(path.parse(repoPath).root, repoPath);
   const env = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null' };
-  const scope = [`--git-dir=${gitDir}`, `--work-tree=${repoPath}`];
-  const untracked = (await gitRun(repoPath, [...scope, 'ls-files', '-z', '--others', '--exclude-standard'], { env })).toString('utf8').split('\0').filter(Boolean);
-  const ignored = (await gitRun(repoPath, [...scope, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory'], { env })).toString('utf8').split('\0').filter(Boolean);
   const tracked = new Map<string, string>();
   let branch: string | null = null, head: string | null = null;
   let sourceIsGit = false;
@@ -32,7 +29,16 @@ export async function captureSource(repoPath: string, gitDir: string): Promise<C
       ? path.resolve(top).toLowerCase() === path.resolve(repoPath).toLowerCase()
       : path.resolve(top) === path.resolve(repoPath);
     if (sameRoot) sourceIsGit = true;
-  } catch { /* Plain folders can also have source checkpoints. */ }
+  } catch {
+    if (await exists(path.join(repoPath, '.git'))) throw new Error('The source Git metadata cannot be read. Existing saved versions can still be recovered.');
+    // Plain folders can also have source checkpoints.
+  }
+  // A source repository supplies info/exclude and core.excludesFile as well as .gitignore.
+  // Only plain folders need the vault as a read-only enumeration context.
+  const scope = sourceIsGit ? [] : [`--git-dir=${gitDir}`, `--work-tree=${repoPath}`];
+  const listingOptions = sourceIsGit ? {} : { env };
+  const untracked = (await gitRun(repoPath, [...scope, 'ls-files', '-z', '--others', '--exclude-standard'], listingOptions)).toString('utf8').split('\0').filter(Boolean);
+  const ignored = (await gitRun(repoPath, [...scope, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory'], listingOptions)).toString('utf8').split('\0').filter(Boolean);
   if (sourceIsGit) {
     const index = (await gitRun(repoPath, ['ls-files', '--stage', '-z'])).toString('utf8');
     for (const row of index.split('\0').filter(Boolean)) {

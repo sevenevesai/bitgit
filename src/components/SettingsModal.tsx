@@ -3,7 +3,8 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { open } from '@tauri-apps/api/dialog';
 import toast from 'react-hot-toast';
 import { X, Github, Folder, Search, CheckCircle, XCircle, AlertCircle, ExternalLink, Loader2, Info, ChevronDown, ChevronUp, Code, Terminal } from 'lucide-react';
-import { EditorPreset, EditorConfig, EditorAvailability } from '../types';
+import { EditorPreset, EditorConfig, EditorAvailability, Project } from '../types';
+import { useAppStore } from '../stores/useAppStore';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -150,23 +151,10 @@ export function SettingsModal({ isOpen, onClose, onRepositoriesAdded }: Settings
 
       // Save token
       await invoke('save_github_token', { username, token });
-      toast.success('GitHub token saved and verified!');
+      // Saving a token adds no projects: repositories are only added when you pick one in Add Project.
+      toast.success('GitHub token saved and verified. Use Add Project to choose a repository.');
       setToken(''); // Clear token field
       setTokenStatus('valid');
-
-      // Auto-fetch GitHub repositories
-      const fetchToast = toast.loading('Fetching your GitHub repositories...');
-      try {
-        await invoke('fetch_github_repos', { token });
-        toast.success('GitHub repositories loaded!', { id: fetchToast });
-
-        // Trigger refresh on the dashboard
-        if (onRepositoriesAdded) {
-          onRepositoriesAdded();
-        }
-      } catch (fetchError: any) {
-        toast.error(`Failed to fetch repos: ${fetchError}`, { id: fetchToast });
-      }
     } catch (error: any) {
       toast.error(`Failed to save token: ${error}`);
     } finally {
@@ -216,9 +204,16 @@ export function SettingsModal({ isOpen, onClose, onRepositoriesAdded }: Settings
       setFoundRepos(repos);
       toast.success(`Found ${repos.length} repositories, adding them...`);
 
-      // Then, add them to the backend cache
-      await invoke('add_repositories', { repoPaths: repos });
-      toast.success(`Added ${repos.length} repositories to dashboard`);
+      // Then, add them to the backend cache. Folders that are already projects keep their
+      // settings and are only re-checked, so the count of new ones comes from the result.
+      const knownIds = new Set(useAppStore.getState().projects.map((p) => p.id));
+      const saved = await invoke<Project[]>('add_repositories', { repoPaths: repos });
+      const added = saved.filter((p) => !knownIds.has(p.id)).length;
+      const already = saved.length - added;
+      toast.success(
+        `Added ${added} new project${added !== 1 ? 's' : ''}` +
+          (already > 0 ? `; ${already} ${already !== 1 ? 'were' : 'was'} already in BitGit and ${already !== 1 ? 'were' : 'was'} re-checked.` : '.')
+      );
 
       // Trigger refresh on the dashboard
       if (onRepositoriesAdded) {

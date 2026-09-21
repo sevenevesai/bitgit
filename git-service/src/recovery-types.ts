@@ -19,6 +19,8 @@ export interface CheckpointEvidence {
   exitCode?: number | null;
   output?: string;
   screenshotPath?: string;
+  // runCheck only: the retained recovered copy the command ran in (a temporary folder; may be deleted later).
+  workingCopyPath?: string;
 }
 export interface BackupReceipt {
   remoteUrl: string;
@@ -43,6 +45,7 @@ export interface Checkpoint {
   evidence: CheckpointEvidence[];
   backup: BackupReceipt | null;
   recoveredAt: string | null;
+  metadataError?: string;
 }
 export interface CheckpointPreview {
   fingerprint: string;
@@ -72,6 +75,7 @@ export interface RecoveryReceipt {
   fileCount: number;
   verifiedAt: string;
   safetyCheckpointId?: string;
+  warnings?: string[];
 }
 export interface RecoverySettings {
   automaticEnabled: boolean;
@@ -81,6 +85,8 @@ export interface RecoverySettings {
   retention: 'keep_all';
 }
 export interface RecoveryState {
+  settingsError?: string;
+  repairJournalError?: string;
   checkpoints: Checkpoint[];
   settings: RecoverySettings;
   vaultPath: string;
@@ -118,6 +124,7 @@ export type RecoveryRequest =
   | { action: 'settings'; settings: RecoverySettings }
   | { action: 'autoTick' }
   | { action: 'evidence'; checkpointId: string; description: string; outcome: 'passed' | 'failed' | 'untested'; screenshotPath?: string }
+  | { action: 'evidenceImage'; checkpointId: string; evidenceId: string }
   | { action: 'runCheck'; checkpointId: string; command: string; timeoutSeconds?: number }
   | { action: 'regressionStart'; goodId: string; badId: string }
   | { action: 'regressionObserve'; sessionId: string; checkpointId: string; outcome: 'good' | 'bad' | 'skip' }
@@ -138,6 +145,7 @@ export interface RecoveryResults {
   settings: RecoverySettings;
   autoTick: { checkpoint: Checkpoint | null; reason: string };
   evidence: CheckpointEvidence;
+  evidenceImage: { dataUrl: string };
   runCheck: CheckpointEvidence;
   regressionStart: RegressionSession;
   regressionObserve: RegressionSession;

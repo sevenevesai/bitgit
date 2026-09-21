@@ -2,7 +2,7 @@
 
 **Website:** https://seveneves.ai/bitgit/
 
-**A modern, high-performance Git repository manager for developers who work with multiple projects.**
+**Save milestones, compare changes, and recover your code during AI-assisted development.**
 
 ![BitGit](bitgit-icon-square.png)
 
@@ -10,32 +10,45 @@
 
 ## What is BitGit?
 
-BitGit is a Windows desktop application that makes it effortless to manage dozens of Git repositories and their GitHub connections. Whether you're a solo developer juggling multiple side projects, or a team lead overseeing microservices, BitGit keeps everything organized and in sync.
+BitGit is a Windows desktop app for people building with AI and developers who prefer visual Git.
+Save a working milestone before a large coding session, inspect what changed, and recover a separate
+copy or repair selected files while preserving a safety checkpoint. Local recovery works without
+GitHub and without initializing Git in your project.
+
+Start with the [recovery guide](docs/RECOVERY_GUIDE.md), then explore
+[automatic saves, evidence and regression finding](docs/RECOVERY_WORKFLOWS.md),
+[visual Git](docs/VISUAL_GIT_GUIDE.md), or the [JSON harness CLI](docs/RECOVERY_AUTOMATION.md#cli).
+The [audience review and research](docs/PRODUCT_REVIEW.md) explain the product direction.
 
 ### Why BitGit?
 
-**The Problem:** Managing multiple repositories is tedious
-- Manually checking status across 10+ repos
-- Forgetting which projects have uncommitted changes
-- Losing track of remote branches that need merging
-- Switching between GitHub and local directories constantly
+**The problem:** Long coding sessions can erase a working version
+- AI changes can break a feature that worked earlier
+- Git commands and staging rules can obscure what will be saved or published
+- A local save does not establish that a remote copy exists or that the code works
+- Finding a regression requires comparing versions and recording what was tested
 
-**The Solution:** BitGit automates and visualizes everything
+**The workflow:** Save, inspect, recover
 - See all your projects at a glance
-- One-click sync operations for any repo
-- Background status checking (never miss a change)
-- Parallel operations (sync 10 repos in the time it takes to do one)
+- Name milestones and inspect exactly which files are covered
+- Enable local automatic saves after inactivity while BitGit is open
+- Recover an old version separately before deciding what to repair
 
 ---
 
 ## Features
 
 ### Core Functionality ✅
+- **Recovery Milestones** - Manual and automatic checkpoints with coverage and exclusions
+- **Recover & Repair** - Verified new copies or selected-file repair with a safety checkpoint
+- **Remote Recovery** - Explicit backup verification and import into a fresh vault
+- **Evidence & Regression Search** - Notes, screenshots, explicit checks, and good/bad/skip history
+- **Harness CLI** - The same checkpoint and recovery API through JSON requests
 - **Project Management** - Create, link, archive, and favorite projects
-- **Git Operations** - Push, pull, merge, sync with one click
+- **Git Operations** - Review selected files before publishing; push existing commits separately
 - **GitHub Integration** - Create repos, clone, secure token storage
-- **Status Detection** - Real-time tracking of uncommitted changes and branches
-- **Safe Operations** - Never breaks your repo with smart merge handling
+- **Status Detection** - Branch/upstream, local changes, ahead/behind, and remote-check failures
+- **Publish Validation** - Block credentials and oversized files; review warnings before proceeding
 
 ### Advanced Git Tools ✅
 - **Branch Management** - View, switch, create, and delete branches
@@ -46,7 +59,7 @@ BitGit is a Windows desktop application that makes it effortless to manage dozen
 
 ### Performance & Reliability ✅
 - **Background Checking** - Auto-refresh all projects every 5 minutes
-- **Parallel Operations** - Sync multiple projects simultaneously (3-5x faster)
+- **Batch Operations** - Process selected projects with individual results
 - **Auto-Retry** - Exponential backoff handles transient failures
 - **Operation Queue** - Cancel, retry, or track long-running operations
 
@@ -64,7 +77,9 @@ BitGit is a Windows desktop application that makes it effortless to manage dozen
 ### Prerequisites
 - Windows 10/11
 - Git for Windows installed
-- GitHub Personal Access Token (for GitHub integration)
+- Node.js 20 or later on PATH (the desktop app runs the Node Git service)
+- GitHub Personal Access Token only when using GitHub integration
+- Rust and the Tauri Windows build prerequisites when building from source
 
 ### Running BitGit
 
@@ -73,6 +88,9 @@ BitGit is a Windows desktop application that makes it effortless to manage dozen
 npm run tauri:dev
 ```
 
+For a fresh checkout, first run `npm ci`, `npm --prefix git-service ci`, and
+`npm --prefix git-service run build`. See [recovery development](docs/RECOVERY_DEVELOPMENT.md).
+
 **Production Build:**
 ```bash
 npm run tauri:build
@@ -80,9 +98,13 @@ npm run tauri:build
 
 ### First-Time Setup
 1. Launch BitGit
-2. Click Settings (gear icon) and add your GitHub token
-3. Click "+" to create or link your first project
-4. Start managing all your repos from one place!
+2. Click "+" and link a local project folder
+3. Open **Save & Recover**, review coverage, and save a named milestone
+4. Optionally configure GitHub in Settings and review files before publishing
+
+Local checkpoints are stored on this machine. For disk-loss protection, use Remote backup and
+verify the destination. Code recovery excludes credentials, databases, dependencies and external
+services; it does not recreate a deployed application. Command checks run with your normal permissions.
 
 ---
 
@@ -119,32 +141,33 @@ npm run tauri:build
 
 ## Project States
 
-BitGit intelligently handles 8 different project configurations:
+Project configuration and Git status are separate. Every local project can use Save & Recover.
 
 | State | GitHub | Local | Available Actions |
 |-------|--------|-------|-------------------|
 | **not_configured** | ✗ | ✗ | Link GitHub, Link Local |
 | **github_only** | ✓ | ✗ | Clone to Local, Link Existing Local |
-| **local_only** | ✗ | ✓ | Create GitHub Repo, Link Existing GitHub |
+| **local_only** | ✗ | ✓ | Save & Recover, inspect Git, optionally link GitHub |
 | **ready** | ✓ | ✓ | All Git Operations |
-| **synced** | ✓ | ✓ | Everything in sync ✅ |
+| **synced** | optional | ✓ | Current branch matches its last checked upstream |
 | **needs_push** | ✓ | ✓ | Has uncommitted changes |
 | **needs_merge** | ✓ | ✓ | Has remote branches to merge |
 | **needs_sync** | ✓ | ✓ | Has both local changes and remote branches |
+| **behind / diverged** | optional | ✓ | Current upstream has commits to review |
+| **unavailable** | optional | ✓ | Status could not be checked; recovery history remains accessible |
 
 ---
 
 ## Key Operations
 
 ### For Local Changes
-- **Push Local** - Stage, commit, and push all changes to main branch
+- **Push Local** - Commit reviewed whole files and publish the current branch to its upstream
 
 ### For Remote Branches
-- **Pull Updates** - Merge branch updates, keep branch alive (for iterative work)
-- **Merge & Delete** - Merge branch and delete it (final cleanup)
+- **Pull / Merge Branches** - Integrate explicitly selected remote branches; retain source branches
 
 ### Combined
-- **Full Sync** - Push local changes + merge all remote branches
+- **Full Sync** - Update the current upstream when safe; publish reviewed changes or existing commits
 
 ### Utilities
 - **Refresh Status** - Check current Git status on demand
@@ -152,7 +175,10 @@ BitGit intelligently handles 8 different project configurations:
 
 ---
 
-## Roadmap - Next-Generation Features
+## Earlier product ideas
+
+The active roadmap is the [recovery plan](docs/RECOVERY_PLAN.md). The ideas below are retained for
+reference and are not commitments for this release.
 
 ### 🎯 Priority 1: Dashboard Analytics & Insights
 - Overview panel with project statistics
@@ -228,10 +254,11 @@ bitgit/
 ```
 
 ### Key Files
-- `git-service/src/git-operations.ts` - All Git commands (~300 lines)
-- `src-tauri/src/commands.rs` - Backend IPC handlers (~600 lines)
-- `src/components/ProjectCard.tsx` - Main UI component (~600 lines)
-- `src/stores/useAppStore.ts` - State management (~580 lines)
+- `git-service/src/recovery-service.ts` - Checkpoint, repair and remote recovery dispatch
+- `git-service/src/git-operations.ts` - Git operations and publishing validation
+- `src-tauri/src/commands.rs` - Native IPC handlers
+- `src/components/ProjectCard.tsx` - Project actions
+- `src/stores/useAppStore.ts` - Application state
 
 ### Contributing
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to get started.
@@ -257,13 +284,12 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Status
 
-**Current Version:** 0.1.0 (Beta)
-**Completion:** ~95% of core features
-**Status:** Production-ready for daily use
+**Build Version:** 1.0.0
+**Status:** Recovery roadmap implemented and verified on Windows; see [verification and limits](docs/RECOVERY_VERIFICATION.md)
 **Platform:** Windows 10/11 (macOS/Linux support planned)
 
 **Repository:** https://github.com/sevenevesai/bitgit
 
 ---
 
-*BitGit is actively maintained and used daily to manage real projects. Try it out!*
+See the recovery guides for supported workflows and their limits.

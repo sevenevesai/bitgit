@@ -1,7 +1,185 @@
 import simpleGit, { SimpleGit, StatusResult, LogResult, DiffResult } from 'simple-git';
-import { StatusInfo, SyncResult, BranchInfo, CommitInfo, StashInfo, TagInfo, DiffInfo, PreSyncValidation, FileValidationIssue } from './types.js';
+import { spawn } from 'child_process';
+import {
+  StatusInfo, SyncResult, SyncOutcome, PublishOptions, BranchInfo, CommitInfo, StashInfo, TagInfo,
+  DiffInfo, DiffScope, FileChangeInfo, FileChangeKind, PreSyncValidation, FileValidationIssue, ValidationSeverity,
+} from './types.js';
+import { exclusionReason, MAX_FILE_BYTES } from './recovery-policy.js';
 import * as fs from 'fs';
 import * as path from 'path';
+
+const NETWORK_TIMEOUT_MS = 10 * 60 * 1000; // pushes
+const FETCH_TIMEOUT_MS = 2 * 60 * 1000;
+const STATUS_FETCH_TIMEOUT_MS = 30 * 1000; // status must stay responsive when the remote is unreachable
+const BLOB_CHUNK_BYTES = 32 * 1024 * 1024; // bounds memory while scanning outgoing blobs
+const TAG_PUSH_BATCH = 100; // refspecs per push, so a long tag list cannot overflow the command line
+const DIFF_PREVIEW_MAX_BYTES = 1024 * 1024;
+const DIFF_PREVIEW_MAX_LINES = 5000;
+
+interface GitRun { code: number; stdout: Buffer; stderr: string; }
+interface GitRunOptions { input?: string | Buffer; timeoutMs?: number; readOnly?: boolean; }
+
+// Arguments are an array (no shell). Literal pathspecs keep selected names from acting as globs or
+// pathspec magic; readOnly avoids the index refresh write that plain `git status` performs.
+function runGit(cwd: string, args: string[], options: GitRunOptions = {}): Promise<GitRun> {
+  const fullArgs = [...(options.readOnly ? ['--no-optional-locks'] : []), '--literal-pathspecs', '-c', 'core.quotepath=false', ...args];
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', fullArgs, { cwd, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' } });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let settled = false;
+    const settle = (finish: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      finish();
+    };
+    // Settle at the deadline instead of waiting for 'close': a surviving transport helper can hold the pipes open.
+    const timer = options.timeoutMs ? setTimeout(() => {
+      if (process.platform === 'win32' && child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+      else child.kill();
+      settle(() => reject(new Error(`git ${args[0]} timed out after ${Math.round((options.timeoutMs ?? 0) / 1000)}s`)));
+    }, options.timeoutMs) : null;
+    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    child.stdin.on('error', () => { /* git exited before reading its input; its exit code reports the failure */ });
+    child.on('error', (error) => settle(() => reject(new Error(`Could not run git: ${error.message}`))));
+    child.on('close', (code) => settle(() => resolve({ code: code ?? -1, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr).toString('utf8') })));
+    child.stdin.end(options.input);
+  });
+}
+
+// Credentials embedded in remote URLs must never reach logs, errors or results.
+function redactSecrets(text: string): string {
+  return text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^/\s@]*@/gi, '$1***@');
+}
+
+function errorText(error: unknown): string {
+  return redactSecrets(error instanceof Error ? error.message : String(error));
+}
+
+function gitMessage(run: GitRun): string {
+  const text = (run.stderr.trim() || run.stdout.toString('utf8').trim()).slice(0, 800);
+  return redactSecrets(text) || `exit code ${run.code}`;
+}
+
+async function gitOutput(cwd: string, args: string[], options?: GitRunOptions): Promise<string> {
+  const run = await runGit(cwd, args, options);
+  if (run.code !== 0) throw new Error(`git ${args[0]} failed: ${gitMessage(run)}`);
+  return run.stdout.toString('utf8');
+}
+
+function normalizeRemoteUrl(url: string): string {
+  return url.trim().replace(/\\/g, '/').replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1').replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase();
+}
+
+// Unknown reasons fail closed as errors; only known non-credential reasons are overridable warnings.
+function severityForReason(reason: string, file: string): ValidationSeverity {
+  if (reason.startsWith('Git metadata, dependencies')) return 'warning';
+  if (reason.startsWith('Database, log or credential') && /\.(db|sqlite3?|mdb|log)$/i.test(file)) return 'warning';
+  return 'error';
+}
+
+// Publishing was refused or failed; `committed` counts files already committed locally before the failure.
+export class PublishError extends Error {
+  committed: number;
+  issues?: FileValidationIssue[];
+  constructor(message: string, readonly outcome: SyncOutcome, details: { committed?: number; issues?: FileValidationIssue[] } = {}) {
+    super(message);
+    this.name = 'PublishError';
+    this.committed = details.committed ?? 0;
+    this.issues = details.issues;
+  }
+}
+
+// `merged` lists branches fully integrated (and pushed) before the failure at `stage`.
+export class BranchIntegrationError extends Error {
+  constructor(
+    message: string,
+    readonly branch: string,
+    readonly stage: 'preflight' | 'merge' | 'validation' | 'push',
+    readonly merged: string[],
+    readonly conflicts: string[] = [],
+  ) {
+    super(message);
+    this.name = 'BranchIntegrationError';
+  }
+}
+
+function unquoteGitPath(quoted: string): string {
+  const bytes: number[] = [];
+  const chars = Array.from(quoted.slice(1, -1));
+  const simple: Record<string, number> = { t: 9, n: 10, r: 13, a: 7, b: 8, f: 12, v: 11 };
+  for (let i = 0; i < chars.length; i++) {
+    if (chars[i] !== '\\') { bytes.push(...Buffer.from(chars[i], 'utf8')); continue; }
+    const next = chars[++i] ?? '';
+    if (/[0-7]/.test(next)) {
+      let octal = next;
+      while (octal.length < 3 && /[0-7]/.test(chars[i + 1] ?? '')) octal += chars[++i];
+      bytes.push(parseInt(octal, 8));
+    } else {
+      bytes.push(simple[next] ?? next.charCodeAt(0));
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+// With --no-renames both sides of the header name the same path, so its length is fixed by the header length.
+function diffHeaderPath(header: string): string | null {
+  if (header.startsWith('"')) {
+    const match = /^("(?:[^"\\]|\\.)*") "/.exec(header);
+    if (!match) return null;
+    const name = unquoteGitPath(match[1]);
+    return name.startsWith('a/') ? name.slice(2) : null;
+  }
+  const length = (header.length - 5) / 2;
+  if (!Number.isInteger(length) || !header.startsWith('a/') || header.slice(2 + length, 5 + length) !== ' b/') return null;
+  return header.slice(2, 2 + length);
+}
+
+function parseUnifiedDiff(text: string, scope: DiffScope): DiffInfo[] {
+  const diffs: DiffInfo[] = [];
+  for (const block of text.split(/^diff --git /m).slice(1)) {
+    const lines = block.split('\n');
+    const fileName = diffHeaderPath(lines[0]);
+    if (fileName === null) continue;
+    const info: DiffInfo = { fileName, changes: [], scope };
+    let inHunk = false;
+    let currentLine = 0;
+    for (const line of lines.slice(1)) {
+      if (line.startsWith('@@')) {
+        const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
+        if (hunk) currentLine = parseInt(hunk[1], 10);
+        inHunk = true;
+      } else if (!inHunk) {
+        if (line.startsWith('Binary files ') || line.startsWith('GIT binary patch')) info.binary = true;
+      } else if (line[0] === '+' || line[0] === '-' || line[0] === ' ') {
+        if (info.changes.length >= DIFF_PREVIEW_MAX_LINES) { info.truncated = true; break; }
+        const type = line[0] === '+' ? 'add' : line[0] === '-' ? 'remove' : 'context';
+        info.changes.push({ line: currentLine, type, content: line.slice(1) });
+        if (type !== 'remove') currentLine++;
+      }
+    }
+    diffs.push(info);
+  }
+  return diffs;
+}
+
+interface PendingEntry { path: string; index: string; worktree: string; untracked: boolean; conflicted: boolean; }
+interface WorkingState {
+  oid: string | null;
+  branch: string | null;
+  ahead: number | null;
+  behind: number | null;
+  entries: PendingEntry[];
+}
+interface UpstreamInfo { remote: string; ref: string; short: string; branchName: string; }
+interface PushTarget { remote: string; remoteBranch: string; trackingRef: string; hasUpstream: boolean; }
+interface PublishPlan { branch: string; target: PushTarget; state: WorkingState; selected: string[]; addOrigin: string | null; }
+interface PublishReport { committed: number; commits: number; pushed: boolean; }
+// oid is the tag ref's own object: the tag object for an annotated tag, else the tagged commit.
+interface TagRef { name: string; oid: string; type: string; }
+interface ScanResult { issues: FileValidationIssue[]; totalBytes: number; }
 
 export class GitOperations {
   private git: SimpleGit;
@@ -38,7 +216,10 @@ export class GitOperations {
    * Validates a git ref name (branch, tag) against git naming rules.
    * Prevents command injection through malformed ref names.
    */
-  private static validateRefName(refName: string, type: 'branch' | 'tag'): void {
+  static validateRefName(refName: string, type: 'branch' | 'tag'): void {
+    if (typeof refName !== 'string') {
+      throw new Error(`Invalid ${type} name: must be text`);
+    }
     if (!refName || refName.trim().length === 0) {
       throw new Error(`Invalid ${type} name: cannot be empty`);
     }
@@ -89,108 +270,260 @@ export class GitOperations {
     this.git = simpleGit(repoPath);
   }
 
-  /**
-   * Ensures the directory is initialized as a git repository.
-   * If .git doesn't exist, initializes it with main branch.
-   * Returns true if initialization was needed, false if already a repo.
-   */
+  // Legacy callers include analytics and other reads. Never create Git metadata here.
   async ensureGitRepo(): Promise<boolean> {
-    try {
-      // Try to get status - if this succeeds, it's already a git repo
-      await this.git.status();
-      return false; // Already initialized
-    } catch (error) {
-      // Not a git repo, initialize it
-      console.error(`[Git] Directory ${this.repoPath} is not a git repository, initializing...`);
-      await this.git.init(['-b', 'main']);
-      console.error(`[Git] Initialized git repository at ${this.repoPath}`);
-      return true; // Just initialized
+    await this.requireRepo();
+    return false;
+  }
+
+  private run(args: string[], options?: GitRunOptions): Promise<GitRun> {
+    return runGit(this.repoPath, args, options);
+  }
+
+  private output(args: string[], options?: GitRunOptions): Promise<string> {
+    return gitOutput(this.repoPath, args, options);
+  }
+
+  // A project path must be a repository root: a plain folder inside another repository is not a repository.
+  private async isRepoRoot(): Promise<boolean> {
+    const run = await this.run(['rev-parse', '--is-inside-work-tree', '--show-cdup'], { readOnly: true });
+    if (run.code !== 0) {
+      if (/not a git repository/i.test(run.stderr)) return false;
+      throw new Error(`Cannot read the Git repository: ${gitMessage(run)}`);
+    }
+    const [inside, cdup] = run.stdout.toString('utf8').split('\n');
+    return inside.trim() === 'true' && (cdup ?? '').trim() === '';
+  }
+
+  private async requireRepo(): Promise<void> {
+    if (!(await this.isRepoRoot())) throw new PublishError(`${this.repoPath} is not a Git repository.`, 'failed');
+  }
+
+  private async operationInProgress(): Promise<string | null> {
+    const markers: Array<[string, string]> = [
+      ['merge', 'MERGE_HEAD'], ['cherry-pick', 'CHERRY_PICK_HEAD'], ['revert', 'REVERT_HEAD'],
+      ['rebase', 'rebase-merge'], ['rebase', 'rebase-apply'],
+    ];
+    const paths = (await this.output(['rev-parse', ...markers.flatMap(([, marker]) => ['--git-path', marker])], { readOnly: true })).split('\n');
+    const hit = markers.findIndex((_, i) => paths[i] && fs.existsSync(path.resolve(this.repoPath, paths[i])));
+    return hit === -1 ? null : markers[hit][0];
+  }
+
+  private async currentBranch(): Promise<string | null> {
+    const run = await this.run(['symbolic-ref', '-q', '--short', 'HEAD'], { readOnly: true });
+    return run.code === 0 ? run.stdout.toString('utf8').trim() || null : null;
+  }
+
+  private async remoteNames(): Promise<string[]> {
+    return (await this.output(['remote'], { readOnly: true })).split('\n').map((name) => name.trim()).filter(Boolean);
+  }
+
+  private async headOid(): Promise<string | null> {
+    const run = await this.run(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], { readOnly: true });
+    return run.code === 0 ? run.stdout.toString('utf8').trim() : null;
+  }
+
+  private async refExists(ref: string): Promise<boolean> {
+    return (await this.run(['rev-parse', '--verify', '-q', `${ref}^{commit}`], { readOnly: true })).code === 0;
+  }
+
+  private async countCommits(revs: string[]): Promise<number> {
+    return Number((await this.output(['rev-list', '--count', ...revs, '--'], { readOnly: true })).trim());
+  }
+
+  private async upstreamOf(branch: string): Promise<UpstreamInfo | null> {
+    const listed = await this.output(
+      ['for-each-ref', '--format=%(upstream)%00%(upstream:remotename)%00%(upstream:short)', `refs/heads/${branch}`],
+      { readOnly: true },
+    );
+    const [ref, remote, short] = listed.replace(/\n$/, '').split('\0');
+    if (!ref || !remote || remote === '.') return null;
+    const merge = (await this.run(['config', '--get', `branch.${branch}.merge`], { readOnly: true })).stdout.toString('utf8').trim();
+    const branchName = merge.startsWith('refs/heads/') ? merge.slice('refs/heads/'.length) : ref.replace(`refs/remotes/${remote}/`, '');
+    return { remote, ref, short, branchName };
+  }
+
+  // Publishing goes to the branch's actual upstream; without one, to a same-named branch on origin.
+  private async pushTarget(branch: string, originToAdd: string | null = null): Promise<PushTarget> {
+    const upstream = await this.upstreamOf(branch);
+    if (upstream) return { remote: upstream.remote, remoteBranch: upstream.branchName, trackingRef: upstream.ref, hasUpstream: true };
+    if (!originToAdd && !(await this.remoteNames()).includes('origin')) {
+      throw new PublishError("No 'origin' remote is configured. Provide the remote URL to publish to.", 'failed');
+    }
+    return { remote: 'origin', remoteBranch: branch, trackingRef: `refs/remotes/origin/${branch}`, hasUpstream: false };
+  }
+
+  private async workingState(): Promise<WorkingState> {
+    const raw = await this.output(
+      ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all', '--no-renames'],
+      { readOnly: true },
+    );
+    const state: WorkingState = { oid: null, branch: null, ahead: null, behind: null, entries: [] };
+    const trackedByPath = new Map<string, PendingEntry>();
+    for (const token of raw.split('\0')) {
+      if (!token) continue;
+      if (token.startsWith('# branch.oid ')) {
+        const oid = token.slice('# branch.oid '.length);
+        state.oid = oid === '(initial)' ? null : oid;
+      } else if (token.startsWith('# branch.head ')) {
+        const head = token.slice('# branch.head '.length);
+        state.branch = head === '(detached)' ? null : head;
+      } else if (token.startsWith('# branch.ab ')) {
+        const counts = /^\+(\d+) -(\d+)$/.exec(token.slice('# branch.ab '.length));
+        if (counts) { state.ahead = Number(counts[1]); state.behind = Number(counts[2]); }
+      } else if (token.startsWith('1 ') || token.startsWith('u ')) {
+        const fields = token.split(' ');
+        const entry: PendingEntry = token[0] === 'u'
+          ? { path: fields.slice(10).join(' '), index: 'U', worktree: 'U', untracked: false, conflicted: true }
+          : { path: fields.slice(8).join(' '), index: fields[1][0], worktree: fields[1][1], untracked: false, conflicted: false };
+        state.entries.push(entry);
+        trackedByPath.set(entry.path, entry);
+      } else if (token.startsWith('? ')) {
+        const file = token.slice(2);
+        // A path staged as deleted and recreated on disk is reported twice: keep one entry for it.
+        const existing = trackedByPath.get(file);
+        if (existing) existing.untracked = true;
+        else state.entries.push({ path: file, index: '.', worktree: '.', untracked: true, conflicted: false });
+      }
+    }
+    return state;
+  }
+
+  // Compares HEAD with the local copy of the target branch; `exists` false means the remote branch is not known.
+  private async divergence(target: PushTarget): Promise<{ exists: boolean; ahead: number; behind: number }> {
+    const head = await this.headOid();
+    const exists = await this.refExists(target.trackingRef);
+    if (!head) return { exists, ahead: 0, behind: exists ? await this.countCommits([target.trackingRef]) : 0 };
+    if (!exists) return { exists, ahead: await this.countCommits(['HEAD', '--not', `--remotes=${target.remote}`]), behind: 0 };
+    const counts = (await this.output(['rev-list', '--left-right', '--count', `HEAD...${target.trackingRef}`], { readOnly: true })).trim().split(/\s+/).map(Number);
+    return { exists, ahead: counts[0], behind: counts[1] };
+  }
+
+  private static assertRemoteUrl(remoteUrl: string): void {
+    if (typeof remoteUrl !== 'string' || !remoteUrl.trim() || remoteUrl.startsWith('-')
+      || /[\x00-\x1f\x7f]/.test(remoteUrl) || /^[a-z0-9+.-]+::/i.test(remoteUrl)) {
+      throw new PublishError('Invalid remote URL.', 'failed');
     }
   }
 
+  // An existing origin is never rewritten to match the requested URL.
+  private async originStatus(remoteUrl: string): Promise<'absent' | 'match'> {
+    GitOperations.assertRemoteUrl(remoteUrl);
+    const run = await this.run(['config', '--get-all', 'remote.origin.url'], { readOnly: true });
+    if (run.code === 1) return 'absent';
+    if (run.code !== 0) throw new Error(`Cannot read the remote configuration: ${gitMessage(run)}`);
+    const urls = run.stdout.toString('utf8').split('\n').map((url) => url.trim()).filter(Boolean);
+    if (urls.some((url) => normalizeRemoteUrl(url) === normalizeRemoteUrl(remoteUrl))) return 'match';
+    throw new PublishError(
+      `Remote 'origin' points to ${redactSecrets(urls[0] ?? '')}, not ${redactSecrets(remoteUrl)}. BitGit does not rewrite an existing remote; change it explicitly if that is intended.`,
+      'failed',
+    );
+  }
+
   /**
-   * Ensures the remote 'origin' is configured with the given URL.
-   * If the remote doesn't exist, adds it. If it exists with wrong URL, updates it.
+   * Adds origin when it is absent. An existing origin with a different URL is an error, never rewritten.
    */
   async ensureRemote(remoteUrl: string): Promise<void> {
-    try {
-      const remotes = await this.git.getRemotes(true);
-      const origin = remotes.find(r => r.name === 'origin');
-
-      if (!origin) {
-        // Remote doesn't exist, add it
-        console.error(`[Git] Adding origin remote: ${remoteUrl}`);
-        await this.git.addRemote('origin', remoteUrl);
-      } else if (origin.refs.fetch !== remoteUrl && origin.refs.push !== remoteUrl) {
-        // Remote exists but with wrong URL, update it
-        console.error(`[Git] Updating origin remote to: ${remoteUrl}`);
-        await this.git.remote(['set-url', 'origin', remoteUrl]);
-      } else {
-        console.error(`[Git] Origin remote already configured correctly`);
-      }
-    } catch (error) {
-      throw new Error(`Failed to ensure remote: ${error}`);
+    if ((await this.originStatus(remoteUrl)) === 'absent') {
+      console.error(`[Git] Adding origin remote: ${redactSecrets(remoteUrl)}`);
+      await this.output(['remote', 'add', 'origin', remoteUrl]);
     }
   }
 
+  private async listRemoteBranches(remote: string, exclude: Array<string | null | undefined>): Promise<string[]> {
+    const prefix = `refs/remotes/${remote}/`;
+    const names = (await this.output(['for-each-ref', '--format=%(refname)', prefix], { readOnly: true }))
+      .split('\n').filter(Boolean).map((ref) => ref.slice(prefix.length));
+    const head = await this.run(['symbolic-ref', '-q', `${prefix}HEAD`], { readOnly: true });
+    const defaultBranch = head.code === 0 ? head.stdout.toString('utf8').trim().slice(prefix.length) : null;
+    const hidden = new Set<string | null | undefined>(['HEAD', 'main', 'master', defaultBranch, ...exclude]);
+    return names.filter((name) => !hidden.has(name));
+  }
+
+  /**
+   * Reports local changes, the current branch, and its position against its actual upstream.
+   * Never initializes Git, switches branches or edits remotes. A failed fetch is reported through
+   * remoteError and leaves remoteCheckedAt null; ahead/behind then reflect the last known remote state.
+   */
   async checkStatus(): Promise<StatusInfo> {
-    // Ensure this is a git repository before checking status
-    await this.ensureGitRepo();
+    const status: StatusInfo = {
+      isGitRepo: false,
+      hasRemote: false,
+      currentBranch: null,
+      upstream: null,
+      behindCommits: 0,
+      remoteCheckedAt: null,
+      remoteError: null,
+      uncommittedFiles: 0,
+      untrackedFiles: 0,
+      modifiedFiles: [],
+      unpushedCommits: 0,
+      remoteBranches: [],
+    };
     try {
-      // Try to fetch and prune, but don't fail if it doesn't work
-      try {
-        await this.git.fetch(['--prune', 'origin']);
-      } catch (fetchError) {
-        console.error('Warning: Fetch failed, continuing with local status check:', fetchError);
-        // Continue anyway - we can still check local status
+      if (!(await this.isRepoRoot())) return status;
+      status.isGitRepo = true;
+
+      const branch = await this.currentBranch();
+      const remotes = await this.remoteNames();
+      const upstream = branch ? await this.upstreamOf(branch) : null;
+      const remote = upstream?.remote ?? (remotes.includes('origin') ? 'origin' : remotes[0] ?? null);
+      status.currentBranch = branch;
+      status.hasRemote = remotes.length > 0;
+      status.upstream = upstream?.short ?? null;
+
+      if (remote) {
+        try {
+          const fetched = await this.run(['fetch', '--prune', remote], { timeoutMs: STATUS_FETCH_TIMEOUT_MS });
+          if (fetched.code === 0) status.remoteCheckedAt = new Date().toISOString();
+          else status.remoteError = gitMessage(fetched);
+        } catch (fetchError) {
+          status.remoteError = errorText(fetchError);
+        }
       }
 
-      const status: StatusResult = await this.git.status();
+      const state = await this.workingState();
+      status.uncommittedFiles = state.entries.length;
+      status.untrackedFiles = state.entries.filter((entry) => entry.untracked).length;
+      status.modifiedFiles = state.entries.map((entry) => entry.path);
 
-      // Get remote branches, but don't fail if it doesn't work
-      let remoteBranches: string[] = [];
-      try {
-        const branches = await this.git.branch(['-r']);
-        remoteBranches = Object.keys(branches.branches)
-          .filter((b) => b.startsWith('origin/'))
-          .map((b) => b.replace('origin/', ''))
-          .filter((b) => !['main', 'master', 'HEAD'].includes(b));
-      } catch (branchError) {
-        console.error('Warning: Failed to get remote branches:', branchError);
-        // Continue with empty array
+      if (upstream && state.ahead !== null && state.behind !== null) {
+        status.unpushedCommits = state.ahead;
+        status.behindCommits = state.behind;
+      } else if (upstream && state.oid === null && await this.refExists(upstream.ref)) {
+        status.behindCommits = await this.countCommits([upstream.ref]);
+      } else {
+        if (upstream && status.remoteCheckedAt && !(await this.refExists(upstream.ref))) {
+          status.remoteError = `Upstream ${upstream.short} no longer exists on the remote`;
+        }
+        if (remote && state.oid) status.unpushedCommits = await this.countCommits(['HEAD', '--not', `--remotes=${remote}`]);
       }
+
+      if (remote) status.remoteBranches = await this.listRemoteBranches(remote, [branch, upstream?.branchName]);
 
       console.error('[Git Status Check]', {
         path: this.repoPath,
-        files: status.files.length,
-        modified: status.modified.length,
-        created: status.created.length,
-        deleted: status.deleted.length,
-        not_added: status.not_added.length,
-        ahead: status.ahead,
-        behind: status.behind,
+        branch,
+        upstream: status.upstream,
+        changes: status.uncommittedFiles,
+        ahead: status.unpushedCommits,
+        behind: status.behindCommits,
+        remoteChecked: status.remoteCheckedAt !== null,
       });
-
-      return {
-        uncommittedFiles: status.files.length,
-        untrackedFiles: status.not_added.length,
-        modifiedFiles: status.files.map((f) => f.path),
-        unpushedCommits: status.ahead,
-        remoteBranches,
-      };
+      return status;
     } catch (error) {
-      throw new Error(`Failed to check status: ${error}`);
+      throw new Error(`Failed to check status: ${errorText(error)}`);
     }
   }
 
   // ==================== PRE-SYNC VALIDATION ====================
 
-  // GitHub file size limits
-  private static readonly SIZE_LIMIT_ERROR = 100 * 1024 * 1024;  // 100MB - push will fail
-  private static readonly SIZE_LIMIT_WARNING = 50 * 1024 * 1024; // 50MB - GitHub warns
-  private static readonly SIZE_LIMIT_INFO = 10 * 1024 * 1024;    // 10MB - flag for awareness
+  // GitHub file size limits; the hard 100 MiB limit comes from the shared policy (MAX_FILE_BYTES)
+  private static readonly SIZE_LIMIT_WARNING = 50 * 1024 * 1024; // GitHub warns
+  private static readonly SIZE_LIMIT_INFO = 10 * 1024 * 1024;    // flag for awareness
 
-  // Patterns for files that typically shouldn't be in git
+  // Warning-level patterns for files that typically shouldn't be in git. Credentials and oversize
+  // files are handled by the shared policy (exclusionReason) and block instead.
   private static readonly PROBLEMATIC_PATTERNS: Array<{
     pattern: RegExp;
     reason: string;
@@ -204,22 +537,22 @@ export class GitOperations {
 
     // Logs
     { pattern: /\.log$/i, reason: 'Log file', suggestion: 'Log files are generated and should not be tracked', gitignorePattern: '*.log' },
-    { pattern: /logs?\//i, reason: 'Log directory', suggestion: 'Log directories should be gitignored', gitignorePattern: 'logs/' },
+    { pattern: /(?:^|\/)logs?\//i, reason: 'Log directory', suggestion: 'Log directories should be gitignored', gitignorePattern: 'logs/' },
 
     // Dependencies (these can be huge)
-    { pattern: /node_modules\//i, reason: 'Node.js dependencies', suggestion: 'Run "npm install" to restore - never commit node_modules', gitignorePattern: 'node_modules/' },
+    { pattern: /(?:^|\/)node_modules\//i, reason: 'Node.js dependencies', suggestion: 'Run "npm install" to restore - never commit node_modules', gitignorePattern: 'node_modules/' },
     { pattern: /\.pnp\.cjs$/i, reason: 'Yarn PnP file', suggestion: 'Yarn PnP files can be large', gitignorePattern: '.pnp.cjs' },
-    { pattern: /vendor\//i, reason: 'Vendor dependencies', suggestion: 'Vendor directories typically contain dependencies', gitignorePattern: 'vendor/' },
-    { pattern: /\.venv\//i, reason: 'Python virtual environment', suggestion: 'Virtual environments should be gitignored', gitignorePattern: '.venv/' },
-    { pattern: /venv\//i, reason: 'Python virtual environment', suggestion: 'Virtual environments should be gitignored', gitignorePattern: 'venv/' },
-    { pattern: /__pycache__\//i, reason: 'Python bytecode cache', suggestion: 'Python cache should be gitignored', gitignorePattern: '__pycache__/' },
+    { pattern: /(?:^|\/)vendor\//i, reason: 'Vendor dependencies', suggestion: 'Vendor directories typically contain dependencies', gitignorePattern: 'vendor/' },
+    { pattern: /(?:^|\/)\.venv\//i, reason: 'Python virtual environment', suggestion: 'Virtual environments should be gitignored', gitignorePattern: '.venv/' },
+    { pattern: /(?:^|\/)venv\//i, reason: 'Python virtual environment', suggestion: 'Virtual environments should be gitignored', gitignorePattern: 'venv/' },
+    { pattern: /(?:^|\/)__pycache__\//i, reason: 'Python bytecode cache', suggestion: 'Python cache should be gitignored', gitignorePattern: '__pycache__/' },
 
     // Build outputs
-    { pattern: /dist\//i, reason: 'Build output directory', suggestion: 'Build outputs are generated and should be gitignored', gitignorePattern: 'dist/' },
-    { pattern: /build\//i, reason: 'Build output directory', suggestion: 'Build outputs should be gitignored unless intentional', gitignorePattern: 'build/' },
-    { pattern: /target\//i, reason: 'Rust/Maven build output', suggestion: 'Build outputs should be gitignored', gitignorePattern: 'target/' },
-    { pattern: /\.next\//i, reason: 'Next.js build cache', suggestion: 'Next.js build cache should be gitignored', gitignorePattern: '.next/' },
-    { pattern: /\.nuxt\//i, reason: 'Nuxt build cache', suggestion: 'Nuxt build cache should be gitignored', gitignorePattern: '.nuxt/' },
+    { pattern: /(?:^|\/)dist\//i, reason: 'Build output directory', suggestion: 'Build outputs are generated and should be gitignored', gitignorePattern: 'dist/' },
+    { pattern: /(?:^|\/)build\//i, reason: 'Build output directory', suggestion: 'Build outputs should be gitignored unless intentional', gitignorePattern: 'build/' },
+    { pattern: /(?:^|\/)target\//i, reason: 'Rust/Maven build output', suggestion: 'Build outputs should be gitignored', gitignorePattern: 'target/' },
+    { pattern: /(?:^|\/)\.next\//i, reason: 'Next.js build cache', suggestion: 'Next.js build cache should be gitignored', gitignorePattern: '.next/' },
+    { pattern: /(?:^|\/)\.nuxt\//i, reason: 'Nuxt build cache', suggestion: 'Nuxt build cache should be gitignored', gitignorePattern: '.nuxt/' },
 
     // Large media files
     { pattern: /\.(mp4|mov|avi|mkv|webm)$/i, reason: 'Video file', suggestion: 'Large video files should use Git LFS or external storage', gitignorePattern: '*.mp4' },
@@ -229,11 +562,7 @@ export class GitOperations {
     // IDE and OS files
     { pattern: /\.DS_Store$/i, reason: 'macOS metadata', suggestion: 'OS-specific files should be gitignored', gitignorePattern: '.DS_Store' },
     { pattern: /Thumbs\.db$/i, reason: 'Windows thumbnail cache', suggestion: 'OS-specific files should be gitignored', gitignorePattern: 'Thumbs.db' },
-    { pattern: /\.idea\//i, reason: 'JetBrains IDE config', suggestion: 'IDE configs are often user-specific', gitignorePattern: '.idea/' },
-
-    // Environment and secrets
-    { pattern: /\.env\.local$/i, reason: 'Local environment file', suggestion: 'Environment files may contain secrets', gitignorePattern: '.env.local' },
-    { pattern: /\.env\.\w+$/i, reason: 'Environment file', suggestion: 'Environment files may contain secrets', gitignorePattern: '.env.*' },
+    { pattern: /(?:^|\/)\.idea\//i, reason: 'JetBrains IDE config', suggestion: 'IDE configs are often user-specific', gitignorePattern: '.idea/' },
 
     // Temporary files
     { pattern: /\.tmp$/i, reason: 'Temporary file', suggestion: 'Temporary files should not be tracked', gitignorePattern: '*.tmp' },
@@ -242,413 +571,625 @@ export class GitOperations {
     { pattern: /~$/i, reason: 'Backup file', suggestion: 'Backup files should be gitignored', gitignorePattern: '*~' },
   ];
 
-  /**
-   * Validate files before sync to catch issues that would cause push failures
-   * This runs BEFORE attempting any git operations to prevent stuck states
-   */
-  async validateBeforeSync(): Promise<PreSyncValidation> {
-    await this.ensureGitRepo();
+  // Issues never carry file content; `commit` marks content that is already in an unpushed commit.
+  private static screenFile(filePath: string, size: number, load: (() => Buffer) | null, commit?: string): FileValidationIssue[] {
+    const sizeMB = size / (1024 * 1024);
+    const where = commit ? ` (in unpushed commit ${commit.slice(0, 7)})` : '';
+    const committedAdvice = 'It is already in a local commit; .gitignore cannot remove it. Rewrite that commit before publishing.';
+    const found = (severity: ValidationSeverity, reason: string, suggestion?: string, gitignorePattern?: string): FileValidationIssue => ({
+      filePath,
+      severity,
+      reason: reason + where,
+      sizeBytes: size,
+      sizeMB,
+      suggestion: commit ? committedAdvice : suggestion,
+      ...(commit ? {} : { gitignorePattern }),
+    });
+
+    let reason = exclusionReason(filePath, size);
+    if (!reason && load && size <= MAX_FILE_BYTES) reason = exclusionReason(filePath, size, load());
+    if (reason) {
+      const severity = severityForReason(reason, filePath);
+      if (reason.startsWith('File exceeds')) reason = `File exceeds GitHub's 100MB limit (${sizeMB.toFixed(1)}MB)`;
+      return [found(
+        severity,
+        reason,
+        severity === 'error' ? 'Publishing is blocked. Remove this content, or add the file to .gitignore.' : 'Review whether this file belongs in the repository.',
+        filePath,
+      )];
+    }
 
     const issues: FileValidationIssue[] = [];
-    const suggestedGitignore = new Set<string>();
-    let totalSize = 0;
-    let hasErrors = false;
-    let hasWarnings = false;
+    if (size >= GitOperations.SIZE_LIMIT_WARNING) {
+      issues.push(found('warning', `Large file (${sizeMB.toFixed(1)}MB) - GitHub warns above 50MB`, 'Consider using Git LFS for files this large.'));
+    } else if (size >= GitOperations.SIZE_LIMIT_INFO) {
+      issues.push(found('info', `Notable file size (${sizeMB.toFixed(1)}MB)`));
+    }
+    const pattern = GitOperations.PROBLEMATIC_PATTERNS.find((candidate) => candidate.pattern.test(filePath));
+    if (pattern) issues.push(found('warning', pattern.reason, pattern.suggestion, pattern.gitignorePattern));
+    return issues;
+  }
 
-    try {
-      const status = await this.git.status();
-      const allFiles = [
-        ...status.files.map(f => f.path),
-        ...status.not_added,
-      ];
+  private static sortIssues(issues: FileValidationIssue[]): FileValidationIssue[] {
+    const order = { error: 0, warning: 1, info: 2 };
+    return issues.sort((a, b) => order[a.severity] - order[b.severity]);
+  }
 
-      console.error(`[Validation] Checking ${allFiles.length} files before sync`);
+  // Errors always block; warnings block unless the caller passed allowWarnings.
+  private static enforce(issues: FileValidationIssue[], allowWarnings: boolean, committed = 0, subject = 'Publish'): void {
+    const errors = issues.filter((issue) => issue.severity === 'error');
+    const warnings = issues.filter((issue) => issue.severity === 'warning');
+    if (errors.length === 0 && (warnings.length === 0 || allowWarnings)) return;
+    const shown = [...errors, ...(allowWarnings ? [] : warnings)];
+    const list = shown.slice(0, 8).map((issue) => `${issue.filePath}: ${issue.reason}`).join('; ');
+    const more = shown.length > 8 ? ` (+${shown.length - 8} more)` : '';
+    const advice = errors.length > 0
+      ? 'Remove the blocked content; it cannot be overridden.'
+      : 'Review the warnings and retry with allowWarnings to publish anyway.';
+    throw new PublishError(
+      `${subject} blocked by validation (${errors.length} error(s), ${warnings.length} warning(s)): ${list}${more}. ${advice}`,
+      'blocked',
+      { issues, committed },
+    );
+  }
 
-      for (const filePath of allFiles) {
-        const fullPath = path.join(this.repoPath, filePath);
+  // Options arrive from IPC: only a real boolean true may allow warnings; anything else malformed is refused.
+  private static allowWarnings(options: PublishOptions | null | undefined): boolean {
+    if (options === undefined || options === null) return false;
+    if (typeof options !== 'object' || Array.isArray(options)) throw new PublishError('Publish options must be an object.', 'failed');
+    const allow = options.allowWarnings;
+    if (allow !== undefined && allow !== null && typeof allow !== 'boolean') throw new PublishError('allowWarnings must be true or false.', 'failed');
+    return allow === true;
+  }
 
-        // Check if file exists (might be deleted)
-        if (!fs.existsSync(fullPath)) continue;
+  private static normalizeSelection(options?: PublishOptions): string[] {
+    const files = options?.selectedFiles;
+    if (files === undefined || files === null) return [];
+    if (!Array.isArray(files) || files.some((file) => typeof file !== 'string')) {
+      throw new PublishError('selectedFiles must be an array of repository-relative paths.', 'failed');
+    }
+    return files;
+  }
 
-        const stats = fs.statSync(fullPath);
+  // Selection is limited to paths git itself reports as pending, so a name is never trusted as a path.
+  private static validateSelection(selection: string[], pending: Map<string, PendingEntry>): string[] {
+    const selected = new Set<string>();
+    for (const requested of selection) {
+      if (requested.length === 0 || /[\x00-\x1f\x7f]/.test(requested)) {
+        throw new PublishError('Selected file paths cannot be empty or contain control characters.', 'failed');
+      }
+      if (requested.startsWith('-')) throw new PublishError(`Selected path '${requested}' looks like a command option and was rejected.`, 'failed');
+      if (/^([a-zA-Z]:|[\\/])/.test(requested)) throw new PublishError(`Selected path '${requested}' must be relative to the repository.`, 'failed');
+      if (requested.split(/[\\/]/).includes('..')) throw new PublishError(`Selected path '${requested}' must stay inside the repository.`, 'failed');
+      const candidate = pending.has(requested) ? requested : requested.replace(/\\/g, '/');
+      const entry = pending.get(candidate);
+      if (!entry) throw new PublishError(`'${requested}' is not a pending change in this repository.`, 'failed');
+      if (candidate.endsWith('/')) throw new PublishError(`'${requested}' is a directory or nested repository; select its files instead.`, 'failed');
+      if (entry.conflicted) throw new PublishError(`'${requested}' has unresolved conflicts.`, 'conflicted');
+      selected.add(candidate);
+    }
+    return [...selected];
+  }
 
-        // Skip directories
-        if (stats.isDirectory()) continue;
+  private async blobSizes(oids: string[]): Promise<Map<string, number>> {
+    const sizes = new Map<string, number>();
+    if (oids.length === 0) return sizes;
+    const run = await this.run(['cat-file', '--batch-check'], { readOnly: true, input: `${oids.join('\n')}\n` });
+    if (run.code !== 0) throw new PublishError(`Cannot inspect outgoing objects: ${gitMessage(run)}`, 'blocked');
+    for (const line of run.stdout.toString('utf8').split('\n')) {
+      if (!line) continue;
+      const [oid, type, size] = line.split(' ');
+      if (type === 'blob') sizes.set(oid, Number(size));
+    }
+    if (sizes.size !== oids.length) {
+      throw new PublishError('Cannot inspect every outgoing object; the object database is incomplete.', 'blocked');
+    }
+    return sizes;
+  }
 
-        const fileSize = stats.size;
-        totalSize += fileSize;
-        const fileSizeMB = fileSize / (1024 * 1024);
+  private async readObjects(oids: string[], expected: 'blob' | 'tag' = 'blob'): Promise<Map<string, Buffer>> {
+    const run = await this.run(['cat-file', '--batch'], { readOnly: true, input: `${oids.join('\n')}\n` });
+    if (run.code !== 0) throw new PublishError(`Cannot read outgoing objects: ${gitMessage(run)}`, 'blocked');
+    const objects = new Map<string, Buffer>();
+    const data = run.stdout;
+    let offset = 0;
+    while (offset < data.length) {
+      const eol = data.indexOf(0x0a, offset);
+      if (eol < 0) break;
+      const [oid, type, size] = data.toString('utf8', offset, eol).split(' ');
+      if (type !== expected) throw new PublishError('Cannot read every outgoing object.', 'blocked');
+      const start = eol + 1;
+      objects.set(oid, data.subarray(start, start + Number(size)));
+      offset = start + Number(size) + 1;
+    }
+    return objects;
+  }
 
-        // Check file size against GitHub limits
-        if (fileSize >= GitOperations.SIZE_LIMIT_ERROR) {
-          issues.push({
-            filePath,
-            severity: 'error',
-            reason: `File exceeds GitHub's 100MB limit (${fileSizeMB.toFixed(1)}MB)`,
-            sizeBytes: fileSize,
-            sizeMB: fileSizeMB,
-            suggestion: 'This file WILL fail to push. Add to .gitignore or use Git LFS for large files.',
-            gitignorePattern: filePath,
-          });
-          hasErrors = true;
-          suggestedGitignore.add(filePath);
-        } else if (fileSize >= GitOperations.SIZE_LIMIT_WARNING) {
-          issues.push({
-            filePath,
-            severity: 'warning',
-            reason: `Large file (${fileSizeMB.toFixed(1)}MB) - GitHub warns above 50MB`,
-            sizeBytes: fileSize,
-            sizeMB: fileSizeMB,
-            suggestion: 'Consider using Git LFS for files this large.',
-          });
-          hasWarnings = true;
-        } else if (fileSize >= GitOperations.SIZE_LIMIT_INFO) {
-          issues.push({
-            filePath,
-            severity: 'info',
-            reason: `Notable file size (${fileSizeMB.toFixed(1)}MB)`,
-            sizeBytes: fileSize,
-            sizeMB: fileSizeMB,
-          });
-        }
+  // Inspects every blob added by commits reachable from `tips` but not from `not` (all of them: no
+  // history cap), path by path. Tips go through stdin so a long tag list cannot overflow the command line.
+  private async scanRange(tips: string[], not: string[]): Promise<ScanResult> {
+    const log = await this.run(
+      ['log', '--no-renames', '-c', '--root', '--raw', '-z', '--no-abbrev', '--format=%H%x01', '--stdin', ...(not.length > 0 ? ['--not', ...not] : []), '--'],
+      { readOnly: true, input: `${tips.join('\n')}\n` },
+    );
+    if (log.code !== 0) throw new PublishError(`Cannot inspect outgoing commits: ${gitMessage(log)}`, 'blocked');
 
-        // Check against problematic patterns
-        for (const pattern of GitOperations.PROBLEMATIC_PATTERNS) {
-          if (pattern.pattern.test(filePath)) {
-            // Don't duplicate if we already flagged for size
-            const existingIssue = issues.find(i => i.filePath === filePath && i.severity === 'error');
-            if (!existingIssue) {
-              issues.push({
-                filePath,
-                severity: 'warning',
-                reason: pattern.reason,
-                sizeBytes: fileSize,
-                sizeMB: fileSizeMB,
-                suggestion: pattern.suggestion,
-                gitignorePattern: pattern.gitignorePattern,
-              });
-              hasWarnings = true;
-            }
-            suggestedGitignore.add(pattern.gitignorePattern);
-            break; // Only match first pattern per file
-          }
+    const added: Array<{ commit: string; file: string; oid: string }> = [];
+    const tokens = log.stdout.toString('utf8').split('\0');
+    let commit = '';
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i].replace(/^\n+/, '');
+      if (token.startsWith(':')) {
+        // Combined diff for merges (one colon per parent): only blobs that differ from every parent are new.
+        const parents = /^:+/.exec(token)![0].length;
+        const fields = token.slice(parents).split(' ');
+        const newMode = fields[parents];
+        const newOid = fields[2 * parents + 1];
+        const file = tokens[++i];
+        if (newMode === '000000' || newMode === '160000') continue;
+        added.push({ commit, file, oid: newOid });
+      } else if (/^[0-9a-f]{40,64}\x01$/.test(token)) {
+        commit = token.slice(0, -1);
+      }
+    }
+
+    const byOid = new Map<string, typeof added>();
+    for (const blob of added) {
+      const group = byOid.get(blob.oid);
+      if (group) group.push(blob); else byOid.set(blob.oid, [blob]);
+    }
+    const sizes = await this.blobSizes([...byOid.keys()]);
+    const issues: FileValidationIssue[] = [];
+    let totalBytes = 0;
+    const scannable: string[] = [];
+    for (const [oid, group] of byOid) {
+      const size = sizes.get(oid)!;
+      totalBytes += size;
+      if (size <= MAX_FILE_BYTES && group.some((blob) => exclusionReason(blob.file, size) === null)) scannable.push(oid);
+      else for (const blob of group) issues.push(...GitOperations.screenFile(blob.file, size, null, blob.commit));
+    }
+
+    let chunk: string[] = [];
+    let chunkBytes = 0;
+    const flush = async () => {
+      if (chunk.length === 0) return;
+      const contents = await this.readObjects(chunk);
+      for (const oid of chunk) {
+        for (const blob of byOid.get(oid)!) {
+          issues.push(...GitOperations.screenFile(blob.file, sizes.get(oid)!, () => contents.get(oid)!, blob.commit));
         }
       }
+      chunk = [];
+      chunkBytes = 0;
+    };
+    for (const oid of scannable) {
+      const size = sizes.get(oid)!;
+      if (chunk.length > 0 && chunkBytes + size > BLOB_CHUNK_BYTES) await flush();
+      chunk.push(oid);
+      chunkBytes += size;
+    }
+    await flush();
+    return { issues, totalBytes };
+  }
 
-      // Sort issues: errors first, then warnings, then info
-      issues.sort((a, b) => {
-        const severityOrder = { error: 0, warning: 1, info: 2 };
-        return severityOrder[a.severity] - severityOrder[b.severity];
-      });
+  // Blobs in commits reachable from HEAD that no remote-tracking ref of `remote` already has.
+  private async scanOutgoing(remote: string): Promise<ScanResult> {
+    if (!(await this.headOid())) return { issues: [], totalBytes: 0 };
+    return this.scanRange(['HEAD'], [`--remotes=${remote}`]);
+  }
 
-      const totalSizeMB = totalSize / (1024 * 1024);
-      console.error(`[Validation] Complete: ${issues.length} issues, ${totalSizeMB.toFixed(1)}MB total`);
+  // Selected pending files (working contents, as they would be committed) plus what would newly reach `remote`.
+  private async collectIssues(selected: string[], remote: string | null): Promise<ScanResult> {
+    const issues: FileValidationIssue[] = [];
+    let totalBytes = 0;
+    for (const file of selected) {
+      const fullPath = path.join(this.repoPath, file);
+      let stats: fs.Stats;
+      try {
+        stats = fs.lstatSync(fullPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; // a deletion publishes no content
+        throw error;
+      }
+      if (stats.isDirectory()) continue;
+      totalBytes += stats.size;
+      issues.push(...GitOperations.screenFile(file, stats.size, stats.isSymbolicLink() ? null : () => fs.readFileSync(fullPath)));
+    }
+    if (remote) {
+      const outgoing = await this.scanOutgoing(remote);
+      issues.push(...outgoing.issues);
+      totalBytes += outgoing.totalBytes;
+    }
+    return { issues: GitOperations.sortIssues(issues), totalBytes };
+  }
 
+  /**
+   * Previews what publishing with `options` would check: the selected pending files' working contents
+   * and the blobs in unpushed commits. Without selectedFiles only unpushed commits are inspected.
+   * canProceed is false when a blocking error exists; warnings only block publishing without allowWarnings.
+   */
+  async validateBeforeSync(options?: PublishOptions): Promise<PreSyncValidation> {
+    GitOperations.allowWarnings(options); // reject malformed options even though warnings are only reported here
+    await this.requireRepo();
+    try {
+      const state = await this.workingState();
+      const selected = GitOperations.validateSelection(
+        GitOperations.normalizeSelection(options),
+        new Map(state.entries.map((entry) => [entry.path, entry])),
+      );
+      const upstream = state.branch ? await this.upstreamOf(state.branch) : null;
+      const remotes = await this.remoteNames();
+      const remote = upstream?.remote ?? (remotes.includes('origin') || remotes.length === 0 ? 'origin' : remotes[0]);
+
+      const { issues, totalBytes } = await this.collectIssues(selected, remote);
+      console.error(`[Validation] ${selected.length} selected file(s): ${issues.length} issues, ${(totalBytes / (1024 * 1024)).toFixed(1)}MB inspected`);
       return {
-        canProceed: !hasErrors,
-        hasWarnings,
-        totalStagedSize: totalSize,
-        totalStagedSizeMB: totalSizeMB,
+        canProceed: !issues.some((issue) => issue.severity === 'error'),
+        hasWarnings: issues.some((issue) => issue.severity === 'warning'),
+        totalStagedSize: totalBytes,
+        totalStagedSizeMB: totalBytes / (1024 * 1024),
         issues,
-        suggestedGitignore: Array.from(suggestedGitignore),
+        suggestedGitignore: [...new Set(issues.filter((issue) => issue.severity !== 'info' && issue.gitignorePattern).map((issue) => issue.gitignorePattern!))],
       };
     } catch (error) {
-      throw new Error(`Failed to validate files: ${error}`);
+      if (error instanceof PublishError) throw error;
+      throw new Error(`Failed to validate files: ${errorText(error)}`);
     }
   }
 
+  // ==================== PUBLISHING ====================
+
+  // Checks everything that can be checked before any mutation; only origin is added later, at push time.
+  private async preparePublish(remoteUrl: string | undefined, options: PublishOptions | undefined): Promise<PublishPlan> {
+    const selection = GitOperations.normalizeSelection(options);
+    await this.requireRepo();
+    const operation = await this.operationInProgress();
+    if (operation) throw new PublishError(`A ${operation} is in progress. Finish or abort it before publishing.`, 'conflicted');
+    const branch = await this.currentBranch();
+    if (!branch) throw new PublishError('HEAD is detached. Switch to a branch before publishing.', 'failed');
+
+    const state = await this.workingState();
+    if (state.entries.some((entry) => entry.conflicted)) {
+      throw new PublishError('Unresolved merge conflicts exist. Resolve them before publishing.', 'conflicted');
+    }
+    if (selection.length === 0 && state.entries.length > 0) {
+      throw new PublishError(
+        `${state.entries.length} uncommitted change(s) exist and no files were selected. Choose the files to commit; BitGit does not stage everything automatically.`,
+        'needs-selection',
+      );
+    }
+    const selected = GitOperations.validateSelection(selection, new Map(state.entries.map((entry) => [entry.path, entry])));
+    const addOrigin = remoteUrl && (await this.originStatus(remoteUrl)) === 'absent' ? remoteUrl : null;
+    return { branch, target: await this.pushTarget(branch, addOrigin), state, selected, addOrigin };
+  }
+
+  private async commitSelected(plan: PublishPlan, message: string, description: string | undefined): Promise<void> {
+    const untracked = plan.selected.filter((file) => plan.state.entries.some((entry) => entry.path === file && entry.untracked));
+    try {
+      // --only commits the working contents of exactly these paths and leaves other staged entries alone;
+      // untracked paths must be known to git first, so they get an intent-to-add placeholder.
+      if (untracked.length > 0) await this.output(['add', '-N', '--', ...untracked]);
+      const args = ['commit', '-m', message];
+      if (description) args.push('-m', description);
+      await this.output([...args, '--only', '--', ...plan.selected]);
+    } catch (error) {
+      // Best effort by design: drop the placeholders so a failed commit leaves the index as it was.
+      if (untracked.length > 0) await this.run(['reset', '-q', '--', ...untracked]).catch(() => undefined);
+      throw new PublishError(errorText(error), 'failed');
+    }
+  }
+
+  private async pushCurrent(branch: string, target: PushTarget): Promise<void> {
+    const label = `${target.remote}/${target.remoteBranch}`;
+    const args = ['push', '--porcelain', ...(target.hasUpstream ? [] : ['-u']), target.remote, `refs/heads/${branch}:refs/heads/${target.remoteBranch}`];
+    let run: GitRun;
+    try {
+      run = await this.run(args, { timeoutMs: NETWORK_TIMEOUT_MS });
+    } catch (error) {
+      throw new PublishError(`Push to ${label} failed: ${errorText(error)}`, 'push-failed');
+    }
+    if (run.code !== 0) {
+      const text = `${run.stderr}\n${run.stdout.toString('utf8')}`;
+      throw new PublishError(
+        /non-fast-forward|fetch first|\[rejected\]/i.test(text)
+          ? `Push to ${label} was rejected: the remote has commits ${branch} lacks. BitGit never force-pushes; update ${branch} first.`
+          : `Push to ${label} failed: ${gitMessage(run)}`,
+        'push-failed',
+      );
+    }
+    const tracked = await this.run(['rev-parse', '--verify', '-q', `${target.trackingRef}^{commit}`], { readOnly: true });
+    if (tracked.code === 0 && tracked.stdout.toString('utf8').trim() !== (await this.headOid())) {
+      throw new PublishError(`Push to ${label} reported success but ${target.trackingRef} does not match the pushed commit.`, 'push-failed');
+    }
+  }
+
+  // Validates, commits the selected files (if any) and pushes. Existing unpushed commits are inspected
+  // too; nothing is committed or pushed once validation fails.
+  private async executePublish(
+    plan: PublishPlan,
+    message: string | undefined,
+    description: string | undefined,
+    allowWarnings: boolean,
+  ): Promise<PublishReport> {
+    const { branch, target, selected } = plan;
+    const label = `${target.remote}/${target.remoteBranch}`;
+    const head = await this.headOid();
+    const before = await this.divergence(target);
+
+    if (selected.length === 0 && (head === null || (before.ahead === 0 && before.exists))) {
+      return { committed: 0, commits: 0, pushed: false };
+    }
+    if (before.behind > 0) {
+      throw new PublishError(
+        before.ahead > 0
+          ? `${branch} has diverged from ${label} (${before.ahead} local, ${before.behind} remote commit(s)). Nothing was pushed; BitGit never force-pushes. Integrate the remote changes first.`
+          : `${label} has ${before.behind} commit(s) that ${branch} lacks. Update ${branch} before committing new work.`,
+        before.ahead > 0 ? 'diverged' : 'dirty-behind',
+      );
+    }
+
+    GitOperations.enforce((await this.collectIssues(selected, target.remote)).issues, allowWarnings);
+
+    let committed = 0;
+    if (selected.length > 0) {
+      await this.commitSelected(plan, message || `Auto-sync: ${new Date().toISOString()}`, description);
+      committed = selected.length;
+      try {
+        // The stored blobs can differ from the inspected working files (filters, hooks), so inspect the commit itself.
+        const created = await this.scanRange(['HEAD'], head ? [head] : []);
+        GitOperations.enforce(GitOperations.sortIssues(created.issues), allowWarnings, committed);
+      } catch (error) {
+        if (error instanceof PublishError) {
+          error.committed = committed;
+          error.message += ' The new commit exists locally and was not pushed.';
+        }
+        throw error;
+      }
+    }
+
+    if (plan.addOrigin) {
+      await this.output(['remote', 'add', 'origin', plan.addOrigin]);
+      plan.addOrigin = null;
+    }
+    const outgoing = (await this.divergence(target)).ahead;
+    try {
+      await this.pushCurrent(branch, target);
+    } catch (error) {
+      if (error instanceof PublishError) error.committed = committed;
+      throw error;
+    }
+    return { committed, commits: outgoing, pushed: true };
+  }
+
+  /**
+   * Commits only options.selectedFiles (whole files, working contents; other staged entries stay
+   * staged) and pushes the current branch to its upstream. Without a selection nothing is staged:
+   * unpushed commits are pushed, and pending changes make the call fail with a choose-files message.
+   * Secrets and blobs over 100 MiB always block; warnings block unless options.allowWarnings is true.
+   * `committed` is the number of files committed; `pushed` is true only when a push was performed.
+   */
   async pushLocal(
     remoteUrl?: string,
     commitMessage?: string,
-    commitDescription?: string
+    commitDescription?: string,
+    options?: PublishOptions
   ): Promise<{ committed: number; pushed: boolean }> {
-    // Ensure this is a git repository
-    await this.ensureGitRepo();
-
-    // Ensure remote is configured if URL provided
-    if (remoteUrl) {
-      await this.ensureRemote(remoteUrl);
-    }
-
     try {
-      const status = await this.git.status();
-      const currentBranch = status.current || 'main';
-
-      // If no changes to commit, check if we need to make an initial commit
-      if (status.files.length === 0) {
-        // Check if there are any commits at all
-        try {
-          await this.git.log({ maxCount: 1 });
-          // Has commits, no changes
-          return { committed: 0, pushed: false };
-        } catch (error) {
-          // No commits yet - create initial commit if there are files
-          console.error('[Git] No commits yet, checking for files...');
-          // No files to commit
-          return { committed: 0, pushed: false };
-        }
-      }
-
-      // Pull latest changes from remote ONLY if there are no local changes
-      // This avoids the "cannot pull with unstaged changes" error
-      if (currentBranch && status.files.length === 0) {
-        try {
-          await this.git.pull('origin', currentBranch, ['--rebase']);
-        } catch (pullError) {
-          console.error(`Warning: Pull failed, continuing with push: ${pullError}`);
-        }
-      }
-
-      // Stage all changes
-      await this.git.add('.');
-
-      // Build commit message: use custom or default to auto-sync timestamp
-      let message = commitMessage || `Auto-sync: ${new Date().toISOString()}`;
-      if (commitDescription) {
-        message = `${message}\n\n${commitDescription}`;
-      }
-      await this.git.commit(message);
-
-      // Push to current branch
-      await this.git.push('origin', currentBranch);
-
-      return { committed: status.files.length, pushed: true };
+      const allowWarnings = GitOperations.allowWarnings(options);
+      const plan = await this.preparePublish(remoteUrl, options);
+      const report = await this.executePublish(plan, commitMessage, commitDescription, allowWarnings);
+      return { committed: report.committed, pushed: report.pushed };
     } catch (error) {
-      throw new Error(`Failed to push local changes: ${error}`);
-    }
-  }
-
-  async mergeBranches(branches: string[], remoteUrl?: string): Promise<string[]> {
-    // Ensure this is a git repository
-    await this.ensureGitRepo();
-
-    // Ensure remote is configured if URL provided
-    if (remoteUrl) {
-      await this.ensureRemote(remoteUrl);
-    }
-
-    const merged: string[] = [];
-
-    // Get current branch and ensure we're on main/master before starting
-    const initialStatus = await this.git.status();
-    const mainBranch = initialStatus.current || 'main';
-
-    // Only proceed if we're starting from main/master
-    if (mainBranch !== 'main' && mainBranch !== 'master') {
-      throw new Error(`Must be on main/master branch to merge. Currently on: ${mainBranch}`);
-    }
-
-    try {
-      // Fetch all remotes and prune stale branches
-      await this.git.fetch(['--prune', 'origin']);
-
-      for (const branch of branches) {
-        try {
-          console.error(`[Git] Starting merge of branch: ${branch}`);
-
-          // Fetch the remote branch
-          await this.git.fetch(['origin', branch]);
-
-          // Merge the remote branch directly (no need to checkout)
-          await this.git.merge([`origin/${branch}`, '--no-ff', '-m', `Merge branch '${branch}'`]);
-
-          console.error(`[Git] Merged ${branch} successfully`);
-
-          // Push updated main
-          await this.git.push('origin', mainBranch);
-          console.error(`[Git] Pushed main branch`);
-
-          // Delete remote branch
-          await this.git.push(['origin', '--delete', branch]);
-          console.error(`[Git] Deleted remote branch ${branch}`);
-
-          // Delete local branch if it exists
-          try {
-            await this.git.branch(['-d', branch]);
-          } catch (e) {
-            // Branch might not exist locally, that's OK
-          }
-
-          merged.push(branch);
-        } catch (error) {
-          console.error(`[Git] Failed to merge ${branch}:`, error);
-          // If merge failed, try to abort it to clean up
-          try {
-            await this.git.merge(['--abort']);
-            console.error(`[Git] Aborted failed merge of ${branch}`);
-          } catch (abortError) {
-            // Merge might not have been in progress
-          }
-          // Continue with other branches
-        }
-      }
-
-      return merged;
-    } catch (error) {
-      // Ensure we're back on main branch if anything went wrong
-      try {
-        const currentStatus = await this.git.status();
-        if (currentStatus.current !== mainBranch) {
-          await this.git.checkout(mainBranch);
-          console.error(`[Git] Returned to ${mainBranch} after error`);
-        }
-      } catch (checkoutError) {
-        console.error(`[Git] Failed to return to main branch:`, checkoutError);
-      }
-      throw new Error(`Failed to merge branches: ${error}`);
+      if (error instanceof PublishError) throw error;
+      throw new Error(`Failed to push local changes: ${errorText(error)}`);
     }
   }
 
   /**
-   * Pull updates from remote branches without deleting them.
-   * Use this for iterative work (e.g., pulling from Claude Code web sessions).
-   * The branches remain alive for future pulls.
+   * Pushes commits that already exist (used by pushToRemote). Validation covers every blob the push
+   * would add to the remote. Returns the number of commits that were outgoing.
    */
-  async pullBranches(branches: string[], remoteUrl?: string): Promise<string[]> {
-    // Ensure this is a git repository
-    await this.ensureGitRepo();
-
-    // Ensure remote is configured if URL provided
-    if (remoteUrl) {
-      await this.ensureRemote(remoteUrl);
+  async pushExistingCommits(remote: string, branch: string, options?: PublishOptions): Promise<number> {
+    GitOperations.validateRefName(branch, 'branch');
+    const allowWarnings = GitOperations.allowWarnings(options);
+    await this.requireRepo();
+    if (typeof remote !== 'string' || !/^[A-Za-z0-9][\w.-]*$/.test(remote) || !(await this.remoteNames()).includes(remote)) {
+      throw new PublishError(`Remote '${remote}' is not configured.`, 'failed');
     }
-
-    const pulled: string[] = [];
-
-    // Get current branch and ensure we're on main/master before starting
-    const initialStatus = await this.git.status();
-    const mainBranch = initialStatus.current || 'main';
-
-    // Only proceed if we're starting from main/master
-    if (mainBranch !== 'main' && mainBranch !== 'master') {
-      throw new Error(`Must be on main/master branch to pull. Currently on: ${mainBranch}`);
+    const current = await this.currentBranch();
+    if (current !== branch) throw new PublishError(`Cannot publish ${branch}: ${current ?? 'a detached HEAD'} is checked out.`, 'failed');
+    const target: PushTarget = { remote, remoteBranch: branch, trackingRef: `refs/remotes/${remote}/${branch}`, hasUpstream: false };
+    const position = await this.divergence(target);
+    if (position.behind > 0) {
+      throw new PublishError(`${remote}/${branch} has ${position.behind} commit(s) that ${branch} lacks. BitGit never force-pushes; update ${branch} first.`, 'diverged');
     }
-
-    try {
-      // Fetch all remotes and prune stale branches
-      await this.git.fetch(['--prune', 'origin']);
-
-      for (const branch of branches) {
-        try {
-          console.error(`[Git] Starting pull of branch: ${branch}`);
-
-          // Fetch the remote branch
-          await this.git.fetch(['origin', branch]);
-
-          // Merge the remote branch directly (no need to checkout)
-          await this.git.merge([`origin/${branch}`, '--no-ff', '-m', `Pull updates from branch '${branch}'`]);
-
-          console.error(`[Git] Pulled ${branch} successfully`);
-
-          // Push updated main
-          await this.git.push('origin', mainBranch);
-          console.error(`[Git] Pushed main branch`);
-
-          // NOTE: Branch is NOT deleted - it stays alive for future pulls
-
-          pulled.push(branch);
-        } catch (error) {
-          console.error(`[Git] Failed to pull ${branch}:`, error);
-          // If merge failed, try to abort it to clean up
-          try {
-            await this.git.merge(['--abort']);
-            console.error(`[Git] Aborted failed pull of ${branch}`);
-          } catch (abortError) {
-            // Merge might not have been in progress
-          }
-          // Continue with other branches
-        }
-      }
-
-      return pulled;
-    } catch (error) {
-      // Ensure we're back on main branch if anything went wrong
-      try {
-        const currentStatus = await this.git.status();
-        if (currentStatus.current !== mainBranch) {
-          await this.git.checkout(mainBranch);
-          console.error(`[Git] Returned to ${mainBranch} after error`);
-        }
-      } catch (checkoutError) {
-        console.error(`[Git] Failed to return to main branch:`, checkoutError);
-      }
-      throw new Error(`Failed to pull branches: ${error}`);
-    }
+    GitOperations.enforce(GitOperations.sortIssues((await this.scanOutgoing(remote)).issues), allowWarnings);
+    await this.pushCurrent(branch, target);
+    return position.ahead;
   }
 
+  /**
+   * Explicit integration of the named remote branches into the current branch, one at a time with
+   * --no-ff, pushing after each. Any failure throws BranchIntegrationError naming the branch and stage
+   * (merge conflicts abort the merge and leave the branch unchanged). Source branches are never
+   * deleted, locally or on the remote: a collaborator or agent may push to them after the merge, and
+   * a delete could only be made safe with a force-style lease.
+   */
+  private async integrateBranches(
+    branches: string[],
+    remoteUrl: string | undefined,
+    options: PublishOptions | undefined,
+    verb: 'merge' | 'pull',
+  ): Promise<string[]> {
+    const allowWarnings = GitOperations.allowWarnings(options);
+    const merged: string[] = [];
+    if (!Array.isArray(branches) || branches.length === 0) return merged;
+    for (const name of branches) GitOperations.validateRefName(name, 'branch');
+    const fail = (branch: string, stage: BranchIntegrationError['stage'], message: string, conflicts: string[] = []) =>
+      new BranchIntegrationError(message, branch, stage, [...merged], conflicts);
+
+    await this.requireRepo();
+    if (remoteUrl) await this.ensureRemote(remoteUrl);
+    const operation = await this.operationInProgress();
+    if (operation) throw fail('', 'preflight', `A ${operation} is in progress. Finish or abort it first.`);
+    const current = await this.currentBranch();
+    if (!current) throw fail('', 'preflight', 'HEAD is detached. Switch to a branch before integrating branches.');
+    const target = await this.pushTarget(current);
+    const label = `${target.remote}/${target.remoteBranch}`;
+    if ((await this.workingState()).entries.some((entry) => !entry.untracked)) {
+      throw fail('', 'preflight', `Uncommitted changes to tracked files exist. Commit or stash them before ${verb}ing branches.`);
+    }
+    try {
+      const fetched = await this.run(['fetch', '--prune', target.remote], { timeoutMs: FETCH_TIMEOUT_MS });
+      if (fetched.code !== 0) throw new Error(gitMessage(fetched));
+    } catch (error) {
+      throw fail('', 'preflight', `Could not fetch ${target.remote}: ${errorText(error)}`);
+    }
+    const position = await this.divergence(target);
+    if (position.behind > 0) {
+      throw fail('', 'preflight', `${current} is behind ${label} by ${position.behind} commit(s); update it before integrating branches.`);
+    }
+
+    const assertPublishable = async (branch: string, note: string): Promise<void> => {
+      try {
+        GitOperations.enforce(GitOperations.sortIssues((await this.scanOutgoing(target.remote)).issues), allowWarnings);
+      } catch (error) {
+        throw fail(branch, 'validation', errorText(error) + note);
+      }
+    };
+    await assertPublishable('', '');
+
+    for (const branch of branches) {
+      let stage: BranchIntegrationError['stage'] = 'preflight';
+      try {
+        if (branch === current) throw fail(branch, 'preflight', `Cannot ${verb} ${branch} into itself.`);
+        const remoteRef = `refs/remotes/${target.remote}/${branch}`;
+        if (!(await this.refExists(remoteRef))) throw fail(branch, 'preflight', `Branch '${branch}' does not exist on ${target.remote}.`);
+
+        stage = 'merge';
+        const merge = await this.run(['merge', '--no-ff', '-m', verb === 'merge' ? `Merge branch '${branch}'` : `Pull updates from branch '${branch}'`, remoteRef]);
+        if (merge.code !== 0) {
+          const conflicts = (await this.run(['diff', '--name-only', '--diff-filter=U', '-z'], { readOnly: true })).stdout.toString('utf8').split('\0').filter(Boolean);
+          await this.run(['merge', '--abort']); // when git refused before starting there is nothing to abort
+          throw fail(
+            branch,
+            'merge',
+            conflicts.length > 0
+              ? `Merging '${branch}' conflicts in ${conflicts.length} file(s): ${conflicts.slice(0, 8).join(', ')}. The merge was aborted; ${current} is unchanged.`
+              : `Merging '${branch}' failed: ${gitMessage(merge)}`,
+            conflicts,
+          );
+        }
+
+        stage = 'validation';
+        await assertPublishable(branch, ` The merge of '${branch}' is committed locally but was not pushed.`);
+
+        stage = 'push';
+        try {
+          await this.pushCurrent(current, target);
+        } catch (error) {
+          throw fail(branch, 'push', `${errorText(error)} The merge of '${branch}' is committed locally but was not pushed.`);
+        }
+        merged.push(branch);
+      } catch (error) {
+        if (error instanceof BranchIntegrationError) throw error;
+        throw fail(branch, stage, errorText(error));
+      }
+    }
+    return merged;
+  }
+
+  async mergeBranches(branches: string[], remoteUrl?: string, options?: PublishOptions): Promise<string[]> {
+    return this.integrateBranches(branches, remoteUrl, options, 'merge');
+  }
+
+  /**
+   * Same integration as mergeBranches with a "Pull updates" merge message.
+   */
+  async pullBranches(branches: string[], remoteUrl?: string, options?: PublishOptions): Promise<string[]> {
+    return this.integrateBranches(branches, remoteUrl, options, 'pull');
+  }
+
+  /**
+   * Syncs the current branch with its actual upstream only: fast-forwards when it is behind and clean,
+   * otherwise publishes like pushLocal. Other branches are never merged or deleted; divergence,
+   * dirty-behind, missing selection, validation blocks and fetch/push failures return success: false
+   * with an explicit outcome and errors. `committed` is files committed, `pushed` commits transferred.
+   */
   async fullSync(
     remoteUrl?: string,
     commitMessage?: string,
-    commitDescription?: string
+    commitDescription?: string,
+    options?: PublishOptions
   ): Promise<SyncResult> {
-    // Ensure this is a git repository
-    await this.ensureGitRepo();
-
-    // Ensure remote is configured if URL provided
-    if (remoteUrl) {
-      await this.ensureRemote(remoteUrl);
-    }
-
-    const result: SyncResult = {
-      success: true,
-      message: 'Full sync completed',
-      committed: 0,
-      merged: [],
-      errors: [],
+    const result: SyncResult = { success: false, message: '', committed: 0, pushed: 0, pulled: 0, merged: [], errors: [], outcome: 'failed' };
+    const stop = (outcome: SyncOutcome, message: string): SyncResult => {
+      result.outcome = outcome;
+      result.message = message;
+      result.errors!.push(message);
+      return result;
     };
 
     try {
-      // Step 0: Fetch and prune to get latest remote state
-      await this.git.fetch(['--prune', 'origin']);
+      const allowWarnings = GitOperations.allowWarnings(options);
+      const plan = await this.preparePublish(remoteUrl, options);
+      const { branch, target } = plan;
+      const label = `${target.remote}/${target.remoteBranch}`;
 
-      // Check if there are local changes first
-      const initialStatus = await this.git.status();
-      const currentBranch = initialStatus.current || 'main';
-
-      // Only pull if there are NO local changes
-      // This avoids "cannot pull with unstaged changes" error
-      if (currentBranch && initialStatus.files.length === 0) {
+      if (plan.addOrigin) {
+        // A remote that is not configured yet has nothing to fetch. executePublish adds origin only after
+        // validation passes and just before the push, so a blocked sync leaves the remote list untouched.
+        if (plan.selected.length === 0 && !(await this.headOid())) {
+          return stop('failed', 'Nothing to publish: the repository has no commits yet. Select files to create the first commit.');
+        }
+      } else {
+        let fetched: GitRun;
         try {
-          await this.git.pull('origin', currentBranch, ['--rebase']);
-        } catch (pullError) {
-          console.error(`Warning: Pull failed during full sync: ${pullError}`);
+          fetched = await this.run(['fetch', '--prune', target.remote], { timeoutMs: FETCH_TIMEOUT_MS });
+        } catch (error) {
+          return stop('fetch-failed', `Could not fetch ${target.remote}: ${errorText(error)}`);
+        }
+        if (fetched.code !== 0) return stop('fetch-failed', `Could not fetch ${target.remote}: ${gitMessage(fetched)}`);
+
+        const position = await this.divergence(target);
+        if (position.behind > 0 && position.ahead > 0) {
+          return stop('diverged', `${branch} has diverged from ${label} (${position.ahead} local, ${position.behind} remote commit(s)). Nothing was changed; integrate the remote changes explicitly, then sync again.`);
+        }
+        if (position.behind > 0 && plan.state.entries.length > 0) {
+          return stop('dirty-behind', `${label} has ${position.behind} new commit(s) and ${branch} has uncommitted changes. Nothing was changed; commit or stash the changes, update ${branch}, then sync again.`);
+        }
+        if (position.behind > 0) {
+          const forwarded = await this.run(['merge', '--ff-only', target.trackingRef]);
+          if (forwarded.code !== 0) return stop('failed', `Could not fast-forward ${branch} to ${label}: ${gitMessage(forwarded)}`);
+          result.success = true;
+          result.outcome = 'fast-forwarded';
+          result.pulled = position.behind;
+          result.message = `Fast-forwarded ${branch} by ${position.behind} commit(s) from ${label}`;
+          return result;
         }
       }
 
-      // Step 1: Check if there are local changes (after potential pull)
-      const status = await this.git.status();
-      if (status.files.length > 0) {
-        try {
-          const pushResult = await this.pushLocal(remoteUrl, commitMessage, commitDescription);
-          result.committed = pushResult.committed;
-        } catch (error: any) {
-          result.errors?.push(`Push failed: ${error.message}`);
-          result.success = false;
-        }
+      const report = await this.executePublish(plan, commitMessage, commitDescription, allowWarnings);
+      result.success = true;
+      result.committed = report.committed;
+      result.pushed = report.commits;
+      if (!report.pushed) {
+        result.outcome = 'up-to-date';
+        result.message = `${branch} is up to date with ${label}`;
+      } else {
+        result.outcome = 'published';
+        result.message = `${report.committed > 0 ? `Committed ${report.committed} file(s) and ` : ''}${report.commits > 0 ? `pushed ${report.commits} commit(s) to` : 'published'} ${label}`;
+        result.message = result.message[0].toUpperCase() + result.message.slice(1);
       }
-
-      // Step 2: Check for remote branches
-      const statusInfo = await this.checkStatus();
-      if (statusInfo.remoteBranches.length > 0) {
-        try {
-          const merged = await this.mergeBranches(statusInfo.remoteBranches);
-          result.merged = merged;
-        } catch (error: any) {
-          result.errors?.push(`Merge failed: ${error.message}`);
-          result.success = false;
-        }
+      return result;
+    } catch (error) {
+      if (error instanceof PublishError) {
+        result.committed = error.committed;
+        result.issues = error.issues;
+        return stop(error.outcome, error.message);
       }
-
-      if (result.errors && result.errors.length > 0) {
-        result.message = 'Full sync completed with errors';
-      }
-    } catch (error: any) {
-      result.success = false;
-      result.message = `Full sync failed: ${error.message}`;
-      result.errors?.push(error.message);
+      return stop('failed', `Full sync failed: ${errorText(error)}`);
     }
-
-    return result;
   }
 
   // ==================== ADVANCED GIT FEATURES ====================
@@ -749,56 +1290,85 @@ export class GitOperations {
   }
 
   /**
-   * Get file diff for specific files or all changed files
+   * Pending files with their staged/unstaged/untracked state, for building a file selection.
+   * A partially staged file reports both `staged` and `unstaged`.
    */
-  async getDiff(filePath?: string): Promise<DiffInfo[]> {
-    await this.ensureGitRepo();
+  async getFileChanges(): Promise<FileChangeInfo[]> {
+    await this.requireRepo();
+    const kinds: Record<string, FileChangeKind> = {
+      M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', T: 'typechange', U: 'conflicted',
+    };
+    return (await this.workingState()).entries.map((entry) => ({
+      path: entry.path,
+      staged: kinds[entry.index] ?? null,
+      unstaged: kinds[entry.worktree] ?? null,
+      untracked: entry.untracked,
+      conflicted: entry.conflicted,
+    }));
+  }
+
+  private previewUntracked(file: string): DiffInfo {
+    const fullPath = path.join(this.repoPath, file);
+    const info: DiffInfo = { fileName: file, changes: [], scope: 'untracked' };
+    let stats: fs.Stats;
     try {
-      let diffResult: string;
-
-      if (filePath) {
-        diffResult = await this.git.diff([filePath]);
-      } else {
-        diffResult = await this.git.diff();
+      stats = fs.lstatSync(fullPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return info; // removed since it was listed
+      throw error;
+    }
+    if (!stats.isFile()) return info;
+    const fd = fs.openSync(fullPath, 'r');
+    try {
+      const buffer = Buffer.alloc(Math.min(stats.size, DIFF_PREVIEW_MAX_BYTES));
+      const content = buffer.subarray(0, fs.readSync(fd, buffer, 0, buffer.length, 0));
+      if (content.includes(0)) {
+        info.binary = true;
+        return info;
       }
+      const lines = content.toString('utf8').split('\n');
+      if (lines[lines.length - 1] === '') lines.pop();
+      info.changes = lines.slice(0, DIFF_PREVIEW_MAX_LINES).map((text, i) => ({ line: i + 1, type: 'add' as const, content: text.replace(/\r$/, '') }));
+      if (stats.size > DIFF_PREVIEW_MAX_BYTES || lines.length > DIFF_PREVIEW_MAX_LINES) info.truncated = true;
+    } finally {
+      fs.closeSync(fd);
+    }
+    return info;
+  }
 
-      // Parse diff output into structured format
-      const diffs: DiffInfo[] = [];
-      const fileBlocks = diffResult.split('diff --git');
-
-      for (const block of fileBlocks) {
-        if (!block.trim()) continue;
-
-        const lines = block.split('\n');
-        const fileMatch = lines[0].match(/a\/(.*) b\/(.*)/);
-
-        if (fileMatch) {
-          const fileName = fileMatch[2];
-          const changes: { line: number; type: 'add' | 'remove' | 'context'; content: string }[] = [];
-          let currentLine = 0;
-
-          for (const line of lines.slice(1)) {
-            if (line.startsWith('@@')) {
-              const lineMatch = line.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/);
-              if (lineMatch) {
-                currentLine = parseInt(lineMatch[2]);
-              }
-            } else if (line.startsWith('+') && !line.startsWith('+++')) {
-              changes.push({ line: currentLine++, type: 'add', content: line.substring(1) });
-            } else if (line.startsWith('-') && !line.startsWith('---')) {
-              changes.push({ line: currentLine, type: 'remove', content: line.substring(1) });
-            } else if (line.startsWith(' ')) {
-              changes.push({ line: currentLine++, type: 'context', content: line.substring(1) });
-            }
-          }
-
-          diffs.push({ fileName, changes });
+  /**
+   * File diffs labeled by scope: `staged` (HEAD to index), `unstaged` (index to working tree) and
+   * `untracked` (whole new file). scope defaults to 'all', so a partially staged file yields a staged
+   * and an unstaged entry. Publishing a selected file commits its working contents (both together).
+   * Binary files return empty changes with binary: true; long diffs set truncated: true.
+   */
+  async getDiff(filePath?: string, scope: DiffScope | 'all' = 'all'): Promise<DiffInfo[]> {
+    await this.requireRepo();
+    try {
+      let file = '';
+      if (filePath) {
+        file = filePath.replace(/\\/g, '/');
+        if (/[\x00-\x1f\x7f]/.test(file) || file.startsWith('-') || file.startsWith('/') || /^[a-zA-Z]:/.test(file) || file.split('/').includes('..')) {
+          throw new Error('Invalid file path');
         }
       }
-
+      const diffArgs = ['diff', '--no-color', '--no-ext-diff', '--no-renames', '-U3'];
+      const pathArgs = file ? ['--', file] : ['--'];
+      const diffs: DiffInfo[] = [];
+      if (scope === 'all' || scope === 'staged') {
+        diffs.push(...parseUnifiedDiff(await this.output([...diffArgs, '--cached', ...pathArgs], { readOnly: true }), 'staged'));
+      }
+      if (scope === 'all' || scope === 'unstaged') {
+        diffs.push(...parseUnifiedDiff(await this.output([...diffArgs, ...pathArgs], { readOnly: true }), 'unstaged'));
+      }
+      if (scope === 'all' || scope === 'untracked') {
+        for (const entry of (await this.workingState()).entries) {
+          if (entry.untracked && !entry.path.endsWith('/') && (!file || entry.path === file)) diffs.push(this.previewUntracked(entry.path));
+        }
+      }
       return diffs;
     } catch (error) {
-      throw new Error(`Failed to get diff: ${error}`);
+      throw new Error(`Failed to get diff: ${errorText(error)}`);
     }
   }
 
@@ -892,22 +1462,162 @@ export class GitOperations {
     }
   }
 
-  async pushTag(tagName: string): Promise<void> {
-    await this.ensureGitRepo();
-    try {
-      await this.git.push(['origin', tagName]);
-    } catch (error) {
-      throw new Error(`Failed to push tag: ${error}`);
+  // Tags go to the current branch's upstream remote, else origin.
+  private async tagRemote(): Promise<string> {
+    const branch = await this.currentBranch();
+    const upstream = branch ? await this.upstreamOf(branch) : null;
+    const remote = upstream?.remote ?? 'origin';
+    if (!(await this.remoteNames()).includes(remote)) {
+      throw new PublishError(`Remote '${remote}' is not configured; tags cannot be published.`, 'failed');
+    }
+    return remote;
+  }
+
+  private async listTagRefs(): Promise<TagRef[]> {
+    const listed = await this.output(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(objecttype)', 'refs/tags'], { readOnly: true });
+    return listed.split('\n').filter(Boolean).map((line) => {
+      const [ref, oid, type] = line.split('\0');
+      return { name: ref.slice('refs/tags/'.length), oid, type };
+    });
+  }
+
+  // An annotated tag's message is published with it, so it is screened like file content (errors only).
+  private async screenTagMessages(tags: TagRef[]): Promise<FileValidationIssue[]> {
+    const issues: FileValidationIssue[] = [];
+    let pending = tags.filter((tag) => tag.type === 'tag').map((tag) => ({ name: tag.name, oid: tag.oid }));
+    for (let depth = 0; pending.length > 0; depth++) {
+      if (depth >= 16) throw new PublishError('A tag points through too many nested tag objects to inspect.', 'blocked');
+      const bodies = await this.readObjects([...new Set(pending.map((entry) => entry.oid))], 'tag');
+      const next: typeof pending = [];
+      for (const { name, oid } of pending) {
+        const body = bodies.get(oid)!;
+        const reason = exclusionReason('tag-message', body.length, body);
+        if (reason) {
+          issues.push({
+            filePath: `refs/tags/${name}`,
+            severity: 'error',
+            reason: `${reason} (in the tag message)`,
+            sizeBytes: body.length,
+            sizeMB: body.length / (1024 * 1024),
+            suggestion: 'Recreate the tag without the credential.',
+          });
+        }
+        const target = /^object ([0-9a-f]{40,64})\ntype (\w+)\n/.exec(body.toString('utf8', 0, Math.min(body.length, 512)));
+        if (target && target[2] === 'tag') next.push({ name, oid: target[1] });
+      }
+      pending = next;
+    }
+    return issues;
+  }
+
+  private static describeTagPushFailure(run: GitRun, remote: string): string {
+    const rejected: string[] = [];
+    for (const line of run.stdout.toString('utf8').split('\n')) {
+      const match = /^!\t[^:\t]+:refs\/tags\/([^\t]+)\t\[[^\]]*\](?: \(([^)]*)\))?/.exec(line.trimEnd());
+      if (match) rejected.push(match[2] ? `'${match[1]}' (${match[2]})` : `'${match[1]}'`);
+    }
+    return rejected.length > 0
+      ? `The remote ${remote} rejected tag(s) ${rejected.join(', ')}. BitGit never force-pushes tags.`
+      : `Pushing tags to ${remote} failed: ${gitMessage(run)}`;
+  }
+
+  // Validates every requested tag (all local tags when `requested` is null) before any is pushed:
+  // names, that each points to a commit, and every blob reachable from those commits that the remote
+  // does not already have. Each tag is pushed as the exact object that was inspected (an annotated tag
+  // stays annotated), without force.
+  private async publishTags(requested: string[] | null, options: PublishOptions | null | undefined): Promise<void> {
+    const allowWarnings = GitOperations.allowWarnings(options);
+    if (requested !== null) {
+      for (const name of requested) {
+        try {
+          GitOperations.validateRefName(name, 'tag');
+        } catch (error) {
+          throw new PublishError(`Tag '${String(name)}': ${errorText(error)}`, 'failed');
+        }
+        if ((await this.run(['check-ref-format', `refs/tags/${name}`], { readOnly: true })).code !== 0) {
+          throw new PublishError(`Tag name '${name}' is not a valid Git ref name.`, 'failed');
+        }
+      }
+    }
+    await this.requireRepo();
+    const remote = await this.tagRemote();
+    const local = await this.listTagRefs();
+
+    let tags: TagRef[];
+    if (requested !== null) {
+      tags = requested.map((name) => {
+        const tag = local.find((candidate) => candidate.name === name);
+        if (!tag) throw new PublishError(`Tag '${name}' does not exist.`, 'failed');
+        return tag;
+      });
+    } else {
+      const invalid = local.filter((tag) => {
+        try { GitOperations.validateRefName(tag.name, 'tag'); return false; } catch { return true; }
+      });
+      if (invalid.length > 0) {
+        throw new PublishError(
+          `No tags were pushed: ${invalid.length} local tag(s) have names BitGit will not publish (${invalid.slice(0, 5).map((tag) => tag.name).join(', ')}).`,
+          'failed',
+        );
+      }
+      tags = local;
+    }
+    tags = [...new Map(tags.map((tag) => [tag.name, tag])).values()];
+    if (tags.length === 0) return;
+
+    const peeled = await this.run(
+      ['cat-file', '--batch-check=%(objectname) %(objecttype)'],
+      { readOnly: true, input: tags.map((tag) => `${tag.oid}^{commit}\n`).join('') },
+    );
+    const resolved = peeled.stdout.toString('utf8').split('\n').filter(Boolean);
+    if (peeled.code !== 0 || resolved.length !== tags.length) {
+      throw new PublishError(`Cannot resolve tag targets: ${gitMessage(peeled)}`, 'failed');
+    }
+    const commits = new Set<string>();
+    const notCommits: string[] = [];
+    resolved.forEach((line, i) => {
+      const [oid, type] = line.split(' ');
+      if (type === 'commit') commits.add(oid); else notCommits.push(tags[i].name);
+    });
+    if (notCommits.length > 0) {
+      throw new PublishError(`No tags were pushed: ${notCommits.join(', ')} do not point to a commit and cannot be inspected.`, 'failed');
+    }
+
+    const issues = [...(await this.scanRange([...commits], [`--remotes=${remote}`])).issues, ...(await this.screenTagMessages(tags))];
+    GitOperations.enforce(
+      GitOperations.sortIssues(issues),
+      allowWarnings,
+      0,
+      tags.length === 1 ? `Publishing tag '${tags[0].name}'` : `Publishing ${tags.length} tags`,
+    );
+
+    for (let i = 0; i < tags.length; i += TAG_PUSH_BATCH) {
+      const batch = tags.slice(i, i + TAG_PUSH_BATCH);
+      let run: GitRun;
+      try {
+        run = await this.run(['push', '--porcelain', remote, ...batch.map((tag) => `${tag.oid}:refs/tags/${tag.name}`)], { timeoutMs: NETWORK_TIMEOUT_MS });
+      } catch (error) {
+        throw new PublishError(`Pushing tags to ${remote} failed: ${errorText(error)}`, 'push-failed');
+      }
+      if (run.code !== 0) throw new PublishError(GitOperations.describeTagPushFailure(run, remote), 'push-failed');
     }
   }
 
-  async pushAllTags(): Promise<void> {
-    await this.ensureGitRepo();
-    try {
-      await this.git.push(['--tags']);
-    } catch (error) {
-      throw new Error(`Failed to push tags: ${error}`);
-    }
+  /**
+   * Publishes one tag after the same validation as a branch push: the blobs reachable from the tag's
+   * commit that the remote lacks are inspected (secrets and files over 100 MiB always block; warnings
+   * need options.allowWarnings). Never forces; an existing remote tag with a different target is rejected.
+   */
+  async pushTag(tagName: string, options?: PublishOptions): Promise<void> {
+    await this.publishTags([tagName], options);
+  }
+
+  /**
+   * Publishes every local tag. All tags are validated before any is pushed, so one blocked tag
+   * publishes nothing.
+   */
+  async pushAllTags(options?: PublishOptions): Promise<void> {
+    await this.publishTags(null, options);
   }
 
   async deleteTag(tagName: string): Promise<void> {
@@ -1263,63 +1973,16 @@ export async function cloneRepository(githubUrl: string, localPath: string): Pro
 }
 
 export async function initRepository(localPath: string): Promise<void> {
-  try {
-    const git = simpleGit(localPath);
-    let isNewRepo = false;
-
-    // Check if already a git repository
-    try {
-      await git.status();
-      // Already a git repo
-    } catch (e) {
-      // Not a git repo, initialize with main branch
-      await git.init(['-b', 'main']);
-      isNewRepo = true;
-    }
-
-    // Check if there are any commits
-    let hasCommits = false;
-    try {
-      await git.log(['-n', '1']);
-      hasCommits = true;
-    } catch (e) {
-      // No commits yet
-      hasCommits = false;
-    }
-
-    // If no commits, create initial commit
-    if (!hasCommits) {
-      const status = await git.status();
-
-      // If there are files to commit
-      if (status.files.length > 0 || status.not_added.length > 0) {
-        // Stage all files
-        await git.add('.');
-        await git.commit('Initial commit');
-      } else {
-        // No files exist, create a README
-        const fs = await import('fs/promises');
-        const path = await import('path');
-        const readmePath = path.join(localPath, 'README.md');
-
-        await fs.writeFile(readmePath, '# Project\n\nInitialized with BitGit\n');
-        await git.add('README.md');
-        await git.commit('Initial commit');
-      }
-
-      // Ensure we're on main branch (for older git versions that might use master)
-      try {
-        const currentBranch = (await git.status()).current;
-        if (currentBranch !== 'main') {
-          await git.branch(['-M', 'main']);
-        }
-      } catch (e) {
-        // Branch rename might fail, but that's ok
-      }
-    }
-  } catch (error) {
-    throw new Error(`Failed to initialize repository: ${error}`);
+  const probe = await runGit(localPath, ['rev-parse', '--is-inside-work-tree', '--show-cdup'], { readOnly: true });
+  if (probe.code === 0) {
+    const [inside, parent] = probe.stdout.toString('utf8').split('\n');
+    if (inside.trim() !== 'true' || (parent ?? '').trim() !== '') throw new Error('Choose a repository root, not a folder inside another repository.');
+    return;
   }
+  if (!/not a git repository/i.test(probe.stderr)) throw new Error(`Cannot inspect repository: ${gitMessage(probe)}`);
+  const initialized = await runGit(localPath, ['init', '-b', 'main']);
+  if (initialized.code !== 0) throw new Error(`Failed to initialize repository: ${gitMessage(initialized)}`);
+  // Initialization creates metadata only. The first commit also requires an explicit file selection.
 }
 
 export async function addRemote(localPath: string, remoteName: string, remoteUrl: string): Promise<void> {
@@ -1331,8 +1994,10 @@ export async function addRemote(localPath: string, remoteName: string, remoteUrl
     const remoteExists = remotes.some(r => r.name === remoteName);
 
     if (remoteExists) {
-      // Update existing remote
-      await git.remote(['set-url', remoteName, remoteUrl]);
+      const existingUrl = await git.remote(['get-url', remoteName]);
+      if (normalizeRemoteUrl(existingUrl ?? '') !== normalizeRemoteUrl(remoteUrl)) {
+        throw new Error('This remote already points to a different repository. Change it explicitly in Git before linking.');
+      }
     } else {
       // Add new remote
       await git.addRemote(remoteName, remoteUrl);
@@ -1342,8 +2007,9 @@ export async function addRemote(localPath: string, remoteName: string, remoteUrl
   }
 }
 
-export async function pushToRemote(localPath: string, remoteName: string, branch: string): Promise<void> {
+export async function pushToRemote(localPath: string, remoteName: string, branch: string, options?: PublishOptions): Promise<void> {
   try {
+    GitOperations.validateRefName(branch, 'branch');
     const git = simpleGit(localPath);
 
     // Check current branch
@@ -1374,9 +2040,9 @@ export async function pushToRemote(localPath: string, remoteName: string, branch
       }
     }
 
-    // Push with set-upstream
-    await git.push(['-u', remoteName, branch]);
+    // Validated push with set-upstream: every blob the push would add to the remote is inspected first.
+    await new GitOperations(localPath).pushExistingCommits(remoteName, branch, options);
   } catch (error) {
-    throw new Error(`Failed to push to remote: ${error}`);
+    throw new Error(`Failed to push to remote: ${errorText(error)}`);
   }
 }

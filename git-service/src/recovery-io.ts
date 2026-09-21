@@ -14,7 +14,7 @@ export const exists = async (file: string): Promise<boolean> => {
 export function safeRelative(file: string): string {
   const parts = file.split('/');
   if (!file || path.isAbsolute(file) || parts.some(part => !part || part === '.' || part === '..'
-    || /^\.git$/i.test(part) || /[\\\x00-\x1f<>:"|?*]/.test(part) || /[. ]$/.test(part)
+    || /^(?:\.git|git~[0-9]+)$/i.test(part) || /[\\\x00-\x1f<>:"|?*]/.test(part) || /[. ]$/.test(part)
     || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part))) {
     throw new Error(`Unsupported or unsafe file path: ${file}`);
   }
@@ -38,10 +38,15 @@ export async function assertNoLinks(root: string, target: string): Promise<void>
 }
 
 export async function atomicJson(file: string, value: unknown): Promise<void> {
+  return atomicWrite(file, JSON.stringify(value, null, 2));
+}
+
+export async function atomicWrite(file: string, value: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${randomUUID()}.tmp`;
   try {
-    await fs.writeFile(temp, JSON.stringify(value, null, 2), { flag: 'wx', mode: 0o600 });
+    const handle = await fs.open(temp, 'wx', 0o600);
+    try { await handle.writeFile(value); await handle.sync(); } finally { await handle.close(); }
     await fs.rename(temp, file);
   } finally { await fs.rm(temp, { force: true }); }
 }
@@ -77,7 +82,8 @@ export function gitRun(cwd: string, args: string[], options: GitRunOptions = {})
       clearTimeout(timer);
       if (timedOut) reject(new Error('Git operation timed out; its result was not verified'));
       else if (exceeded) reject(new Error('Git output exceeds recovery limits'));
-      else if (code !== 0) reject(new Error(Buffer.concat(stderr).toString('utf8').trim() || `Git exited with ${code}`));
+      else if (code !== 0) reject(new Error([Buffer.concat(stderr).toString('utf8').trim(),
+        args.includes('--porcelain') ? Buffer.concat(stdout).toString('utf8').slice(-8192).trim() : ''].filter(Boolean).join('\n') || `Git exited with ${code}`));
       else resolve(Buffer.concat(stdout));
     });
     child.stdin.on('error', () => { /* Exit status reports rejected stdin. */ });
