@@ -1,11 +1,24 @@
 // Shared types between Rust and Node.js Git service
 
 export interface StatusInfo {
+  isGitRepo?: boolean;
+  hasRemote?: boolean;
+  currentBranch?: string | null;
+  upstream?: string | null;
+  behindCommits?: number;
+  remoteCheckedAt?: string | null;
+  remoteError?: string | null;
   uncommittedFiles: number;
   untrackedFiles: number;
   modifiedFiles: string[];
   unpushedCommits: number;
   remoteBranches: string[];
+}
+
+// Omitting selectedFiles permits pushing existing commits only; never implies stage-all.
+export interface PublishOptions {
+  selectedFiles?: string[];
+  allowWarnings?: boolean;
 }
 
 export interface SyncResult {
