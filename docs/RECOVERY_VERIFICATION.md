@@ -57,10 +57,10 @@ The root `CLAUDE.md` was reduced from 157 lines / 5,624 bytes to 50 lines / abou
 |---|---|
 | Purpose, stack, build/dev/service/Rust commands | Kept in root; updated recovery purpose and added actual test command. |
 | Port recovery commands and kill-all-Node suggestion | Replaced with process ownership checks; global kills can terminate other projects and sessions. |
-| Architecture table, key files, command/IPC wiring and UI conventions | Moved to `DEVELOPMENT.md`; root links it. |
-| Problem-first investigation, logging, iteration, graceful recovery, avoiding overengineering | Kept in `DEVELOPMENT.md`; descriptive session anecdotes omitted because they impose no requirement. |
+| Architecture table, key files, command/IPC wiring and UI conventions | Moved to `RECOVERY_DEVELOPMENT.md`; root links it. |
+| Problem-first investigation, logging, iteration, graceful recovery, avoiding overengineering | Kept in `RECOVERY_DEVELOPMENT.md`; descriptive session anecdotes omitted because they impose no requirement. |
 | Atomic cache writes, backups, recovery, validation | Root invariant plus authoritative `NATIVE_RECOVERY.md` and development pointers. |
-| Pre-sync limits, warnings, ignore UI and failure remedies | Kept in `GIT_OPERATIONS.md` and `DEVELOPMENT.md`; added explicit selection and fail-closed rules. |
+| Pre-sync limits, warnings, ignore UI and failure remedies | Kept in `GIT_OPERATIONS.md` and `RECOVERY_DEVELOPMENT.md`; added explicit selection and fail-closed rules. |
 | No force push, `--no-ff`, auto-commit format | Kept in root; branch retention clarified. |
 | Credential storage, Settings token validation, scopes and GitHub scope preselection | Kept in root and development workflow. |
 | Implemented features and potential enhancements | Current features in README; prior product ideas remain there as inactive proposals. |

@@ -89,7 +89,7 @@ npm run tauri:dev
 ```
 
 For a fresh checkout, first run `npm ci`, `npm --prefix git-service ci`, and
-`npm --prefix git-service run build`. Development instructions: [DEVELOPMENT.md](docs/DEVELOPMENT.md).
+`npm --prefix git-service run build`. See [recovery development](docs/RECOVERY_DEVELOPMENT.md).
 
 **Production Build:**
 ```bash

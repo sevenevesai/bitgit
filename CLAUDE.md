@@ -21,7 +21,7 @@ node --test $testFiles              # Disposable repositories; all tests must pa
 ```
 
 When a port is busy, identify the owning process and stop only this task's dev server.
-Development conventions and command wiring: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Development conventions: [recovery development](docs/RECOVERY_DEVELOPMENT.md).
 
 ## Invariants
 
