@@ -10,6 +10,7 @@ import { CreateRepoModal } from './CreateRepoModal';
 import { ProjectDetails } from './ProjectDetails';
 import { ValidationWarningModal, PreSyncValidation } from './ValidationWarningModal';
 import { CommitModal } from './CommitModal';
+import { RecoveryWorkspace } from './recovery/RecoveryWorkspace';
 import {
   GitBranch,
   GitCommit,
@@ -34,6 +35,7 @@ import {
   Save,
   X,
   ExternalLink,
+  History as HistoryIcon,
 } from 'lucide-react';
 
 interface ProjectCardProps {
@@ -79,6 +81,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const [pendingSyncAction, setPendingSyncAction] = useState<SyncAction | null>(null);
   const [showCommitModal, setShowCommitModal] = useState(false);
   const [isCommitting, setIsCommitting] = useState(false);
+  const [showRecovery, setShowRecovery] = useState(false);
 
   const isSelected = selectedProjectIds.has(project.id);
   const isFavorite = project.favorite || false;
@@ -735,6 +738,18 @@ export function ProjectCard({ project }: ProjectCardProps) {
             <Star className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
           </button>
 
+          {/* Save & Recover - available for every project with a local folder */}
+          {project.localPath && (
+            <button
+              onClick={() => setShowRecovery(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-lg hover:text-teal-700 dark:hover:text-teal-300 hover:bg-teal-50 dark:hover:bg-gray-700 transition-colors"
+              title="Save versions of this project, compare them and recover files"
+            >
+              <HistoryIcon className="w-4 h-4" />
+              Save &amp; Recover
+            </button>
+          )}
+
           {/* Refresh button - only show if both GitHub and Local are configured */}
           {project.githubUrl && project.localPath && (
             <button
@@ -874,6 +889,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
       )}
 
       {/* Modals */}
+      {showRecovery && project.localPath && <RecoveryWorkspace project={project} onClose={() => setShowRecovery(false)} />}
       <LinkLocalModal
         isOpen={showLinkLocalModal}
         onClose={() => setShowLinkLocalModal(false)}
