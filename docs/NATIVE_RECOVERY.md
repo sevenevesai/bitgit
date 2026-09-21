@@ -97,6 +97,15 @@ When the service exits, waiting callers fail at once and the next request restar
 (the token) is lost on restart, so callers send the token before each use. A request unanswered for 30
 minutes fails without restarting the service: a restart would kill other repositories' running operations.
 
+## Content Security Policy
+
+`security.csp` allows only the app's own assets, `data:` images (evidence screenshots) and inline
+styles (`react-hot-toast` injects a `<style>` at runtime). No network, fonts or frames are used. Tauri
+adds a style nonce only for `<style>` tags in the built HTML; one there would disable `'unsafe-inline'`.
+`devCsp` is separate and permissive because Tauri 1 otherwise applies `csp` to the dev server, where
+Vite needs an inline refresh script and `ws://localhost`. A dev run proves nothing about `csp`: verify
+any change in a `tauri build --debug` binary with an isolated `BITGIT_TEST_DATA_DIR`.
+
 ## Verification and limits
 
 `cargo test` uses isolated temp dirs (never APPDATA). The transport tests in `git_service.rs` spawn
