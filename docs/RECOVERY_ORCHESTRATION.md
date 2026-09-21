@@ -3,6 +3,8 @@
 The user invoked `/orchestrate` for the full roadmap. All implementation workers and independent
 reviews are integrated. The completion status is in [the plan](RECOVERY_PLAN.md), and test/native
 evidence is in [verification](RECOVERY_VERIFICATION.md). No GitHub publication was performed.
+Local main merge: `adb23c2`. All 15 sessions listed below were confirmed closed after their reports
+and documentation were integrated. Parent smoke processes were stopped; test fixtures were retained.
 
 ## Available cost estimates
 

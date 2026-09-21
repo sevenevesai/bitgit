@@ -23,6 +23,9 @@ Integration was rebased onto main while retaining merge history; its complete fi
 the preserved `archive/recovery-candidate-verified` snapshot exactly. Both builds, all 139 then-current
 service tests, 92 Rust tests and `cargo check` passed again on `adf1ba6`. The subsequent small feedback
 fix `9347942` passed both builds and the complete 140-test service suite; Rust sources were unchanged.
+Main merge `adb23c2` matched the candidate's full Git tree. UI/service builds, `cargo check` and
+CLI help then passed from the main checkout. All 15 orchestration sessions are closed, the parent's
+smoke ports are free, and the existing `HOW_TO_USE.md` edit retained its pre-merge SHA-256.
 
 All repositories/remotes used for testing were disposable. Tests did not publish to GitHub or use
 real credentials. Service tests use Node's built-in runner; Windows shell globs must be expanded
@@ -125,3 +128,8 @@ The active plan preserves the entire authorized scope, remaining gates, worker o
 user-edit exclusions, no remote-publish authorization and the GitHub client-ID decision. Completed
 implementation detail moved to Git history and this verification record. User changes in
 `docs/HOW_TO_USE.md` and local harness/configuration files were left intact.
+
+At completion, the plan was shortened to its outcome, evidence map and continuing constraints.
+The full authorized scope, review/gate completion, local merge, closed-worker status, preserved
+user edits, unavailable parent usage and OAuth decision remain. Detailed completed checklists,
+intermediate candidates and worker ownership are retained in Git history and linked reports.
