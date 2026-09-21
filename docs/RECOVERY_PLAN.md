@@ -11,7 +11,7 @@ inspectable workflows; no model service is required.
 
 ## Wave 1: trustworthy foundation
 
-- [ ] CORE: parent implements checkpoint capture/list/compare/recovered-copy vertical slice and tests.
+- [x] CORE: checkpoint capture/list/compare/recovered-copy slice; 10 disposable-repository tests pass.
 - [ ] GIT: fix status, clean pushes, service validation, selected commits, safe full sync and conflicts.
 - [ ] NATIVE: connect recovery IPC; fix persistent imports/status/results and application lockfiles.
 - [ ] Verify foundation with disposable repositories, independent review and native smoke.
@@ -53,7 +53,16 @@ task commits. Our review docs are included with this plan. No remote publishing 
 
 ## Active roster
 
-No workers yet. Parent bootstrapping contracts and first slice. Parent Lloom session:
+Parent is implementing the first recovery slice. Managed worker roster:
+
+| Worker | Tier | Session | Branch / worktree |
+|---|---|---|---|
+| MAP-FOUNDATION (complete) | Haiku | 887b8629-ec4a-4155-ac71-852b9d87e3d2 | chore/recovery-map-foundation / S:/BitGit-map-foundation |
+| GIT | Sonnet | 7f798e4c-8449-4586-a090-82292648ebc7 | feat/recovery-git-reliability / S:/BitGit-wt-git |
+| NATIVE | Sonnet | 3ab76b41-0479-41a4-80b8-62eaae33cb11 | feat/recovery-native / S:/BitGit-wt-native |
+| RECOVERY-UI | Sonnet | 432d6bb9-795d-4462-a711-f33dce18fa92 | feat/recovery-workspace / S:/BitGit-wt-recovery-ui |
+
+Parent Lloom session:
 `aad26266-17c8-4043-a9eb-8fb1b6c45240`; live Codex usage attribution unavailable at kickoff.
 
 ## Gates and pickup notes

@@ -1,6 +1,7 @@
 import * as readline from 'readline';
 import { GitOperations, cloneRepository, initRepository, addRemote, pushToRemote } from './git-operations.js';
 import { GitHubAPI } from './github-api.js';
+import { RecoveryService } from './recovery-service.js';
 
 // IPC Server for communication with Rust backend via stdin/stdout
 // Commands are received as JSON on stdin, responses sent as JSON on stdout
@@ -93,6 +94,12 @@ export class IPCServer {
           const git = new GitOperations(repoPath);
           const status = await git.checkStatus();
           return { id: command.id, success: true, data: status };
+        }
+
+        case 'recovery': {
+          const { repoPath, request } = command.payload;
+          const recovery = new RecoveryService(repoPath, { githubToken: this.githubToken });
+          return { id: command.id, success: true, data: await recovery.dispatch(request) };
         }
 
         case 'validateBeforeSync': {
