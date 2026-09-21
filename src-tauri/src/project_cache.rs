@@ -27,9 +27,7 @@ impl ProjectStore {
     }
 
     fn default_location() -> Result<Self> {
-        let dir = dirs::config_dir()
-            .context("Failed to get config directory")?
-            .join("BitGit");
+        let dir = crate::app_data::config_dir()?;
         Ok(Self::in_dir(dir))
     }
 

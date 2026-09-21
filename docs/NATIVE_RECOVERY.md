@@ -6,7 +6,7 @@ receipts and restoration.
 
 ## `recovery_command(project_id, request) -> Value`
 
-1. `recovery_request::validate_recovery_request` accepts a JSON object naming one of the 17 actions in
+1. `recovery_request::validate_recovery_request` accepts a JSON object naming a recognized action in
    `RecoveryRequest`, with only that action's documented fields and JSON types. Unknown actions and
    fields (including `vaultRoot`, `repoPath`) are rejected, not forwarded; `null` optional fields are
    dropped. Values are the service's to validate. **Adding a request field or action to
@@ -14,7 +14,8 @@ receipts and restoration.
 2. The project is resolved from the saved cache; its `local_path` must be absolute with no `..`. It need
    not exist, so checkpoints of a deleted source stay listable and recoverable. The path is forwarded
    unchanged (no canonicalization: `\\?\` would change the service's vault key).
-3. Forwards `service.execute("recovery", {repoPath, request})` on a blocking thread. The service holds its
+3. Forwards `service.execute("recovery", {repoPath, request, vaultRoot})` on a blocking thread. Rust
+   supplies the vault root from the application data directory; callers cannot override it. The service holds its
    child lock for the whole response, so a slow recovery delays other Git commands.
 4. Only `backup`, `verifyBackup`, `remoteList`, `remoteImport` read the credential-manager token and pass it
    via `setGithubToken` (service memory only). Local actions never touch credentials. The token is never
@@ -55,12 +56,15 @@ are never assumed; full sync with errors is not success. `lastSynced` advances o
 
 ## Imports and cache
 
-`add_repositories` and `fetch_github_repos` write to `projects.json` through `project_cache::modify_projects`
+`add_repositories` writes to `projects.json` through `project_cache::modify_projects`
 (the in-memory map is gone; `get_repositories`, `check_repository_status`, `sync_repository` now delegate to
 saved projects). Dedupe: local imports by normalized path (separators, case on Windows, trailing/`.`);
 GitHub imports by lower-cased `owner/repo` from URL, `owner`+`repo`, or full name, matching linked and
 unlinked projects. A match keeps its id and all user fields (only status is refreshed / missing GitHub link
 fields filled). New ids are `name-<unix seconds>` with a numeric suffix on collision.
+
+`fetch_github_repos` returns candidates for repository pickers without persisting them. The explicit
+create/link flow chooses which repository becomes a saved project.
 
 `ProjectStore` serializes every load, save and read-modify-write behind one process-wide lock, which fixes
 lost updates and the shared `.tmp` race; `update_project(id, f)` re-reads under the lock so slow operations
@@ -80,7 +84,7 @@ handling. Runtime behavior against the Node service and UI is not verified here.
 
 - By code reading, a service crash is not detected or restarted: later commands fail until the app restarts.
 - Local imports match by path only (no origin URL read), so a scan does not link to a GitHub-only project.
-- `fetch_github_repos` now persists every repo it lists. `AddProjectModal` and `LinkGitHubModal` call it only
-  to list, and `AddProjectModal` then calls `create_project` (which does not dedupe), leaving a duplicate
-  GitHub-only project. The UI needs a non-persisting list, or `create_project` must upsert by GitHub identity.
 - `apply_project_template` overwrites an existing `.gitignore`.
+
+Debug native smoke runs set an absolute `BITGIT_TEST_DATA_DIR`. Cache, settings, and recovery use that
+isolated directory, and credential access is disabled. Release builds ignore the test override.

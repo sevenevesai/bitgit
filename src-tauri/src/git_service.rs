@@ -210,7 +210,8 @@ impl GitService {
     /// Forwards an already-validated recovery request. The service owns the vault
     /// location, so only the source path and the request travel over IPC.
     pub fn recovery(&self, repo_path: &str, request: serde_json::Value) -> Result<serde_json::Value> {
-        let payload = serde_json::json!({ "repoPath": repo_path, "request": request });
+        let vault_root = crate::app_data::config_dir()?.join("checkpoints");
+        let payload = serde_json::json!({ "repoPath": repo_path, "request": request, "vaultRoot": vault_root });
         self.execute("recovery", payload)
     }
 

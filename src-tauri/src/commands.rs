@@ -302,13 +302,12 @@ pub async fn fetch_github_repos(token: String) -> Result<Vec<Repository>, String
         .map_err(|e| format!("Failed to fetch GitHub repos: {}", e))?;
 
     let now = now_rfc3339();
-    project_cache::modify_projects(|projects| {
-        github_repos
-            .iter()
-            .map(|repo| project_sync::merge_github_import(projects, repo, &now))
-            .collect::<Vec<_>>()
-    })
-    .map_err(|e| format!("Failed to save GitHub repositories: {}", e))
+    // Repository pickers list candidates. Only an explicit create/link action persists one.
+    let mut candidates = project_cache::load_projects()
+        .map_err(|e| format!("Failed to load existing projects: {}", e))?;
+    Ok(github_repos.iter()
+        .map(|repo| project_sync::merge_github_import(&mut candidates, repo, &now))
+        .collect())
 }
 
 // ============================================================================
@@ -1052,6 +1051,11 @@ pub async fn increment_project_stats(
 /// the service's memory and is never logged or persisted here. Returns the token so the
 /// caller can redact it from error text. Local recovery works without one.
 fn forward_stored_token(service: &GitService) -> Option<String> {
+    // Clear a previously cached token if credentials were removed or became unavailable.
+    if let Err(error) = service.set_github_token("") {
+        eprintln!("[Rust] Could not reset the recovery credential context: {}", error);
+        return None;
+    }
     let manager = match CredentialManager::new() {
         Ok(manager) => manager,
         Err(e) => {

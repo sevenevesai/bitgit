@@ -37,7 +37,7 @@ const fn opt(name: &'static str, kind: Kind) -> Field {
 }
 
 // Keys of `RecoverySettings`; the service validates the values.
-const SETTINGS_KEYS: [&str; 3] = ["automaticEnabled", "idleMinutes", "retention"];
+const SETTINGS_KEYS: [&str; 4] = ["automaticEnabled", "idleMinutes", "retention", "excludedPaths"];
 
 // Actions that talk to a remote and may need the stored GitHub token.
 const REMOTE_ACTIONS: [&str; 4] = ["backup", "verifyBackup", "remoteList", "remoteImport"];
@@ -47,7 +47,7 @@ const REMOTE_ACTIONS: [&str; 4] = ["backup", "verifyBackup", "remoteList", "remo
 fn action_fields(action: &str) -> Option<Vec<Field>> {
     use Kind::*;
     Some(match action {
-        "state" | "preview" | "autoTick" => vec![],
+        "state" | "preview" | "autoTick" | "repairRollback" => vec![],
         "create" => vec![
             req("label", Text),
             opt("note", Text),
@@ -109,11 +109,16 @@ fn kind_matches(kind: Kind, value: &Value) -> Result<(), &'static str> {
                     .any(|key| !SETTINGS_KEYS.contains(&key.as_str()))
                 {
                     return Err(
-                        "an object containing only automaticEnabled, idleMinutes and retention",
+                        "an object containing only automaticEnabled, idleMinutes, retention and excludedPaths",
                     );
                 }
-                if SETTINGS_KEYS.iter().any(|key| !settings.contains_key(*key)) {
+                if SETTINGS_KEYS[..3].iter().any(|key| !settings.contains_key(*key)) {
                     return Err("an object with automaticEnabled, idleMinutes and retention");
+                }
+                if settings.get("excludedPaths").map_or(false, |value| {
+                    value.as_array().map_or(true, |items| items.iter().any(|item| !item.is_string()))
+                }) {
+                    return Err("an object whose excludedPaths is an array of strings");
                 }
                 Ok(())
             }
