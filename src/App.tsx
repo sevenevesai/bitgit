@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Toaster } from "react-hot-toast";
 import { Dashboard } from "./components/Dashboard";
+import { RecoveryBackground } from "./components/recovery/AutomationObserver";
 import { useAppStore } from "./stores/useAppStore";
 
 function App() {
@@ -38,6 +39,7 @@ function App() {
       <>
         <Toaster position="top-right" />
         <Dashboard />
+        <RecoveryBackground />
       </>
     );
   } catch (error) {

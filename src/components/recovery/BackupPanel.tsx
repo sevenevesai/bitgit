@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { Loader2, ShieldCheck, Upload } from 'lucide-react';
 import type { BackupReceipt, Checkpoint } from '../../types/recovery';
 import { errorMessage, redactSecrets, validateRemoteUrl } from '../../lib/recovery';
-import { formatBytes, formatRelative, formatTimestamp, inputClass, primaryButton, safeText, secondaryButton, shortId } from './format';
+import { backupStatus, formatBytes, formatRelative, formatTimestamp, inputClass, primaryButton, safeText, secondaryButton, shortId } from './format';
 import { useRecoveryGate } from './gate';
 import { Notice } from './Notice';
 
@@ -26,6 +26,8 @@ export function BackupPanel({ checkpoint, defaultRemoteUrl, onChanged }: BackupP
   const [working, setWorking] = useState<'backup' | 'verify' | null>(null);
 
   const receipt = checkpoint.backup;
+  // The saved receipt is the truth after a reopen; session notices below only ever agree with it.
+  const status = receipt ? backupStatus(receipt) : null;
   const urlProblem = remoteUrl.trim() ? validateRemoteUrl(remoteUrl) : null;
   const canBackUp = !busy && remoteUrl.trim() !== '' && urlProblem === null;
 
@@ -58,6 +60,8 @@ export function BackupPanel({ checkpoint, defaultRemoteUrl, onChanged }: BackupP
       await onChanged();
     } catch (error) {
       setVerifyError(errorMessage(error));
+      // The engine records a failed check on the receipt; reload so the saved state replaces the old one.
+      await onChanged();
     } finally {
       setWorking(null);
     }
@@ -77,25 +81,36 @@ export function BackupPanel({ checkpoint, defaultRemoteUrl, onChanged }: BackupP
             <p className="text-xs text-gray-500 dark:text-gray-400 font-mono break-all">
               {safeText(receipt.ref)} · commit {shortId(receipt.commitOid, 10)}
             </p>
-            <p className={`text-xs ${verifyError ? 'text-yellow-700 dark:text-yellow-400' : 'text-gray-600 dark:text-gray-400'}`}>
-              Last recorded as verified {formatTimestamp(receipt.verifiedAt)} ({formatRelative(receipt.verifiedAt)}). That is a historical record, not a live
-              check
-              {verifyError ? ' — and the latest check failed, so the copy is not confirmed right now.' : '.'}
-            </p>
+            {status?.state === 'unconfirmed' ? (
+              <p className="text-xs text-yellow-700 dark:text-yellow-400">
+                Not confirmed: the latest check{status.checkedAt ? ` (${formatTimestamp(status.checkedAt)}, ${formatRelative(status.checkedAt)})` : ''} failed. It was last
+                confirmed {formatTimestamp(status.lastVerifiedAt)}, before that failure, so it is no longer evidence that the remote copy is there.
+              </p>
+            ) : (
+              <p className="text-xs text-gray-600 dark:text-gray-400">
+                Last confirmed {formatTimestamp(status?.checkedAt)} ({formatRelative(status?.checkedAt)}). That is a historical record, not a live check.
+              </p>
+            )}
           </div>
         ) : (
           <p className="text-sm text-gray-600 dark:text-gray-400">No remote copy of this saved version has been recorded.</p>
         )}
 
-        {verified && (
-          <Notice tone="success" title={`Remote copy matches — checked ${formatTimestamp(verified.verifiedAt)}`}>
+        {verified && status?.state === 'verified' && (
+          <Notice tone="success" title={`Remote copy matches — checked ${formatTimestamp(verified.lastCheckedAt ?? verified.verifiedAt)}`}>
             The remote reference was read back and matches this saved version. This proves the remote copy exists; it does not test that the code runs.
           </Notice>
         )}
-        {verifyError && (
+        {status?.state === 'unconfirmed' ? (
           <Notice tone="error" title="The remote copy could not be confirmed">
-            {verifyError}
+            {safeText(redactSecrets(status.error))}
           </Notice>
+        ) : (
+          verifyError && (
+            <Notice tone="error" title="The remote copy could not be confirmed">
+              {verifyError}
+            </Notice>
+          )
         )}
         {receipt && (
           <button type="button" className={secondaryButton} onClick={() => void verify()} disabled={busy !== null}>
@@ -111,7 +126,8 @@ export function BackupPanel({ checkpoint, defaultRemoteUrl, onChanged }: BackupP
         </h3>
         <p className="text-sm text-gray-600 dark:text-gray-400">
           Backing up uploads this saved version’s files to the repository below, on a separate checkpoint branch. Your own branches are not changed. Only the
-          files included in this saved version are uploaded. Nothing is backed up unless you do it here.
+          files included in this saved version are uploaded. Notes, checks and screenshots stay on this computer and are not part of the backup. Nothing is backed
+          up unless you do it here.
         </p>
         <div>
           <label htmlFor={urlId} className="block mb-1 text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -145,7 +161,7 @@ export function BackupPanel({ checkpoint, defaultRemoteUrl, onChanged }: BackupP
             {backupError}
           </Notice>
         )}
-        {backedUp && (
+        {backedUp && status?.state === 'verified' && (
           <Notice tone="success" title={`Copied to the remote — verified ${formatTimestamp(backedUp.verifiedAt)}`}>
             <span className="font-mono break-all">{showUrl(backedUp.remoteUrl)}</span>
             {'\n'}

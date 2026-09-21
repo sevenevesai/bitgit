@@ -1,4 +1,4 @@
-import type { CheckpointKind } from '../../types/recovery';
+import type { BackupReceipt, CheckpointEvidence, CheckpointKind } from '../../types/recovery';
 
 export const primaryButton =
   'inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800';
@@ -66,6 +66,48 @@ export function safeMultiline(value: string): string {
 
 function escapeChar(ch: string): string {
   return `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
+}
+
+export type EvidenceOutcome = CheckpointEvidence['outcome'];
+
+export function outcomeLabel(outcome: EvidenceOutcome): string {
+  switch (outcome) {
+    case 'passed':
+      return 'Passed';
+    case 'failed':
+      return 'Failed';
+    case 'untested':
+      return 'Not tested';
+  }
+}
+
+export function outcomeBadgeClass(outcome: EvidenceOutcome): string {
+  switch (outcome) {
+    case 'passed':
+      return 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300';
+    case 'failed':
+      return 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300';
+    case 'untested':
+      return 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200';
+  }
+}
+
+// A receipt keeps the last time the remote copy was confirmed (verifiedAt) and, separately, the
+// latest check. A failed latest check means the copy is unconfirmed now, whatever verifiedAt says.
+export type BackupStatus =
+  | { state: 'verified'; checkedAt: string }
+  | { state: 'unconfirmed'; error: string; checkedAt: string | null; lastVerifiedAt: string };
+
+export function backupStatus(receipt: BackupReceipt): BackupStatus {
+  if (receipt.lastCheckError !== null && receipt.lastCheckError !== undefined) {
+    return {
+      state: 'unconfirmed',
+      error: receipt.lastCheckError.trim() || 'The check failed without an error message.',
+      checkedAt: receipt.lastCheckedAt ?? null,
+      lastVerifiedAt: receipt.verifiedAt,
+    };
+  }
+  return { state: 'verified', checkedAt: receipt.lastCheckedAt ?? receipt.verifiedAt };
 }
 
 export function kindLabel(kind: CheckpointKind): string {

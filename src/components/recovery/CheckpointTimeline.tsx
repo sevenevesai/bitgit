@@ -1,6 +1,6 @@
-import { Cloud, FolderCheck, GitBranch } from 'lucide-react';
+import { AlertTriangle, ClipboardCheck, Cloud, FolderCheck, GitBranch } from 'lucide-react';
 import type { Checkpoint } from '../../types/recovery';
-import { formatBytes, formatRelative, formatTimestamp, kindBadgeClass, kindLabel, safeText } from './format';
+import { backupStatus, formatBytes, formatRelative, formatTimestamp, kindBadgeClass, kindLabel, safeText } from './format';
 
 interface CheckpointTimelineProps {
   checkpoints: readonly Checkpoint[];
@@ -56,10 +56,22 @@ export function CheckpointTimeline({ checkpoints, selectedId, onSelect }: Checkp
                   </span>
                 )}
                 <span>{formatBytes(checkpoint.coverage.totalBytes)}</span>
-                {checkpoint.backup && (
+                {checkpoint.backup &&
+                  (backupStatus(checkpoint.backup).state === 'unconfirmed' ? (
+                    <span className="inline-flex items-center gap-1 text-yellow-700 dark:text-yellow-400">
+                      <AlertTriangle className="w-3 h-3" aria-hidden="true" />
+                      remote copy not confirmed (last check failed)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1">
+                      <Cloud className="w-3 h-3" aria-hidden="true" />
+                      remote copy recorded
+                    </span>
+                  ))}
+                {checkpoint.evidence.length > 0 && (
                   <span className="inline-flex items-center gap-1">
-                    <Cloud className="w-3 h-3" aria-hidden="true" />
-                    remote copy recorded
+                    <ClipboardCheck className="w-3 h-3" aria-hidden="true" />
+                    {checkpoint.evidence.length} note{checkpoint.evidence.length === 1 ? '' : 's'} or check{checkpoint.evidence.length === 1 ? '' : 's'}
                   </span>
                 )}
                 {checkpoint.recoveredAt && (

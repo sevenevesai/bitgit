@@ -70,7 +70,8 @@ export function RemoteRestore({ projectName, projectPath, defaultRemoteUrl, stat
     <div className="space-y-5 max-w-2xl">
       <p className="text-sm text-gray-600 dark:text-gray-400">
         Bring a saved version back from a remote copy, for example on another computer or after local history is gone. This works without any local saved
-        versions. Importing adds the version to BitGit’s history; your project is not changed.
+        versions. Importing adds the version to BitGit’s history; your project is not changed. A remote copy holds only the saved files, so an imported version
+        starts without any notes, checks or screenshots recorded on the original computer.
       </p>
 
       <div className="space-y-2">

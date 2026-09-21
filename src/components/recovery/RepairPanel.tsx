@@ -13,13 +13,15 @@ interface RepairPanelProps {
   comparedAt: string;
   selected: RecoveryChange[];
   onRepaired: (receipt: RecoveryReceipt) => Promise<void>;
+  // A failed repair can still leave an interrupted-repair journal behind; reload so it is shown.
+  onFailed: () => Promise<void>;
   onCompareAgain: () => void;
 }
 
 const count = (changes: RecoveryChange[], kind: RecoveryChange['kind']) => changes.filter((change) => change.kind === kind).length;
 
-export function RepairPanel({ checkpoint, comparison, comparedAt, selected, onRepaired, onCompareAgain }: RepairPanelProps) {
-  const { call, busy } = useRecoveryGate();
+export function RepairPanel({ checkpoint, comparison, comparedAt, selected, onRepaired, onFailed, onCompareAgain }: RepairPanelProps) {
+  const { call, busy, repairPending } = useRecoveryGate();
   const [confirming, setConfirming] = useState(false);
   const [repairing, setRepairing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +48,7 @@ export function RepairPanel({ checkpoint, comparison, comparedAt, selected, onRe
       await onRepaired(receipt);
     } catch (repairError) {
       setError(errorMessage(repairError));
+      await onFailed();
     } finally {
       setRepairing(false);
     }
@@ -83,20 +86,39 @@ export function RepairPanel({ checkpoint, comparison, comparedAt, selected, onRe
           }
         >
           {error}
-          {looksStale(error) && '\nYour files changed after this comparison. Compare again, then select the files again.'}
+          {/incomplete|interrupted/i.test(error)
+            ? '\nThe repair stopped part-way. Use the banner at the top of this window to undo it or to open the safety copy.'
+            : looksStale(error) && '\nYour files changed after this comparison. Compare again, then select the files again.'}
+        </Notice>
+      )}
+
+      {repairPending && (
+        <Notice tone="warning" title="Repairing is paused">
+          An earlier repair was interrupted. Undo it using the banner at the top before repairing more files.
         </Notice>
       )}
 
       {!confirming ? (
-        <button type="button" className={dangerButton} onClick={() => setConfirming(true)} disabled={busy !== null}>
+        <button type="button" className={dangerButton} onClick={() => setConfirming(true)} disabled={busy !== null || repairPending}>
           <Wrench className="w-4 h-4" aria-hidden="true" />
           Review repair…
         </button>
       ) : (
         <div className="space-y-3" role="group" aria-label="Confirm repair">
           <Notice tone="warning" title={`This changes ${selected.length} file${selected.length === 1 ? '' : 's'} in your project folder`}>
-            BitGit first saves all your current files as a safety copy, then changes only the files below. You can go back by recovering the safety copy.
+            BitGit first saves all eligible current files as a safety copy, then changes only the files below. Files BitGit never saves, such as dependency
+            folders, databases and files that look like secrets, are not in that safety copy: if a file you selected is one of them, BitGit backs it up first or
+            refuses the repair. You can go back by recovering the safety copy.
           </Notice>
+          {comparison.warnings.length > 0 && (
+            <Notice tone="info" title="Comparison warnings still apply">
+              <ul className="list-disc pl-4 space-y-0.5">
+                {comparison.warnings.map((warning, index) => (
+                  <li key={`${index}-${warning}`}>{safeText(warning)}</li>
+                ))}
+              </ul>
+            </Notice>
+          )}
           <div className="max-h-40 overflow-y-auto">
             <PagedList
               items={selected}
@@ -112,7 +134,7 @@ export function RepairPanel({ checkpoint, comparison, comparedAt, selected, onRe
             />
           </div>
           <div className="flex gap-2">
-            <button type="button" className={dangerButton} onClick={() => void repair()} disabled={busy !== null}>
+            <button type="button" className={dangerButton} onClick={() => void repair()} disabled={busy !== null || repairPending}>
               {repairing ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Wrench className="w-4 h-4" aria-hidden="true" />}
               Save safety copy and repair {selected.length} file{selected.length === 1 ? '' : 's'}
             </button>
