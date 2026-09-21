@@ -83,7 +83,9 @@ mod tests {
     fn the_lock_is_free_again_once_the_holder_is_dropped() {
         let tmp = TempDir::new("released");
         drop(acquire(&tmp.0).expect("first acquire holds the lock"));
-        assert!(acquire(&tmp.0).is_ok());
+        let _second = acquire(&tmp.0).expect("the lock is free after the drop");
+        // An unguarded fail-open start is also Ok, so prove this one really holds the lock.
+        assert!(matches!(acquire(&tmp.0), Err(AlreadyRunning)));
     }
 
     #[test]
