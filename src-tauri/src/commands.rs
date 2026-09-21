@@ -1121,8 +1121,8 @@ pub async fn recovery_command(
         .ok_or_else(|| "Project has no local path".to_string())?;
     recovery_request::validate_repo_path(&repo_path)?;
 
-    // The service call holds the service lock until the whole response arrives, so run
-    // it off the async runtime's worker threads.
+    // The service call blocks its thread until the response arrives, which can take minutes,
+    // so run it off the async runtime's worker threads.
     tauri::async_runtime::spawn_blocking(move || {
         // Checks can run for ten minutes. A scoped service keeps other projects available;
         // the vault's cross-process lock still serializes operations on this same project.

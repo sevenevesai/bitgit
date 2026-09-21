@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as readline from 'readline';
 import { GitOperations, cloneRepository, initRepository, addRemote, pushToRemote, getAnalyticsSnapshots } from './git-operations.js';
 import { GitHubAPI } from './github-api.js';
@@ -19,9 +20,22 @@ interface IPCResponse {
   error?: string;
 }
 
+// These take no Git locks and share no service state, so they need no ordering.
+const UNORDERED_COMMANDS = new Set(['ping', 'getAnalyticsSnapshots']);
+
+// Commands for one repository run one at a time in arrival order: Git's index and ref locks do not
+// tolerate overlap. Different repositories run concurrently. Commands without a repository share one
+// lane, which also keeps the token they read and write consistent.
+function laneOf(command: IPCCommand): string | null {
+  if (UNORDERED_COMMANDS.has(command.type)) return null;
+  const target: unknown = command.payload?.repoPath ?? command.payload?.localPath;
+  return typeof target === 'string' ? path.resolve(target).toLowerCase() : '';
+}
+
 export class IPCServer {
   private githubToken?: string;
   private isShuttingDown = false;
+  private lanes = new Map<string, Promise<unknown>>();
 
   constructor() {
     this.setupErrorHandlers();
@@ -59,24 +73,39 @@ export class IPCServer {
       terminal: false,
     });
 
-    rl.on('line', async (line: string) => {
+    rl.on('line', (line: string) => {
+      let command: IPCCommand;
       try {
-        const command: IPCCommand = JSON.parse(line);
-        const response = await this.handleCommand(command);
-        this.sendResponse(response);
+        command = JSON.parse(line);
       } catch (error: any) {
         this.sendResponse({
           id: 'unknown',
           success: false,
           error: `Failed to parse command: ${error.message}`,
         });
+        return;
       }
+      // handleCommand reports failures in its response and never rejects.
+      void this.inLane(laneOf(command), () => this.handleCommand(command))
+        .then((response) => this.sendResponse(response));
     });
 
     rl.on('close', () => {
       this.log('IPC server shutting down');
       process.exit(0);
     });
+  }
+
+  private inLane<T>(lane: string | null, task: () => Promise<T>): Promise<T> {
+    if (lane === null) return task();
+    const result = (this.lanes.get(lane) ?? Promise.resolve()).then(task);
+    // The lane stores a tail that never rejects, so one failed task cannot block the ones behind it.
+    const tail = result.catch(() => undefined);
+    this.lanes.set(lane, tail);
+    void tail.then(() => {
+      if (this.lanes.get(lane) === tail) this.lanes.delete(lane);
+    });
+    return result;
   }
 
   private async handleCommand(command: IPCCommand): Promise<IPCResponse> {

@@ -14,8 +14,8 @@ receipts and restoration.
    so checkpoints of a deleted source stay listable and recoverable. It is forwarded unchanged
    (canonicalizing would add `\\?\` and change the service's vault key).
 3. Forwards `service.execute("recovery", {repoPath, request, vaultRoot})`. Rust
-   supplies the vault root from the application data directory; callers cannot override it. The service
-   holds its child lock for the whole response, so a slow recovery delays other Git commands.
+   supplies the vault root from the application data directory; callers cannot override it. A slow
+   recovery delays only later commands for the same project (see Service transport).
 4. Only `backup`, `verifyBackup`, `remoteList`, `remoteImport` read the credential-manager token and pass it
    via `setGithubToken` (service memory only); local actions never touch credentials. The token is never
    logged or persisted and is masked in returned errors; requests are not logged.
@@ -82,11 +82,28 @@ returns an empty list and writes nothing. A file that cannot be read (4 tries, ~
 writes fail with the reason and load serves the backup read-only. **Retrieve:** close BitGit, copy the wanted
 `.corrupt-*` file over `projects.json`.
 
+## Service transport
+
+`GitService::execute` matches responses by `id` on a reader thread, so a caller waits only for its own
+answer. Ordering lives in the service (`laneOf` in `ipc-server.ts`): commands sharing a `repoPath` or
+`localPath` run one at a time in arrival order, because Git's index and ref locks do not tolerate overlap.
+Other repositories run concurrently, and commands without a path share one lane. `ping` and
+`getAnalyticsSnapshots` skip ordering; a command added to that set must take no Git locks and touch no
+service state, or same-repository operations will fail on `index.lock`.
+
+When the service exits, waiting callers fail at once and the next request restarts it. Service memory
+(the token) is lost on restart, so callers send the token before each use. A request unanswered for 30
+minutes fails without restarting the service: a restart would kill other repositories' running operations.
+
 ## Verification and limits
 
-`cargo test` uses isolated temp dirs (never APPDATA) and no service; runtime IPC is not unit-tested.
+`cargo test` uses isolated temp dirs (never APPDATA). The transport tests in `git_service.rs` spawn
+`node -e` stand-ins, so they need Node on PATH. Ordering is covered by
+`git-service/tests/ipc-concurrency.test.mjs` against the real service.
 
-- By code reading, a service crash is not detected or restarted: later commands fail until the app restarts.
+- By code reading, `setGithubToken` is service-wide state: two remote recoveries running at once can clear
+  or replace each other's token between `setGithubToken` and `recovery`. Carrying the token inside the
+  request would close the window.
 - Local imports match by path only (no origin URL read), so a scan does not link to a GitHub-only project.
 - The cache lock is in-process: two BitGit processes on one data directory are not coordinated.
 
