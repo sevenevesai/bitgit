@@ -105,3 +105,41 @@ No observed loss of source, index or HEAD, no silent overwrite, and no false sav
 passed claim. No finding blocks recovery of saved code. F1 breaks a documented Git workflow in
 the native app (inferred); fix it or retract the claim before release. F2-F6 are low. Native
 behavior, GitHub and POSIX remain unverified here.
+
+## Follow-up on c357ce9 (2026-09-21)
+
+The report above is frozen at cb87ea9. This section re-verifies F1-F6 on
+`review/recovery-complete` rebased onto c357ce9. It uses the same harness with the same evidence
+limits, plus `add_gitignore_patterns` routed to the real `src-tauri/src/gitignore.rs`, compiled
+into the scratch crate. Tauri IPC and permissions were not exercised; native proof is the
+parent's.
+
+| ID | Verdict | Evidence |
+|---|---|---|
+| F1 | Resolved | `cargo test gitignore`: 6 passed. Harness: the payload is exactly `{projectId, patterns}`. Existing non-UTF-8/CRLF bytes are kept and the pattern is appended in CRLF. The file list is re-read, with no `sync_project` and no fs API calls. A read-only file gives a visible error, bytes unchanged, no lock left behind, nothing published, and the review stays open. |
+| F2 | Resolved | A failure clears when saves are turned off in the tab, stays cleared after a background pass, and clears after an external disable plus Retry (valid disabled read). Corrupt settings stay attention with no ticks. |
+| F3 | Resolved | A newer edit is refused and kept; the banner and error stay after the refresh. External rollback then a UI undo gives `repairRollback` err then `state` ok: the banner is gone and Save is enabled. |
+| F4 | Resolved | Metadata tests: 5 passed. A redacted command is stored at 4000 with ` [truncated]`, and the receipt stays readable. A 20,874,602-byte receipt plus an escape-heavy check result is refused. Evidence is unchanged; only the check copy's legitimate `recoveredAt` is added, and the receipt stays readable. |
+| F5 | Resolved | The block holds through collapse, switching to a scope that loads, an in-flight retry, and a failed retry. A successful retry clears only that file; unchoosing clears it. |
+| F6 | Resolved | RECOVERY_WORKFLOWS.md:77-79 and VISUAL_GIT_GUIDE.md:89 now match the code. |
+
+Gates: `npm run build` and the service build exit 0; `cargo check` exit 0. Harness totals:
+`followup.mjs all` 27/27 (one run). F1/F5 and F2/F3/F4 also passed in separate runs.
+
+### Remaining observations (low, not blockers)
+
+- **R1:** a size refusal happens after the command has run. The receipt-size check is in
+  `appendEvidence`, after execution (recovery-evidence.ts:242 only preflights the 500-entry
+  count). Probe: a marker file written by the command exists, yet the UI shows "The check did not
+  run" (CheckPanel.tsx:162). The kept working copy's path is not reported. Remedy: preflight
+  headroom, or title such errors "The result was not recorded".
+- **R2:** when settings turn corrupt after an earlier tick failure, the attention summary still
+  shows that old error and its "next automatic try" time. `problemText` prefers `error` over
+  `settingsError` (AutomationObserver.tsx:8-12). The workspace shows the settings warning
+  correctly.
+- **R3:** Reload in the publish dialog keeps a chosen file but drops its failed-preview block
+  (rows remount). The guide lists only retry and unchoose.
+- **R4:** after an undo fails because another process already finished it, the refreshed state
+  is correct, but the error disappears with the banner, without explanation.
+- **Limit:** a crash-left `.gitignore.lock` in the project root makes later edits fail with a
+  visible error until it is removed by hand.
