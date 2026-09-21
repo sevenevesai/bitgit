@@ -263,7 +263,7 @@ export function CompareView({ checkpoint, sourceAvailable, onChanged, onOpenChec
             </div>
           )}
 
-          {comparison.changes.length > 0 && (
+          {comparison.changes.length > 0 && !checkpoint.metadataError && (
             <RepairPanel
               key={`${comparison.currentFingerprint}-${comparedAt}`}
               checkpoint={checkpoint}

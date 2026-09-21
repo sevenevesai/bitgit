@@ -56,6 +56,7 @@ export function CheckpointTimeline({ checkpoints, selectedId, onSelect }: Checkp
                   </span>
                 )}
                 <span>{formatBytes(checkpoint.coverage.totalBytes)}</span>
+                {checkpoint.metadataError && <span className="text-yellow-700 dark:text-yellow-400">notes and receipts unreadable</span>}
                 {checkpoint.backup &&
                   (backupStatus(checkpoint.backup).state === 'unconfirmed' ? (
                     <span className="inline-flex items-center gap-1 text-yellow-700 dark:text-yellow-400">

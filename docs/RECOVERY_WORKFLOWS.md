@@ -87,6 +87,14 @@ spaces, credentials, `?` or `#`.
 
 ## For developers
 
+Unreadable notes or receipts show a warning while saved code stays available to compare and recover
+into a new folder. New notes, checks, repair and backup for that checkpoint pause to preserve the
+original metadata. An unreadable repair journal also pauses new saves and automatic saving; use
+History to recover a safety copy. See [metadata recovery](RECOVERY_DESIGN.md#damaged-local-metadata).
+
+The observer re-reads settings at least every four minutes, including projects where saving was off,
+so a harness can enable saving while the app is open. It waits while that project is publishing.
+
 - `src/lib/recovery.ts`: every call goes through `recoveryCall`, which counts in-flight calls per project;
   `projectActivity` and `markWorkspaceOpen` expose that to the observer.
 - `src/lib/recovery-automation.ts`: status store, one-pass scheduler, backoff. `AutomationObserver.tsx`

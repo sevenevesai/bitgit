@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { useAppStore } from '../../stores/useAppStore';
-import { retryRecoveryAutomation, startRecoveryObserver, stopRecoveryObserver, syncRecoveryProjects, useAutomationProblems } from '../../lib/recovery-automation';
+import { retryRecoveryAutomation, startRecoveryObserver, stopRecoveryObserver, syncRecoveryProjects, syncRecoveryGitActivity, useAutomationProblems } from '../../lib/recovery-automation';
 import type { AutomationStatus } from '../../lib/recovery-automation';
 import { formatRelative, formatTimestamp, safeMultiline, safeText, secondaryButton } from './format';
 
@@ -68,12 +68,17 @@ function ProblemSummary() {
 // Mounted once by App. Renders the summary only; everything else is timers in lib/recovery-automation.
 export function RecoveryBackground() {
   const projects = useAppStore((state) => state.projects);
+  const syncingProjects = useAppStore((state) => state.syncingProjects);
   const key = useMemo(() => JSON.stringify(projects.map((project) => [project.id, project.name, project.localPath])), [projects]);
 
   useEffect(() => {
     startRecoveryObserver();
     return stopRecoveryObserver;
   }, []);
+
+  useEffect(() => {
+    syncRecoveryGitActivity(syncingProjects);
+  }, [syncingProjects]);
 
   useEffect(() => {
     syncRecoveryProjects(projects.map(({ id, name, localPath }) => ({ id, name, localPath })));

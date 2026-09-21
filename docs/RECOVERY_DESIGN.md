@@ -69,6 +69,8 @@ ref, without force or branch integration/deletion. Show the chosen destination b
 Read the exact ref back from the remote and match its object ID before recording a backup receipt.
 A historical receipt says when it was checked; verification failures remain visible. This proves
 the remote ref, not application health. Recovery performs an independent byte verification.
+After verifying an imported parentless commit and all its bytes, remove only that commit's shallow
+boundary. It can then be exported to another remote without including unrelated history.
 
 Remote discovery/import must work into a new vault, enabling recovery on another machine. Validate
 imported manifests, object types, bounds and paths as untrusted input; reject symlinks/submodules.
@@ -98,6 +100,8 @@ Node IPC `recovery` takes `{repoPath, request}` and returns the action's `Recove
 `RecoveryService.dispatch(request)` is shared by IPC and the JSON CLI. The native
 `recovery_command(project_id, request)` resolves a saved project's local path and forwards it;
 the browser cannot choose arbitrary vault roots. Native commands validate recognized actions.
+Long checks use a scoped service process that is stopped and reaped on return. Other projects use
+the shared service; the same vault remains serialized across both processes and the CLI.
 The CLI accepts `--repo <absolute path>` and a JSON request on stdin, prints one JSON response,
 and sets a nonzero exit code on failure. No server/listening port or arbitrary agent orchestration.
 
@@ -117,3 +121,20 @@ fresh-vault import, automatic idle/dedup behavior, evidence isolation and timeou
 semantics, and JSON CLI round trips. Native smoke uses isolated app data and disposable projects.
 Builds: `npm run build`, `npm --prefix git-service run build`, `cargo check` in `src-tauri`.
 Compilation does not replace driving the native save/compare/restore journey.
+
+## Damaged local metadata
+
+Immutable manifests and snapshot bytes remain authoritative. Unreadable receipt annotations set
+`Checkpoint.metadataError` without hiding history or preventing compare/new-copy recovery. Receipt
+writers refuse before running checks, repairing files or exporting. A completed recovered copy
+returns `warnings` if its receipt cannot be saved; it must not be reported as a failed restore.
+Unreadable repair journals set `RecoveryState.repairJournalError`; create, repair, rollback and
+automatic ticks stay blocked. Never infer journal contents or overwrite damaged originals.
+Metadata replacement syncs its temporary file before rename; this is not a power-loss guarantee.
+
+An empty ownership lock or orphaned `.reclaim` guard requires manual recovery: close BitGit and
+stop all harness calls using that vault, confirm no process still owns it, then preserve a copy of
+the vault and move only `operation.lock` and `operation.lock.reclaim` aside. Never clear a live lock
+or infer staleness from age. This rare crash case remains a known limitation of the lock protocol.
+For unreadable receipts or repair journals, recover a new copy from History before troubleshooting
+the preserved metadata. Without a valid journal, automatic in-place undo cannot be trusted.

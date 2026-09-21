@@ -1116,7 +1116,12 @@ pub async fn recovery_command(
     // The service call holds the service lock until the whole response arrives, so run
     // it off the async runtime's worker threads.
     tauri::async_runtime::spawn_blocking(move || {
-        let service = get_git_service()?;
+        // Checks can run for ten minutes. A scoped service keeps other projects available;
+        // the vault's cross-process lock still serializes operations on this same project.
+        // GitService::drop stops and waits for its owned Node child on every return path.
+        let service = if request.runs_check() {
+            Arc::new(GitService::new().map_err(|e| format!("Could not start the check service: {}", e))?)
+        } else { get_git_service()? };
         let token = if request.needs_remote() { forward_stored_token(&service) } else { None };
 
         service.recovery(&repo_path, request.into_request()).map_err(|e| {

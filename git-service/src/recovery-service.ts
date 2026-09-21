@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { assertNoLinks, atomicJson, exists, gitRun, readJson, safeRelative, sha256, within, withVaultLock } from './recovery-io.js';
+import { assertNoLinks, atomicJson, exists, gitRun, safeRelative, sha256, within, withVaultLock } from './recovery-io.js';
 import { captureSource, fingerprint, selectCapture, type CapturedSource, type SnapshotFile } from './recovery-capture.js';
 import { COVERAGE_LIMITS, exclusionReason, MAX_CAPTURE_BYTES, MAX_CAPTURE_FILES, MAX_FILE_BYTES } from './recovery-policy.js';
 import { pendingRepair, repairFiles, rollbackRepair } from './recovery-repair.js';
@@ -10,11 +10,12 @@ import { backupCheckpoint, importRemoteCheckpoint, listRemoteCheckpoints, verify
 import { autoTick, readRecoverySettings, updateRecoverySettings } from './recovery-automation.js';
 import { recordEvidence, runCheckpointCheck, readEvidenceImage } from './recovery-evidence.js';
 import { getRegression, observeRegression, startRegression } from './recovery-regression.js';
+import { readCheckpointMetadata } from './recovery-metadata.js';
 import type { Checkpoint, CheckpointPreview, RecoveryComparison, RecoveryReceipt, RecoveryRequest, RecoveryResults, RecoverySettings, RecoveryState } from './recovery-types.js';
 
 export const DEFAULT_RECOVERY_SETTINGS: RecoverySettings = { automaticEnabled: false, idleMinutes: 5, retention: 'keep_all' };
 export interface RecoveryOptions { vaultRoot?: string; githubToken?: string; now?: () => Date; }
-export interface CheckpointManifest extends Omit<Checkpoint, 'commitOid' | 'treeOid' | 'backup' | 'evidence' | 'recoveredAt'> {
+export interface CheckpointManifest extends Omit<Checkpoint, 'commitOid' | 'treeOid' | 'backup' | 'evidence' | 'recoveredAt' | 'metadataError'> {
   format: 'bitgit-checkpoint';
   version: 1;
   entries: Array<{ path: string; sizeBytes: number; sha256: string; mode: '100644' | '100755' }>;
@@ -69,9 +70,10 @@ export class RecoveryService {
   }
   async updateMetadata(id: string, update: Partial<Pick<Checkpoint, 'backup' | 'evidence' | 'recoveredAt'>>): Promise<void> {
     const file = this.metadataPath(id);
-    const previous = await readJson<Record<string, unknown>>(file, {});
+    const previous = await this.readMetadata(id);
     await atomicJson(file, { ...previous, ...update });
   }
+  async readMetadata(id: string) { return readCheckpointMetadata(this.metadataPath(id), id); }
   async capture(): Promise<CapturedSource> { return captureSource(this.repoPath, this.gitDir); }
   async preview(): Promise<CheckpointPreview> {
     const { fingerprint, coverage, branch, head } = await this.capture();
@@ -86,7 +88,11 @@ export class RecoveryService {
     try { settings = await readRecoverySettings(this); } catch (error) {
       settingsError = error instanceof Error ? error.message : String(error);
     }
-    return { checkpoints, settings, settingsError, vaultPath: this.vaultPath, sourceAvailable: await exists(this.repoPath), pendingRepair: await pendingRepair(this) };
+    let pending: RecoveryState['pendingRepair'] = null, repairJournalError: string | undefined;
+    try { pending = await pendingRepair(this); } catch (error) {
+      repairJournalError = error instanceof Error ? error.message : String(error);
+    }
+    return { checkpoints, settings, settingsError, repairJournalError, vaultPath: this.vaultPath, sourceAvailable: await exists(this.repoPath), pendingRepair: pending };
   }
   async create(request: Extract<RecoveryRequest, { action: 'create' }>): Promise<Checkpoint> {
     if (typeof request.label !== 'string' || !request.label.trim() || request.label.length > 120) throw new Error('Name the milestone using 1–120 characters');
@@ -180,8 +186,11 @@ export class RecoveryService {
     const commitOid = (await this.git(['rev-parse', '--verify', `refs/checkpoints/${id}^{commit}`])).toString('utf8').trim();
     const { manifest, treeOid } = await this.readManifest(commitOid);
     if (manifest.id !== id) throw new Error('Checkpoint ID does not match its saved manifest');
-    const metadata = await readJson<Partial<Checkpoint>>(this.metadataPath(id), {});
-    return { ...this.checkpointFromManifest(manifest), commitOid, treeOid, evidence: metadata.evidence ?? [], backup: metadata.backup ?? null, recoveredAt: metadata.recoveredAt ?? null };
+    let metadata: Awaited<ReturnType<RecoveryService['readMetadata']>> = {}, metadataError: string | undefined;
+    try { metadata = await this.readMetadata(id); } catch (error) {
+      metadataError = error instanceof Error ? error.message : String(error);
+    }
+    return { ...this.checkpointFromManifest(manifest), commitOid, treeOid, evidence: metadata.evidence ?? [], backup: metadata.backup ?? null, recoveredAt: metadata.recoveredAt ?? null, metadataError };
   }
   async readSnapshot(checkpoint: Checkpoint): Promise<SnapshotFile[]> {
     const { manifest } = await this.readManifest(checkpoint.commitOid);
@@ -254,8 +263,11 @@ export class RecoveryService {
       if (await exists(target)) throw new Error('The destination was created by another operation. Choose a new folder.');
       await fs.rename(staging, target);
       const verifiedAt = this.now();
-      await this.updateMetadata(id, { recoveredAt: verifiedAt });
-      return { checkpointId: id, destination: target, fileCount: files.length, verifiedAt };
+      const warnings: string[] = [];
+      try { await this.updateMetadata(id, { recoveredAt: verifiedAt }); } catch {
+        warnings.push('The recovered files were verified, but the recovery receipt could not be saved. Existing metadata was preserved.');
+      }
+      return { checkpointId: id, destination: target, fileCount: files.length, verifiedAt, ...(warnings.length ? { warnings } : {}) };
     } finally { await fs.rm(staging, { recursive: true, force: true }); }
   }
   async dispatch<R extends RecoveryRequest>(request: R): Promise<RecoveryResults[R['action']]> {

@@ -29,7 +29,7 @@ export function BackupPanel({ checkpoint, defaultRemoteUrl, onChanged }: BackupP
   // The saved receipt is the truth after a reopen; session notices below only ever agree with it.
   const status = receipt ? backupStatus(receipt) : null;
   const urlProblem = remoteUrl.trim() ? validateRemoteUrl(remoteUrl) : null;
-  const canBackUp = !busy && remoteUrl.trim() !== '' && urlProblem === null;
+  const canBackUp = !busy && !checkpoint.metadataError && remoteUrl.trim() !== '' && urlProblem === null;
 
   const backUp = async () => {
     setBackupError(null);
@@ -93,7 +93,7 @@ export function BackupPanel({ checkpoint, defaultRemoteUrl, onChanged }: BackupP
             )}
           </div>
         ) : (
-          <p className="text-sm text-gray-600 dark:text-gray-400">No remote copy of this saved version has been recorded.</p>
+          <p className="text-sm text-gray-600 dark:text-gray-400">{checkpoint.metadataError ? 'The backup record is unreadable. The remote copy has not been checked.' : 'No remote copy of this saved version has been recorded.'}</p>
         )}
 
         {verified && status?.state === 'verified' && (

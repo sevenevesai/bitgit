@@ -11,7 +11,7 @@ const DEFAULT_TIMEOUT_SECONDS = 120;
 const MAX_COMMAND_LENGTH = 4000;
 
 interface CheckPanelProps {
-  checkpoint: { id: string; label: string };
+  checkpoint: { id: string; label: string; metadataError?: string };
   // Called after a result is recorded so the workspace can reload the saved version's entries.
   onRecorded?: (entry: CheckpointEvidence) => Promise<void>;
 }
@@ -165,7 +165,7 @@ export function CheckPanel({ checkpoint, onRecorded }: CheckPanelProps) {
       )}
 
       {!confirming ? (
-        <button type="button" className={primaryButton} onClick={() => setConfirming(true)} disabled={busy !== null || !ready}>
+        <button type="button" className={primaryButton} onClick={() => setConfirming(true)} disabled={busy !== null || !ready || Boolean(checkpoint.metadataError)}>
           <Play className="w-4 h-4" aria-hidden="true" />
           Run check…
         </button>
@@ -177,7 +177,7 @@ export function CheckPanel({ checkpoint, onRecorded }: CheckPanelProps) {
             {Number(timeout) === 1 ? '' : 's'}. It runs with your normal permissions and can use the network. Your current project is not touched.
           </Notice>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className={primaryButton} onClick={() => void run()} disabled={busy !== null || !ready}>
+            <button type="button" className={primaryButton} onClick={() => void run()} disabled={busy !== null || !ready || Boolean(checkpoint.metadataError)}>
               {running ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Play className="w-4 h-4" aria-hidden="true" />}
               Run “{safeText(trimmed.length > 40 ? `${trimmed.slice(0, 40)}…` : trimmed)}” on this version
             </button>

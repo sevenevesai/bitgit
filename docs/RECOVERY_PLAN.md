@@ -61,6 +61,6 @@ Workers use isolated worktrees, explicit-file commits and no merges/pushes. Reba
 before landing. The project's `--no-ff` convention overrides the skill's fast-forward default.
 
 Preserve user edits in `docs/HOW_TO_USE.md`, `.claude/*` and `.lloom/*`; exclude them from task commits.
-Browser GitHub authorization needs a registered client ID. Use existing secure token setup unless
-the user provides one; do not fabricate credentials or register an external app. Research proposals
+The user chose existing secure token setup for this release; browser sign-in follows OAuth app
+registration. Do not fabricate credentials or register an external app. Research proposals
 for semantic AI repair and user recruitment remain validation ideas, not shipped capability claims.

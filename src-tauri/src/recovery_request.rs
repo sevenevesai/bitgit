@@ -140,6 +140,8 @@ pub struct ValidatedRecovery {
 }
 
 impl ValidatedRecovery {
+    pub fn runs_check(&self) -> bool { self.action == "runCheck" }
+
     /// Whether the action may need the transient GitHub token. Local actions never do.
     pub fn needs_remote(&self) -> bool {
         REMOTE_ACTIONS.contains(&self.action.as_str())

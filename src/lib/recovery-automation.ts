@@ -166,10 +166,10 @@ function applyState(projectId: string, state: RecoveryState) {
     enabled: state.settingsError ? false : state.settings.automaticEnabled,
     idleMinutes: state.settings.idleMinutes,
     settingsError: state.settingsError ?? null,
-    repairPending: Boolean(state.pendingRepair),
+    repairPending: Boolean(state.pendingRepair || state.repairJournalError),
   });
   stateCheckedAt.set(projectId, Date.now());
-  if (!state.settingsError && !state.pendingRepair) {
+  if (!state.settingsError && !state.pendingRepair && !state.repairJournalError) {
     failures.delete(projectId);
     retryAt.delete(projectId);
   }
@@ -217,7 +217,7 @@ async function tick(projectId: string) {
 function skipReason(projectId: string): AutomationStatus['skipped'] {
   const activity = projectActivity(projectId);
   if (activity.workspaceOpen) return 'workspace-open';
-  return activity.interactiveBusy || activity.backgroundBusy ? 'busy' : null;
+  return activity.interactiveBusy || activity.backgroundBusy || gitBusyProjects.has(projectId) ? 'busy' : null;
 }
 
 async function visit(projectId: string) {
@@ -233,8 +233,8 @@ async function visit(projectId: string) {
     return;
   }
 
-  const stuck = status.settingsError !== null || status.repairPending;
-  if (!status.known || forced || (stuck && Date.now() - (stateCheckedAt.get(projectId) ?? 0) > PROBLEM_RECHECK_MS)) {
+  // Harness changes must be noticed even when this app last saw automatic saving disabled.
+  if (!status.known || forced || Date.now() - (stateCheckedAt.get(projectId) ?? 0) > PROBLEM_RECHECK_MS) {
     if (!(await readState(projectId))) return;
   }
 
@@ -254,6 +254,9 @@ async function visit(projectId: string) {
 }
 
 // ---- Public control surface ----
+
+let gitBusyProjects: ReadonlySet<string> = new Set();
+export function syncRecoveryGitActivity(projectIds: ReadonlySet<string>) { gitBusyProjects = projectIds; }
 
 export function startRecoveryObserver() {
   if (started) return;

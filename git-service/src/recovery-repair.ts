@@ -24,12 +24,17 @@ interface RepairJournal {
 const journalFile = (service: RecoveryService) => path.join(service.vaultPath, 'pending-repair.json');
 const isId = (id: string) => /^[0-9a-f-]{36}$/.test(id);
 async function readJournal(service: RecoveryService): Promise<RepairJournal | null> {
-  const journal = await readJson<RepairJournal | null>(journalFile(service), null);
-  if (!journal) return null;
-  if (journal.version !== 1 || !isId(journal.id) || !isId(journal.safetyCheckpointId) || !isId(journal.targetCheckpointId)
+  let journal: RepairJournal | undefined;
+  try { journal = await readJson<RepairJournal | undefined>(journalFile(service), undefined); } catch {
+    throw new Error('Interrupted repair journal is unreadable. Saving and file repair are paused; recover a safety checkpoint into a separate folder. The original journal is preserved.');
+  }
+  if (journal === undefined) return null;
+  if (!journal || journal.version !== 1 || !isId(journal.id) || !isId(journal.safetyCheckpointId) || !isId(journal.targetCheckpointId)
+    || typeof journal.startedAt !== 'string' || !Number.isFinite(Date.parse(journal.startedAt))
     || !Array.isArray(journal.entries) || journal.entries.length > 10_000) throw new Error('Interrupted repair journal is unreadable; recover its safety checkpoint into a separate folder');
   const names = new Set<string>();
   for (const entry of journal.entries) {
+    if (!entry || typeof entry.path !== 'string' || !['100644', '100755'].includes(entry.beforeMode)) throw new Error('Interrupted repair journal contains unsafe entries');
     safeRelative(entry.path);
     if (names.has(entry.path.toLowerCase()) || (entry.beforeHash !== null && !/^[0-9a-f]{64}$/.test(entry.beforeHash))
       || (entry.afterHash !== null && !/^[0-9a-f]{64}$/.test(entry.afterHash))
@@ -85,6 +90,7 @@ async function cleanJournal(service: RecoveryService, journal: RepairJournal): P
 }
 
 export async function repairFiles(service: RecoveryService, request: Extract<RecoveryRequest, { action: 'repair' }>): Promise<RecoveryReceipt> {
+  await service.readMetadata(request.checkpointId);
   if (!Array.isArray(request.paths) || !request.paths.length || request.paths.length > 10_000
     || typeof request.expectedFingerprint !== 'string') throw new Error('Select files from a current comparison before repairing');
   const paths = [...new Set(request.paths.map(safeRelative))];

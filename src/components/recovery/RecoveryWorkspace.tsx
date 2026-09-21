@@ -90,7 +90,7 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
     [projectId],
   );
 
-  const repairPending = Boolean(state?.pendingRepair);
+  const repairPending = Boolean(state?.pendingRepair || state?.repairJournalError);
   const gate = useMemo<RecoveryGate>(() => ({ busy, call, repairPending }), [busy, call, repairPending]);
 
   // Every refresh is a real state call; nothing is cached between opens.
@@ -290,8 +290,9 @@ export function RecoveryWorkspace({ project, onClose }: RecoveryWorkspaceProps) 
         </div>
 
         <RecoveryGateContext.Provider value={gate}>
-          {(state?.pendingRepair || rolledBack || state?.settingsError) && (
+          {(state?.pendingRepair || state?.repairJournalError || rolledBack || state?.settingsError) && (
             <div className="px-4 pt-3 space-y-2">
+              {state?.repairJournalError && <Notice tone="warning" title="Saving and file repair are paused">{state.repairJournalError}{'\nOpen History to recover a saved version or safety copy into a separate folder.'}</Notice>}
               {state?.pendingRepair && (
                 <PendingRepairBanner
                   pending={state.pendingRepair}

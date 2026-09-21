@@ -127,7 +127,7 @@ export function EvidencePanel({ checkpoint, onChanged }: EvidencePanelProps) {
   const foreign = entries.length - own.length;
   const text = description.trim();
   const tooLong = text.length > MAX_DESCRIPTION;
-  const canAdd = !busy && text !== '' && !tooLong;
+  const canAdd = !busy && !checkpoint.metadataError && text !== '' && !tooLong;
 
   const choose = async () => {
     setPickerError(null);
@@ -267,7 +267,7 @@ export function EvidencePanel({ checkpoint, onChanged }: EvidencePanelProps) {
           </Notice>
         )}
         {own.length === 0 ? (
-          <p className="text-sm text-gray-500 dark:text-gray-400">Nothing recorded for this saved version yet.</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{checkpoint.metadataError ? 'The notes and check records could not be read.' : 'Nothing recorded for this saved version yet.'}</p>
         ) : (
           <PagedList
             items={own}

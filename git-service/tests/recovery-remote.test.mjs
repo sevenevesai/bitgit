@@ -80,6 +80,32 @@ test('failed remote recheck persists the failure without inventing a new verifie
   assert.match(checkpoint.backup.lastCheckError, /not verified/);
 });
 
+test('an imported checkpoint can be backed up again and recovered on a third machine', async t => {
+  const { root, remote, service, saved } = await fixture(t);
+  const first = await service.dispatch({ action: 'backup', checkpointId: saved.id, remoteUrl: remote });
+  const secondRemote = path.join(root, 'second.git');
+  assert.equal(spawnSync('git', ['init', '--bare', secondRemote], { windowsHide: true }).status, 0);
+  const second = new RecoveryService(path.join(root, 'missing-second'), { vaultRoot: path.join(root, 'second-vault') });
+  await second.dispatch({ action: 'remoteImport', remoteUrl: remote, ref: first.ref });
+  assert.equal(await fs.stat(path.join(second.gitDir, 'shallow')).then(() => true, () => false), false);
+  const backup = await second.dispatch({ action: 'backup', checkpointId: saved.id, remoteUrl: secondRemote });
+  const third = new RecoveryService(path.join(root, 'missing-third'), { vaultRoot: path.join(root, 'third-vault') });
+  const imported = await third.dispatch({ action: 'remoteImport', remoteUrl: secondRemote, ref: backup.ref });
+  const destination = path.join(root, 'third-recovered');
+  await third.dispatch({ action: 'recover', checkpointId: imported.id, destination });
+  assert.equal(await fs.readFile(path.join(destination, 'app.txt'), 'utf8'), 'known bytes\r\n');
+});
+
+test('backup repairs a legacy shallow root boundary without discarding other boundaries', async t => {
+  const { remote, service, saved, source } = await fixture(t);
+  await fs.writeFile(path.join(source, 'app.txt'), 'other boundary');
+  const another = await service.dispatch({ action: 'create', label: 'Other root' });
+  const shallow = path.join(service.gitDir, 'shallow');
+  await fs.writeFile(shallow, `${saved.commitOid}\n${another.commitOid}\n`);
+  await service.dispatch({ action: 'backup', checkpointId: saved.id, remoteUrl: remote });
+  assert.equal(await fs.readFile(shallow, 'utf8'), `${another.commitOid}\n`);
+});
+
 test('backup never forces replacement of a conflicting remote checkpoint', async t => {
   const { remote, service, saved, source } = await fixture(t);
   const receipt = await service.dispatch({ action: 'backup', checkpointId: saved.id, remoteUrl: remote });

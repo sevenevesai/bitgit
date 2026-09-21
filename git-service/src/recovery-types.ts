@@ -45,6 +45,7 @@ export interface Checkpoint {
   evidence: CheckpointEvidence[];
   backup: BackupReceipt | null;
   recoveredAt: string | null;
+  metadataError?: string;
 }
 export interface CheckpointPreview {
   fingerprint: string;
@@ -74,6 +75,7 @@ export interface RecoveryReceipt {
   fileCount: number;
   verifiedAt: string;
   safetyCheckpointId?: string;
+  warnings?: string[];
 }
 export interface RecoverySettings {
   automaticEnabled: boolean;
@@ -84,6 +86,7 @@ export interface RecoverySettings {
 }
 export interface RecoveryState {
   settingsError?: string;
+  repairJournalError?: string;
   checkpoints: Checkpoint[];
   settings: RecoverySettings;
   vaultPath: string;

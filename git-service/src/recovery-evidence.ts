@@ -90,6 +90,7 @@ const boundedText = (value: unknown, label: string, limit: number): string => {
 };
 
 export async function recordEvidence(service: RecoveryService, request: Extract<RecoveryRequest, { action: 'evidence' }>): Promise<CheckpointEvidence> {
+  await service.readMetadata(request.checkpointId);
   const checkpoint = await service.readCheckpoint(request.checkpointId);
   const description = boundedText(request.description, 'The observation', MAX_DESCRIPTION);
   if (!OUTCOMES.includes(request.outcome)) throw new Error('Mark the observation passed, failed or untested');
@@ -233,6 +234,7 @@ async function sourceChanges(service: RecoveryService, directory: string, expect
 const listChanges = (changes: string[]) => changes.slice(0, 10).join('; ') + (changes.length > 10 ? `; and ${changes.length - 10} more` : '');
 
 export async function runCheckpointCheck(service: RecoveryService, request: Extract<RecoveryRequest, { action: 'runCheck' }>): Promise<CheckpointEvidence> {
+  await service.readMetadata(request.checkpointId);
   const command = boundedText(request.command, 'The check command', MAX_COMMAND);
   const timeoutSeconds = request.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
   if (typeof timeoutSeconds !== 'number' || !Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 600) throw new Error('The check time limit must be a whole number of seconds from 1 to 600');

@@ -175,6 +175,7 @@ export function RecoverCopy({ checkpointId, projectName, projectPath, vaultPath,
           {'\n'}BitGit checked each written file against the saved version. It did not copy Git history, run scripts or install dependencies. The folder is a
           plain copy, not a Git repository, and nothing has checked that the code runs.
           {copyNote && `\n${copyNote}`}
+          {receipt.warnings?.map((warning) => <span key={warning} className="block mt-2 text-yellow-800 dark:text-yellow-300">{safeText(warning)}</span>)}
         </Notice>
       )}
     </div>

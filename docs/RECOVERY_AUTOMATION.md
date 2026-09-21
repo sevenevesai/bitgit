@@ -9,7 +9,8 @@ Nothing here changes your source files, branch, or Git index.
 Settings (`{"action":"settings","settings":{...}}`): `automaticEnabled` (boolean, default off),
 `idleMinutes` (integer 1–60, default 5), `retention` (must be `keep_all`), optional `excludedPaths`
 (project-relative, forward slashes, no duplicates). Unknown keys are rejected. Missing settings use the
-defaults; a malformed `settings.json` makes `state`/`autoTick` fail until valid settings are saved again.
+defaults. Malformed settings pause `autoTick`; `state` returns disabled defaults plus `settingsError`
+so saved history stays available. Saving valid settings clears the error.
 
 Nothing runs in the background. The UI calls `autoTick` on a timer while BitGit is open; a harness
 calls it explicitly. Each tick returns `{checkpoint, reason}`:

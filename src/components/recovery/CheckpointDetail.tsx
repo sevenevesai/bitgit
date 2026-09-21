@@ -9,6 +9,7 @@ import { CoverageView } from './CoverageView';
 import { EvidencePanel } from './EvidencePanel';
 import { backupStatus, formatBytes, formatRelative, formatTimestamp, kindBadgeClass, kindLabel, safeMultiline, safeText, shortId } from './format';
 import { RecoverCopy } from './RecoverCopy';
+import { Notice } from './Notice';
 import { TabBar, panelId, tabId } from './TabBar';
 import type { TabDef } from './TabBar';
 
@@ -76,11 +77,11 @@ function Facts({ checkpoint }: { checkpoint: Checkpoint }) {
             )}
           </>
         ) : (
-          'Not copied to a remote'
+          checkpoint.metadataError ? 'Backup record unreadable' : 'Not copied to a remote'
         )}
       </Fact>
       <Fact label="Recovered copy">
-        {checkpoint.recoveredAt ? `A recovered copy was verified ${formatTimestamp(checkpoint.recoveredAt)}` : 'No recovered copy recorded'}
+        {checkpoint.metadataError ? 'Recovery record unreadable' : checkpoint.recoveredAt ? `A recovered copy was verified ${formatTimestamp(checkpoint.recoveredAt)}` : 'No recovered copy recorded'}
       </Fact>
       <Fact label="ID">
         <span className="font-mono break-all">{safeText(checkpoint.id)}</span>
@@ -111,6 +112,7 @@ export function CheckpointDetail({ checkpoint, state, projectName, projectPath, 
       <div>
         <h3 className="text-lg font-semibold text-gray-900 dark:text-white break-words">{safeText(checkpoint.label) || '(unnamed)'}</h3>
       </div>
+      {checkpoint.metadataError && <Notice tone="warning" title="Saved files are available; notes and receipts need attention">{checkpoint.metadataError}</Notice>}
       <TabBar prefix={prefix} label="Saved version actions" tabs={tabsFor(checkpoint)} active={tab} onChange={show} />
 
       {panel(
