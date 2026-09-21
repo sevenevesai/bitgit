@@ -21,14 +21,44 @@ export interface PublishOptions {
   allowWarnings?: boolean;
 }
 
+// Why a sync did not (fully) succeed, or what it did. Only 'up-to-date', 'fast-forwarded' and
+// 'published' accompany success: true.
+export type SyncOutcome =
+  | 'up-to-date'
+  | 'fast-forwarded'
+  | 'published'
+  | 'needs-selection'
+  | 'dirty-behind'
+  | 'diverged'
+  | 'conflicted'
+  | 'blocked'
+  | 'fetch-failed'
+  | 'push-failed'
+  | 'failed';
+
 export interface SyncResult {
   success: boolean;
   message: string;
-  committed?: number;
-  pushed?: number;
+  committed?: number;   // files committed by this call
+  pushed?: number;      // commits transferred to the remote by this call
+  pulled?: number;      // commits fast-forwarded from the upstream by this call
   merged?: string[];
   deleted?: string[];
   errors?: string[];
+  outcome?: SyncOutcome;
+  issues?: FileValidationIssue[];
+}
+
+export type FileChangeKind = 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'typechange' | 'conflicted';
+
+// One pending path. `staged`/`unstaged` are the index and working-tree states; an untracked file
+// has neither. A path can be staged and unstaged at once (partially staged).
+export interface FileChangeInfo {
+  path: string;
+  staged: FileChangeKind | null;
+  unstaged: FileChangeKind | null;
+  untracked: boolean;
+  conflicted: boolean;
 }
 
 // Advanced Git feature types
@@ -50,6 +80,9 @@ export interface CommitInfo {
   refs: string;
 }
 
+// staged = HEAD to index, unstaged = index to working tree, untracked = whole new file.
+export type DiffScope = 'staged' | 'unstaged' | 'untracked';
+
 export interface DiffInfo {
   fileName: string;
   changes: Array<{
@@ -57,6 +90,9 @@ export interface DiffInfo {
     type: 'add' | 'remove' | 'context';
     content: string;
   }>;
+  scope?: DiffScope;
+  binary?: boolean;     // changes is empty because the content is not text
+  truncated?: boolean;  // changes was cut at the preview limit
 }
 
 export interface StashInfo {
