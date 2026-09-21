@@ -767,25 +767,29 @@ describe('explicit branch integration', () => {
     return { remote, work, other };
   }
 
-  it('mergeBranches merges with --no-ff, pushes, then deletes the merged remote branch', async () => {
+  it('mergeBranches merges with --no-ff and pushes, keeping the source branches', async () => {
     const { remote, work } = withFeature();
+    fx.git(work, 'fetch', '-q');
+    fx.git(work, 'branch', 'feature', 'origin/feature');
+    const featureBefore = fx.git(remote, 'rev-parse', 'refs/heads/feature');
     const merged = await new GitOperations(work).mergeBranches(['feature']);
     assert.deepEqual(merged, ['feature']);
     assert.equal(fx.git(work, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ').length, 3);
     assert.match(fx.git(work, 'log', '-1', '--format=%s'), /Merge branch 'feature'/);
     assert.equal(fx.git(remote, 'rev-parse', 'trunk'), fx.head(work));
-    assert.doesNotMatch(fx.remoteHeads(remote), /refs\/heads\/feature/);
+    assert.equal(fx.git(remote, 'rev-parse', 'refs/heads/feature'), featureBefore);
+    assert.equal(fx.git(work, 'rev-parse', 'refs/heads/feature'), featureBefore);
     assert.equal(existsSync(join(work, 'feature.txt')), true);
   });
 
-  it('pullBranches integrates but keeps the remote branch alive', async () => {
+  it('pullBranches integrates and keeps the remote branch', async () => {
     const { remote, work } = withFeature();
     assert.deepEqual(await new GitOperations(work).pullBranches(['feature']), ['feature']);
     assert.match(fx.remoteHeads(remote), /refs\/heads\/feature/);
     assert.equal(fx.git(remote, 'rev-parse', 'trunk'), fx.head(work));
   });
 
-  it('reports a rejected push after a successful merge and does not delete anything', async () => {
+  it('reports a rejected push after a successful merge and leaves the remote unchanged', async () => {
     const { remote, work } = withFeature();
     const hook = join(remote, 'hooks', 'pre-receive');
     writeFileSync(hook, '#!/bin/sh\necho "policy says no" >&2\nexit 1\n');
