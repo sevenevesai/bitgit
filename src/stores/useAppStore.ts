@@ -15,11 +15,6 @@ import {
   QueuedOperation,
   RetryConfig,
   AnalyticsData,
-  DashboardOverview,
-  ActivityEntry,
-  ActivityTimeline,
-  HealthIndicator,
-  ContributionHeatmap,
   EditorConfig,
   EditorPreset,
   EditorAvailability,
@@ -93,7 +88,6 @@ interface AppState {
 
   // Priority 1: Analytics Actions
   loadAnalytics: () => Promise<void>;
-  refreshAnalytics: () => Promise<void>;
 }
 
 const defaultSettings: AppSettings = {
@@ -781,131 +775,17 @@ export const useAppStore = create<AppState>((set, get) => {
 
   // ===== Priority 1: Analytics =====
 
-  // Load analytics data progressively - each section updates as it loads
+  // Keeps the previous result on screen while a newer one loads: revisiting the tab must not blank it.
   loadAnalytics: async () => {
+    if (get().isLoadingAnalytics) return;
     set({ isLoadingAnalytics: true });
-    const timestamp = new Date().toISOString();
-
-    // Initialize empty analytics structure
-    const emptyAnalytics: AnalyticsData = {
-      overview: null as any,
-      timeline: {
-        entries: [],
-        dateRange: { start: timestamp, end: timestamp },
-        totalCommits: 0,
-        totalProjects: 0
-      },
-      health: [],
-      heatmap: null as any,
-      lastUpdated: timestamp,
-      generatedAt: timestamp,
-    };
-    set({ analytics: emptyAnalytics });
-
     try {
-      console.log('[Store] Loading analytics sections progressively...');
-
-      // Start all sections in parallel, but update state as each completes
-      const overviewPromise = invoke<DashboardOverview>('generate_analytics_overview').then(overview => {
-        console.log('[Store] Overview loaded');
-        set((state) => ({
-          analytics: {
-            ...(state.analytics || emptyAnalytics),
-            overview,
-            lastUpdated: timestamp,
-          }
-        }));
-        return overview;
-      });
-
-      const timelinePromise = invoke<ActivityEntry[]>('generate_analytics_timeline').then(timelineEntries => {
-        console.log('[Store] Timeline loaded:', timelineEntries.length, 'entries');
-        const timeline: ActivityTimeline = {
-          entries: timelineEntries,
-          dateRange: { start: timestamp, end: timestamp },
-          totalCommits: timelineEntries.length,
-          totalProjects: new Set(timelineEntries.map(e => e.projectId)).size
-        };
-        set((state) => ({
-          analytics: {
-            ...(state.analytics || emptyAnalytics),
-            timeline,
-            lastUpdated: timestamp,
-          }
-        }));
-        return timeline;
-      });
-
-      const healthPromise = invoke<HealthIndicator[]>('generate_analytics_health').then(health => {
-        console.log('[Store] Health loaded:', health.length, 'indicators');
-        set((state) => ({
-          analytics: {
-            ...(state.analytics || emptyAnalytics),
-            health,
-            lastUpdated: timestamp,
-          }
-        }));
-        return health;
-      });
-
-      const heatmapPromise = invoke<ContributionHeatmap>('generate_analytics_heatmap').then(heatmap => {
-        console.log('[Store] Heatmap loaded');
-        set((state) => ({
-          analytics: {
-            ...(state.analytics || emptyAnalytics),
-            heatmap,
-            lastUpdated: timestamp,
-          }
-        }));
-        return heatmap;
-      });
-
-      // Wait for all to complete
-      await Promise.all([overviewPromise, timelinePromise, healthPromise, heatmapPromise]);
-
-      console.log('[Store] All analytics sections loaded');
-      set({ isLoadingAnalytics: false });
+      const analytics = await invoke<AnalyticsData>('generate_analytics');
+      set({ analytics });
     } catch (error) {
       console.error('[Store] Failed to load analytics:', error);
-      toast.error('Failed to load analytics');
-      set({ isLoadingAnalytics: false });
-    }
-  },
-
-  // Refresh analytics (same as load, but with user feedback)
-  refreshAnalytics: async () => {
-    const loadingToast = toast.loading('Refreshing analytics...');
-    set({ isLoadingAnalytics: true });
-    try {
-      const [overview, timelineEntries, health, heatmap] = await Promise.all([
-        invoke<DashboardOverview>('generate_analytics_overview'),
-        invoke<ActivityEntry[]>('generate_analytics_timeline'),
-        invoke<HealthIndicator[]>('generate_analytics_health'),
-        invoke<ContributionHeatmap>('generate_analytics_heatmap'),
-      ]);
-
-      const timestamp = new Date().toISOString();
-      const timeline: ActivityTimeline = {
-        entries: timelineEntries,
-        dateRange: { start: timestamp, end: timestamp },
-        totalCommits: timelineEntries.length,
-        totalProjects: new Set(timelineEntries.map(e => e.projectId)).size
-      };
-
-      const analytics: AnalyticsData = {
-        overview,
-        timeline,
-        health,
-        heatmap,
-        lastUpdated: timestamp,
-        generatedAt: timestamp,
-      };
-
-      set({ analytics, isLoadingAnalytics: false });
-      toast.success('Analytics refreshed', { id: loadingToast });
-    } catch (error) {
-      console.error('[Store] Failed to refresh analytics:', error);
-      toast.error('Failed to refresh analytics', { id: loadingToast });
+      toast.error(`Failed to load analytics: ${error}`);
+    } finally {
       set({ isLoadingAnalytics: false });
     }
   },

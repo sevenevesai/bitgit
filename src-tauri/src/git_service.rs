@@ -1,8 +1,13 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -23,23 +28,81 @@ struct IPCResponse {
     error: Option<String>,
 }
 
+// A wedged service must not hold its caller forever. Pushes and recovery checks may legitimately run for
+// ten minutes and clones have no ceiling, so this is a backstop, not a responsiveness control.
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+// The guarded sections cannot leave their data half-updated, so a poisoned lock is still usable.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[derive(Default)]
+struct Waiters {
+    by_id: HashMap<String, Sender<IPCResponse>>,
+    closed: bool, // the reader saw the service's output end; nothing registered later would ever be answered
+}
+
+/// One running service process. Dropping it stops the process and waits for it.
+struct Connection {
+    child: Child,
+    stdin: ChildStdin,
+    waiters: Arc<Mutex<Waiters>>,
+}
+
+impl Connection {
+    fn is_dead(&mut self) -> bool {
+        lock(&self.waiters).closed || self.child.try_wait().map(|status| status.is_some()).unwrap_or(true)
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        eprintln!("[Rust] Shutting down Git service");
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+// Responses are matched to callers by id, so the service may answer in any order and a line that is
+// not a response cannot shift every later caller onto the wrong answer.
+fn read_responses(mut reader: BufReader<ChildStdout>, waiters: Arc<Mutex<Waiters>>) {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        match serde_json::from_str::<IPCResponse>(&line) {
+            Ok(response) => {
+                if let Some(waiter) = lock(&waiters).by_id.remove(&response.id) {
+                    // The caller may have timed out and gone; its response is then dropped.
+                    let _ = waiter.send(response);
+                }
+            }
+            // The content is not logged: a response may carry sensitive data.
+            Err(_) => eprintln!("[Rust] Ignored {} bytes of unrecognised Git service output", line.len()),
+        }
+    }
+    // Dropping the senders wakes every caller still waiting on this connection.
+    let mut waiters = lock(&waiters);
+    waiters.closed = true;
+    waiters.by_id.clear();
+}
+
+/// Requests to the service run concurrently; the service orders the ones that share a repository.
+/// A service that has exited is restarted by the next request.
 pub struct GitService {
-    child: Arc<Mutex<Option<Child>>>,
-    command_counter: Arc<Mutex<u64>>,
+    program: OsString,
+    args: Vec<OsString>,
+    response_timeout: Duration,
+    connection: Mutex<Option<Connection>>,
+    command_counter: AtomicU64,
 }
 
 impl GitService {
     pub fn new() -> Result<Self> {
-        let service = Self {
-            child: Arc::new(Mutex::new(None)),
-            command_counter: Arc::new(Mutex::new(0)),
-        };
-
-        service.start()?;
-        Ok(service)
-    }
-
-    fn start(&self) -> Result<()> {
         let git_service_path = if cfg!(debug_assertions) {
             // Development mode: running from src-tauri directory
             std::path::PathBuf::from("../git-service/dist/index.js")
@@ -55,8 +118,27 @@ impl GitService {
 
         eprintln!("[Rust] Starting Git service from: {}", git_service_path.display());
 
-        let mut cmd = Command::new("node");
-        cmd.arg(&git_service_path)
+        let service = Self::with_launch("node".into(), vec![git_service_path.into_os_string()], RESPONSE_TIMEOUT);
+        // Connect now so a missing Node.js or service bundle is reported at startup, not on first use.
+        let connection = service.connect()?;
+        *lock(&service.connection) = Some(connection);
+        eprintln!("[Rust] Git service started successfully");
+        Ok(service)
+    }
+
+    fn with_launch(program: OsString, args: Vec<OsString>, response_timeout: Duration) -> Self {
+        Self {
+            program,
+            args,
+            response_timeout,
+            connection: Mutex::new(None),
+            command_counter: AtomicU64::new(0),
+        }
+    }
+
+    fn connect(&self) -> Result<Connection> {
+        let mut cmd = Command::new(&self.program);
+        cmd.args(&self.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
@@ -71,63 +153,94 @@ impl GitService {
         let mut child = cmd.spawn()
             .context("Failed to spawn Git service process. Ensure Node.js is installed.")?;
 
-        // Test with a ping command and consume the response
-        let stdin = child.stdin.as_mut().context("Failed to access stdin")?;
-        let test_cmd = IPCCommand {
-            id: "init".to_string(),
-            command_type: "ping".to_string(),
-            payload: serde_json::json!({}),
+        let handshake = (|| -> Result<(ChildStdin, BufReader<ChildStdout>)> {
+            let mut stdin = child.stdin.take().context("Failed to access stdin")?;
+            let mut reader = BufReader::new(child.stdout.take().context("Failed to access stdout")?);
+            let ping = IPCCommand {
+                id: "init".to_string(),
+                command_type: "ping".to_string(),
+                payload: serde_json::json!({}),
+            };
+            writeln!(stdin, "{}", serde_json::to_string(&ping)?)?;
+            stdin.flush()?;
+            let mut line = String::new();
+            if reader.read_line(&mut line)? == 0 {
+                anyhow::bail!("it exited before answering");
+            }
+            Ok((stdin, reader))
+        })();
+
+        let (stdin, reader) = match handshake {
+            Ok(pipes) => pipes,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("Git service did not start: {}", error);
+            }
         };
-        let json = serde_json::to_string(&test_cmd)?;
-        writeln!(stdin, "{}", json)?;
-        stdin.flush()?;
 
-        // Read and consume the ping response so it doesn't interfere with future commands
-        let stdout = child.stdout.as_mut().context("Failed to access stdout")?;
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-
-        *self.child.lock()
-            .expect("Git service child mutex poisoned") = Some(child);
-        eprintln!("[Rust] Git service started successfully");
-        Ok(())
-    }
-
-    fn get_next_id(&self) -> String {
-        let mut counter = self.command_counter.lock()
-            .expect("Command counter mutex poisoned");
-        *counter += 1;
-        format!("cmd_{}", *counter)
+        // The reader thread continues with the handshake's buffered reader, so nothing read ahead is lost.
+        let waiters = Arc::new(Mutex::new(Waiters::default()));
+        let connection = Connection { child, stdin, waiters: Arc::clone(&waiters) };
+        std::thread::Builder::new()
+            .name("git-service-reader".to_string())
+            .spawn(move || read_responses(reader, waiters))
+            .context("Failed to start the Git service reader")?;
+        Ok(connection)
     }
 
     pub fn execute(&self, command_type: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
-        let mut child_guard = self.child.lock()
-            .expect("Git service child mutex poisoned");
-        let child = child_guard.as_mut().context("Git service not running")?;
-
         let command = IPCCommand {
-            id: self.get_next_id(),
+            id: format!("cmd_{}", self.command_counter.fetch_add(1, Ordering::Relaxed) + 1),
             command_type: command_type.to_string(),
             payload,
         };
-
-        // Send command
-        let stdin = child.stdin.as_mut().context("Failed to access stdin")?;
         let json = serde_json::to_string(&command)?;
-        writeln!(stdin, "{}", json)?;
-        stdin.flush()?;
+        let (sender, response) = mpsc::channel();
 
-        // Read response
-        let stdout = child.stdout.as_mut().context("Failed to access stdout")?;
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
+        // The connection lock covers only the send, never the wait for the response.
+        let waiters = {
+            let mut guard = lock(&self.connection);
+            if guard.as_mut().is_some_and(|connection| connection.is_dead()) {
+                eprintln!("[Rust] Git service is not running; restarting it");
+                *guard = None;
+            }
+            if guard.is_none() {
+                *guard = Some(self.connect()?);
+            }
+            let connection = guard.as_mut().context("Git service not running")?;
 
-        // Debug logging removed for production - response may contain sensitive data
+            // Register under the same lock the reader closes under: a waiter added after the close
+            // would never be woken.
+            let sent = {
+                let mut waiters = lock(&connection.waiters);
+                if waiters.closed {
+                    Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the service has stopped"))
+                } else {
+                    waiters.by_id.insert(command.id.clone(), sender);
+                    Ok(())
+                }
+            }
+            .and_then(|_| writeln!(connection.stdin, "{}", json))
+            .and_then(|_| connection.stdin.flush());
+            let waiters = Arc::clone(&connection.waiters);
+            if let Err(error) = sent {
+                *guard = None;
+                return Err(anyhow::anyhow!("Could not reach the Git service for {}: {}. It restarts on the next action.", command_type, error));
+            }
+            waiters
+        };
 
-        let response: IPCResponse = serde_json::from_str(&line)
-            .context(format!("Failed to parse Git service response: '{}'", line.trim()))?;
+        let response = match response.recv_timeout(self.response_timeout) {
+            Ok(response) => response,
+            Err(RecvTimeoutError::Disconnected) => {
+                anyhow::bail!("Git service stopped while running {}. It restarts on the next action.", command_type)
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                lock(&waiters).by_id.remove(&command.id);
+                anyhow::bail!("Git service did not respond to {} within {} minutes", command_type, self.response_timeout.as_secs() / 60)
+            }
+        };
 
         if response.success {
             Ok(response.data.unwrap_or(serde_json::json!(null)))
@@ -432,99 +545,27 @@ impl GitService {
         Ok(branch)
     }
 
-    // ==================== ANALYTICS FEATURES ====================
+    // ==================== ANALYTICS ====================
 
-    pub fn get_analytics_commit_history(
+    /// One round-trip for every repository; the service reads them in parallel.
+    pub fn get_analytics_snapshots(
         &self,
-        repo_path: &str,
-        limit: u32,
-        since: Option<String>,
-        until: Option<String>,
-        author: Option<String>,
-    ) -> Result<Vec<AnalyticsCommit>> {
+        repo_paths: &[&str],
+        history_since: &str,
+        recent_since: &str,
+        recent_limit: u32,
+    ) -> Result<Vec<AnalyticsSnapshotResult>> {
         let payload = serde_json::json!({
-            "repoPath": repo_path,
+            "repoPaths": repo_paths,
             "params": {
-                "limit": limit,
-                "since": since,
-                "until": until,
-                "author": author
+                "historySince": history_since,
+                "recentSince": recent_since,
+                "recentLimit": recent_limit
             }
         });
-        let result = self.execute("getAnalyticsCommitHistory", payload)?;
-        let commits: Vec<AnalyticsCommit> = serde_json::from_value(result)?;
-        Ok(commits)
-    }
-
-    pub fn get_branch_staleness(&self, repo_path: &str) -> Result<Vec<BranchStaleness>> {
-        let payload = serde_json::json!({ "repoPath": repo_path });
-        let result = self.execute("getBranchStaleness", payload)?;
-        let staleness: Vec<BranchStaleness> = serde_json::from_value(result)?;
-        Ok(staleness)
-    }
-
-    #[allow(dead_code)]
-    pub fn get_commit_counts_by_date(
-        &self,
-        repo_path: &str,
-        since: String,
-        until: Option<String>,
-        author: Option<String>,
-    ) -> Result<std::collections::HashMap<String, u32>> {
-        let payload = serde_json::json!({
-            "repoPath": repo_path,
-            "since": since,
-            "until": until,
-            "author": author
-        });
-        let result = self.execute("getCommitCountsByDate", payload)?;
-        let counts: std::collections::HashMap<String, u32> = serde_json::from_value(result)?;
-        Ok(counts)
-    }
-
-    pub fn get_days_since_last_commit(&self, repo_path: &str) -> Result<Option<i32>> {
-        let payload = serde_json::json!({ "repoPath": repo_path });
-        let result = self.execute("getDaysSinceLastCommit", payload)?;
-        let days: Option<i32> = serde_json::from_value(result)?;
-        Ok(days)
-    }
-
-    pub fn get_aggregate_stats(&self, repo_path: &str) -> Result<AggregateStats> {
-        let payload = serde_json::json!({ "repoPath": repo_path });
-        let result = self.execute("getAggregateStats", payload)?;
-        let stats: AggregateStats = serde_json::from_value(result)?;
-        Ok(stats)
-    }
-
-    #[allow(dead_code)]
-    pub fn get_commit_count_for_date_range(
-        &self,
-        repo_path: &str,
-        since: String,
-        until: Option<String>,
-    ) -> Result<u32> {
-        let payload = serde_json::json!({
-            "repoPath": repo_path,
-            "since": since,
-            "until": until
-        });
-        let result = self.execute("getCommitCountForDateRange", payload)?;
-        let count: u32 = serde_json::from_value(result)?;
-        Ok(count)
-    }
-}
-
-impl Drop for GitService {
-    fn drop(&mut self) {
-        if let Ok(mut guard) = self.child.lock() {
-            if let Some(mut child) = guard.take() {
-                eprintln!("[Rust] Shutting down Git service");
-                // Close stdin to signal EOF for graceful shutdown
-                drop(child.stdin.take());
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
+        let result = self.execute("getAnalyticsSnapshots", payload)?;
+        let snapshots: Vec<AnalyticsSnapshotResult> = serde_json::from_value(result)?;
+        Ok(snapshots)
     }
 }
 
@@ -715,6 +756,26 @@ pub struct TagInfo {
 }
 
 // Analytics Types
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsSnapshot {
+    pub commit_dates: Vec<String>,
+    pub recent_commits: Vec<AnalyticsCommit>,
+    pub branches: Vec<BranchStaleness>,
+    pub days_since_last_commit: Option<i32>,
+    pub tag_count: u32,
+    pub stash_count: u32,
+}
+
+/// Exactly one of `snapshot` and `error` is set.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsSnapshotResult {
+    pub repo_path: String,
+    pub snapshot: Option<AnalyticsSnapshot>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsCommit {
@@ -739,15 +800,6 @@ pub struct BranchStaleness {
     pub last_commit_date: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AggregateStats {
-    pub total_commits: u32,
-    pub total_branches: u32,
-    pub total_tags: u32,
-    pub total_stashes: u32,
-    pub contributors: u32,
-}
 
 #[cfg(test)]
 mod tests {
@@ -839,5 +891,77 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(result.pushed, Some(0));
+    }
+
+    // A stand-in service that speaks the real line protocol. Single quotes only, so the script
+    // survives argument quoting on every platform.
+    const FAKE_SERVICE: &str = "\
+        const rl = require('readline').createInterface({ input: process.stdin });\
+        const reply = (id, data) => console.log(JSON.stringify({ id, success: true, data }));\
+        rl.on('line', (line) => {\
+          const { id, type, payload } = JSON.parse(line);\
+          if (type === 'ping') reply(id, 'pong');\
+          else if (type === 'echo') reply(id, payload);\
+          else if (type === 'delayed') setTimeout(() => reply(id, payload), payload.ms);\
+          else if (type === 'noisy') { console.log('not a response'); console.log('{}'); reply(id, payload); }\
+          else if (type === 'crash') process.exit(1);\
+        });";
+
+    fn fake_service(response_timeout: Duration) -> GitService {
+        GitService::with_launch("node".into(), vec!["-e".into(), FAKE_SERVICE.into()], response_timeout)
+    }
+
+    #[test]
+    fn a_slow_request_does_not_delay_another_caller() {
+        let service = fake_service(Duration::from_secs(20));
+        service.execute("echo", serde_json::json!(null)).unwrap(); // connect before timing anything
+        std::thread::scope(|scope| {
+            let slow = scope.spawn(|| service.execute("delayed", serde_json::json!({ "ms": 2000, "tag": "slow" })));
+            std::thread::sleep(Duration::from_millis(300));
+
+            let fast = service.execute("echo", serde_json::json!({ "tag": "fast" })).unwrap();
+
+            assert!(!slow.is_finished(), "the fast request must not wait for the slow one");
+            assert_eq!(fast["tag"], "fast");
+            assert_eq!(slow.join().unwrap().unwrap()["tag"], "slow");
+        });
+    }
+
+    #[test]
+    fn a_crash_fails_waiting_callers_and_the_next_request_restarts_the_service() {
+        let service = fake_service(Duration::from_secs(20));
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| service.execute("unanswered", serde_json::json!({})));
+            std::thread::sleep(Duration::from_millis(300));
+
+            let crashed = service.execute("crash", serde_json::json!({})).unwrap_err().to_string();
+            let abandoned = waiting.join().unwrap().unwrap_err().to_string();
+
+            assert!(crashed.contains("stopped while running crash"), "{}", crashed);
+            assert!(abandoned.contains("stopped while running unanswered"), "{}", abandoned);
+        });
+        assert_eq!(service.execute("echo", serde_json::json!("again")).unwrap(), "again");
+    }
+
+    #[test]
+    fn output_that_is_not_a_response_does_not_shift_later_answers() {
+        let service = fake_service(Duration::from_secs(20));
+        assert_eq!(service.execute("noisy", serde_json::json!(1)).unwrap(), 1);
+        assert_eq!(service.execute("echo", serde_json::json!(2)).unwrap(), 2);
+    }
+
+    #[test]
+    fn an_unanswered_request_times_out_and_leaves_the_service_usable() {
+        let service = fake_service(Duration::from_millis(400));
+        let error = service.execute("unanswered", serde_json::json!({})).unwrap_err().to_string();
+        assert!(error.contains("did not respond to unanswered"), "{}", error);
+        assert_eq!(service.execute("echo", serde_json::json!("still here")).unwrap(), "still here");
+    }
+
+    #[test]
+    fn a_service_that_cannot_start_is_reported() {
+        let service = GitService::with_launch("node".into(), vec!["-e".into(), "process.exit(3)".into()], Duration::from_secs(20));
+        let error = service.execute("echo", serde_json::json!({})).unwrap_err().to_string();
+        assert!(error.contains("Git service did not start"), "{}", error);
     }
 }

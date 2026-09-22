@@ -35,16 +35,17 @@ jobs:
 
             **Windows:** Download and run `BitGit_${{ steps.get_version.outputs.VERSION }}_x64-setup.exe` (NSIS installer) or `BitGit_${{ steps.get_version.outputs.VERSION }}_x64_en-US.msi` (MSI installer)
 
-            **macOS:** Download `BitGit_${{ steps.get_version.outputs.VERSION }}_x64.dmg`, open it, and drag BitGit to your Applications folder
+            **macOS:** Download `BitGit_${{ steps.get_version.outputs.VERSION }}_x64.dmg` (Intel) or `BitGit_${{ steps.get_version.outputs.VERSION }}_aarch64.dmg` (Apple Silicon), open it, and drag BitGit to your Applications folder
 
-            **Linux:** Download `BitGit_${{ steps.get_version.outputs.VERSION }}_amd64.deb` (Debian/Ubuntu) or `BitGit_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage` (universal)
+            **Linux:** Download `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.deb` (Debian/Ubuntu) or `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage` (universal)
 
             ### What's New
-            - Security hardening: path validation, input sanitization
-            - Cross-platform credential storage
-            - Improved UX with friendlier button labels
-            - Last synced timestamps on project cards
-            - Direct GitHub links on projects
+            - Save & Recover workspace: named milestones, byte-exact checkpoints, coverage and comparison, verified recovered copies, and selective file repair behind a safety checkpoint
+            - Remote checkpoint backup and import through GitHub, with remote trust and verification
+            - Explicit, scoped visual Git publishing: only selected whole files or committed changes are published, with honest status and validated tag pushes
+            - Automatic idle saves, exact-version notes, screenshots and checks, guided regression search, and a JSON harness CLI
+            - Analytics load from one local snapshot per repository; Git service requests run concurrently and a stopped service restarts on the next request
+            - One BitGit process per data directory; unhandled frontend errors surface as toasts; the Git service survives stray promise rejections
 
           draft: false
           prerelease: false

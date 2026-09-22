@@ -107,11 +107,10 @@ export interface TagInfo {
 }
 
 // Analytics types
-export interface AnalyticsCommitParams {
-  limit?: number;
-  since?: string;
-  until?: string;
-  author?: string;
+export interface AnalyticsSnapshotParams {
+  historySince: string; // YYYY-MM-DD; bounds commitDates
+  recentSince: string;  // YYYY-MM-DD; bounds recentCommits
+  recentLimit: number;
 }
 
 export interface AnalyticsCommit {
@@ -134,13 +133,19 @@ export interface BranchStaleness {
   lastCommitDate: string;
 }
 
-export interface AggregateStats {
-  totalCommits: number;
-  totalBranches: number;
-  totalTags: number;
-  totalStashes: number;
-  contributors: number;
+export interface AnalyticsSnapshot {
+  commitDates: string[];            // author date (ISO 8601) of every HEAD commit since historySince
+  recentCommits: AnalyticsCommit[]; // newest first, with file statistics
+  branches: BranchStaleness[];
+  daysSinceLastCommit: number | null;
+  tagCount: number;
+  stashCount: number;
 }
+
+// One entry per requested repository, so one unreadable repository cannot fail the whole dashboard.
+export type AnalyticsSnapshotResult =
+  | { repoPath: string; snapshot: AnalyticsSnapshot }
+  | { repoPath: string; error: string };
 
 // Pre-sync validation types
 export type ValidationSeverity = 'error' | 'warning' | 'info';
@@ -191,9 +196,4 @@ export type GitOperation =
   | { type: 'cherryPick'; repoPath: string; commitHash: string }
   | { type: 'getCurrentBranch'; repoPath: string }
   // Analytics operations
-  | { type: 'getAnalyticsCommitHistory'; repoPath: string; params: AnalyticsCommitParams }
-  | { type: 'getBranchStaleness'; repoPath: string }
-  | { type: 'getCommitCountsByDate'; repoPath: string; since: string; until?: string; author?: string }
-  | { type: 'getDaysSinceLastCommit'; repoPath: string }
-  | { type: 'getAggregateStats'; repoPath: string }
-  | { type: 'getCommitCountForDateRange'; repoPath: string; since: string; until?: string };
+  | { type: 'getAnalyticsSnapshots'; repoPaths: string[]; params: AnalyticsSnapshotParams };

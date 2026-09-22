@@ -358,12 +358,6 @@ export interface ActivityEntry {
 // Activity Timeline with filtering
 export interface ActivityTimeline {
   entries: ActivityEntry[];
-  dateRange: {
-    start: string;
-    end: string;
-  };
-  totalCommits: number;
-  totalProjects: number;
 }
 
 // Repository Health Indicator

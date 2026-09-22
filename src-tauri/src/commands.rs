@@ -1,6 +1,6 @@
 use crate::app_settings::{self, EditorConfig, EditorPreset};
 use crate::credentials::CredentialManager;
-use crate::git_service::{GitService, PublishOptions, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo, FileChangeInfo};
+use crate::git_service::{GitService, PublishOptions, StashInfo, TagInfo, BranchInfo, CommitInfo, DiffInfo, FileChangeInfo, AnalyticsSnapshotResult};
 use crate::models::*;
 use crate::project_cache;
 use crate::project_sync::{self, LocalRepoImport};
@@ -1121,8 +1121,8 @@ pub async fn recovery_command(
         .ok_or_else(|| "Project has no local path".to_string())?;
     recovery_request::validate_repo_path(&repo_path)?;
 
-    // The service call holds the service lock until the whole response arrives, so run
-    // it off the async runtime's worker threads.
+    // The service call blocks its thread until the response arrives, which can take minutes,
+    // so run it off the async runtime's worker threads.
     tauri::async_runtime::spawn_blocking(move || {
         // Checks can run for ten minutes. A scoped service keeps other projects available;
         // the vault's cross-process lock still serializes operations on this same project.
@@ -1151,7 +1151,7 @@ pub async fn recovery_command(
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsData {
     pub overview: DashboardOverview,
-    pub timeline: Vec<ActivityEntry>,
+    pub timeline: ActivityTimeline,
     pub health: Vec<HealthIndicator>,
     pub heatmap: ContributionHeatmap,
     pub last_updated: String,
@@ -1179,6 +1179,12 @@ pub struct MostActiveProject {
     pub id: String,
     pub name: String,
     pub commit_count: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityTimeline {
+    pub entries: Vec<ActivityEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1247,642 +1253,254 @@ pub struct MostProductiveDay {
     pub count: u32,
 }
 
-/// Generate comprehensive analytics for all projects
+const ANALYTICS_HISTORY_DAYS: i64 = 90;
+const ANALYTICS_RECENT_DAYS: i64 = 30;
+const ANALYTICS_RECENT_COMMITS: u32 = 30; // per project
+const ANALYTICS_TIMELINE_ENTRIES: usize = 50;
+
+/// Generate analytics for all projects from one batched service request
 #[tauri::command]
 pub async fn generate_analytics() -> Result<AnalyticsData, String> {
-    use chrono::{Duration, Utc};
+    use chrono::{Duration, Local, Utc};
 
     let projects = project_cache::load_projects()
         .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    let service = get_git_service()?;
 
     let now = Utc::now();
     let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
     let week_start = today_start - Duration::days(7);
     let month_start = today_start - Duration::days(30);
-    let year_start = today_start - Duration::days(365);
+    // Heatmap days are the author's calendar days, so its window follows the local date.
+    let today = Local::now().date_naive();
+    let history_start = today - Duration::days(ANALYTICS_HISTORY_DAYS);
+    let history_since = history_start.format("%Y-%m-%d").to_string();
+    let recent_since = (today - Duration::days(ANALYTICS_RECENT_DAYS)).format("%Y-%m-%d").to_string();
 
-    // Initialize counters
-    let mut total_branches = 0u32;
-    let mut total_stashes = 0u32;
-    let mut total_tags = 0u32;
-    let mut commits_today = 0u32;
-    let mut commits_this_week = 0u32;
-    let mut commits_this_month = 0u32;
-    let mut active_projects = 0usize;
-    let mut needs_attention = 0usize;
+    let repo_paths: Vec<&str> = projects.iter().filter_map(|p| p.local_path.as_deref()).collect();
+    let results = get_git_service()?
+        .get_analytics_snapshots(&repo_paths, &history_since, &recent_since, ANALYTICS_RECENT_COMMITS)
+        .map_err(|e| format!("Failed to read project history: {}", e))?;
+    let results: HashMap<&str, &AnalyticsSnapshotResult> =
+        results.iter().map(|r| (r.repo_path.as_str(), r)).collect();
 
-    let mut timeline_entries: Vec<ActivityEntry> = Vec::new();
-    let mut health_indicators: Vec<HealthIndicator> = Vec::new();
-    let mut daily_contributions: HashMap<String, DailyContribution> = HashMap::new();
-    let mut project_commit_counts: HashMap<String, u32> = HashMap::new();
-
-    println!("[Analytics] Starting analysis of {} projects", projects.len());
-
-    // Analyze each project
-    for (idx, project) in projects.iter().enumerate() {
-        // Skip projects without local paths
-        let local_path = match &project.local_path {
-            Some(path) => path,
-            None => {
-                println!("[Analytics] Skipping project {} (no local path)", project.name);
-                continue;
-            }
-        };
-
-        // Check if project was recently synced (active)
-        if let Some(last_synced) = &project.last_synced {
-            if let Ok(last_sync_time) = chrono::DateTime::parse_from_rfc3339(last_synced) {
-                let last_sync_utc = last_sync_time.with_timezone(&Utc);
-                let days_since = (now - last_sync_utc).num_days();
-                if days_since <= 7 {
-                    active_projects += 1;
-                }
-            }
-        }
-
-        // Check if needs attention
-        if let Some(git_status) = &project.git_status {
-            if git_status.uncommitted_files > 0 || git_status.remote_branches.len() > 0 {
-                needs_attention += 1;
-            }
-        }
-
-        // Get commit history for analytics (last 90 days)
-        let since = (today_start - Duration::days(90)).format("%Y-%m-%d").to_string();
-        println!("[Analytics] Fetching commits for {} since {}", project.name, since);
-        match service.get_analytics_commit_history(local_path, 100, Some(since.clone()), None, None) {
-            Ok(commits) => {
-                println!("[Analytics] Found {} commits for {}", commits.len(), project.name);
-                project_commit_counts.insert(project.id.clone(), commits.len() as u32);
-
-                for commit in commits {
-                    let commit_date = match chrono::DateTime::parse_from_rfc3339(&commit.date) {
-                        Ok(dt) => dt,
-                        Err(e) => {
-                            println!("[Analytics] Failed to parse date '{}': {}", commit.date, e);
-                            continue;
-                        }
-                    };
-
-                    // Count commits by date range
-                    if commit_date.naive_utc() >= today_start {
-                        commits_today += 1;
-                    }
-                    if commit_date.naive_utc() >= week_start {
-                        commits_this_week += 1;
-                    }
-                    if commit_date.naive_utc() >= month_start {
-                        commits_this_month += 1;
-                    }
-
-                    // Add to timeline
-                    timeline_entries.push(ActivityEntry {
-                        id: format!("{}-{}", project.id, commit.hash),
-                        project_id: project.id.clone(),
-                        project_name: project.name.clone(),
-                        project_color: format!("hsl({}, 70%, 50%)", (idx * 137) % 360),
-                        commit_hash: commit.hash,
-                        commit_message: commit.message,
-                        author: commit.author,
-                        email: commit.email,
-                        date: commit.date.clone(),
-                        branch: commit.branch,
-                        files_changed: commit.files_changed,
-                        additions: commit.additions,
-                        deletions: commit.deletions,
-                    });
-
-                    // Add to heatmap
-                    let date_key = commit.date.split('T').next().unwrap_or(&commit.date).to_string();
-                    let entry = daily_contributions.entry(date_key.clone()).or_insert(DailyContribution {
-                        date: date_key,
-                        count: 0,
-                        projects: Vec::new(),
-                        level: 0,
-                    });
-                    entry.count += 1;
-                    if !entry.projects.contains(&project.id) {
-                        entry.projects.push(project.id.clone());
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to get commit history for {}: {}", project.name, e);
-            }
-        }
-
-        // Get aggregate stats
-        if let Ok(stats) = service.get_aggregate_stats(local_path) {
-            total_branches += stats.total_branches;
-            total_stashes += stats.total_stashes;
-            total_tags += stats.total_tags;
-        }
-
-        // Get health indicators
-        let days_since_last_commit = service.get_days_since_last_commit(local_path).ok().flatten();
-
-        let mut warnings = Vec::new();
-        let health_status = if let Some(days) = days_since_last_commit {
-            if days > 30 {
-                warnings.push(format!("No commits in {} days", days));
-                "critical"
-            } else if days > 14 {
-                warnings.push(format!("No commits in {} days", days));
-                "warning"
-            } else if days > 7 {
-                warnings.push(format!("No commits in {} days", days));
-                "attention"
-            } else {
-                "healthy"
-            }
-        } else {
-            warnings.push("No commits found".to_string());
-            "attention"
-        };
-
-        // Check for uncommitted changes
-        let uncommitted_duration = if let Some(git_status) = &project.git_status {
-            if git_status.uncommitted_files > 0 {
-                warnings.push(format!("{} uncommitted files", git_status.uncommitted_files));
-                Some(24) // Placeholder: 24 hours
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Get stale branches
-        let stale_branches = service.get_branch_staleness(local_path)
-            .ok()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|b| b.days_since_last_commit > 30)
-            .map(|b| StaleBranchInfo {
-                name: b.name,
-                days_since_last_commit: b.days_since_last_commit,
-                is_remote: b.is_remote,
-            })
-            .collect::<Vec<_>>();
-
-        if !stale_branches.is_empty() {
-            warnings.push(format!("{} stale branches", stale_branches.len()));
-        }
-
-        health_indicators.push(HealthIndicator {
-            project_id: project.id.clone(),
-            project_name: project.name.clone(),
-            days_since_last_commit,
-            uncommitted_changes_duration: uncommitted_duration,
-            stale_branches,
-            health_status: health_status.to_string(),
-            warnings,
-        });
-    }
-
-    // Sort timeline by date (most recent first)
-    timeline_entries.sort_by(|a, b| b.date.cmp(&a.date));
-
-    // Calculate contribution levels for heatmap
-    let max_commits = daily_contributions.values().map(|d| d.count).max().unwrap_or(1);
-    for contrib in daily_contributions.values_mut() {
-        contrib.level = if contrib.count == 0 {
-            0
-        } else if (contrib.count as f32 / max_commits as f32) < 0.25 {
-            1
-        } else if (contrib.count as f32 / max_commits as f32) < 0.5 {
-            2
-        } else if (contrib.count as f32 / max_commits as f32) < 0.75 {
-            3
-        } else {
-            4
-        };
-    }
-
-    // Calculate streaks
-    let mut current_streak = 0u32;
-    let mut longest_streak = 0u32;
-    let mut temp_streak = 0u32;
-    let mut date = now.date_naive();
-
-    for _ in 0..365 {
-        let date_key = date.format("%Y-%m-%d").to_string();
-        if daily_contributions.contains_key(&date_key) {
-            temp_streak += 1;
-            if date == now.date_naive() || current_streak > 0 {
-                current_streak = temp_streak;
-            }
-            longest_streak = longest_streak.max(temp_streak);
-        } else {
-            if current_streak > 0 {
-                current_streak = 0;
-            }
-            temp_streak = 0;
-        }
-        date = date.pred_opt().unwrap();
-    }
-
-    // Find most active project
-    let most_active_project = project_commit_counts
-        .iter()
-        .max_by_key(|(_, count)| *count)
-        .and_then(|(id, count)| {
-            projects.iter().find(|p| &p.id == id).map(|p| MostActiveProject {
-                id: p.id.clone(),
-                name: p.name.clone(),
-                commit_count: *count,
-            })
-        });
-
-    // Find most productive day
-    let most_productive_day = daily_contributions
-        .values()
-        .max_by_key(|d| d.count)
-        .map(|d| MostProductiveDay {
-            date: d.date.clone(),
-            count: d.count,
-        });
-
-    println!("[Analytics] Summary:");
-    println!("  Total Projects: {}", projects.len());
-    println!("  Active Projects: {}", active_projects);
-    println!("  Needs Attention: {}", needs_attention);
-    println!("  Commits Today: {}", commits_today);
-    println!("  Commits This Week: {}", commits_this_week);
-    println!("  Commits This Month: {}", commits_this_month);
-    println!("  Total Branches: {}", total_branches);
-    println!("  Total Stashes: {}", total_stashes);
-    println!("  Total Tags: {}", total_tags);
-    println!("  Timeline Entries: {}", timeline_entries.len());
-
-    let analytics = AnalyticsData {
-        overview: DashboardOverview {
-            total_projects: projects.len(),
-            active_projects,
-            needs_attention,
-            commits_today,
-            commits_this_week,
-            commits_this_month,
-            total_branches,
-            total_stashes,
-            total_tags,
-            most_active_project,
-        },
-        timeline: timeline_entries.into_iter().take(100).collect(),
-        health: health_indicators,
-        heatmap: ContributionHeatmap {
-            daily_contributions,
-            start_date: year_start.format("%Y-%m-%d").to_string(),
-            end_date: now.format("%Y-%m-%d").to_string(),
-            total_contributions: commits_this_month,
-            current_streak,
-            longest_streak,
-            most_productive_day,
-        },
-        last_updated: now.to_rfc3339(),
-        generated_at: now.to_rfc3339(),
+    let mut overview = DashboardOverview {
+        total_projects: projects.len(),
+        active_projects: 0,
+        needs_attention: 0,
+        commits_today: 0,
+        commits_this_week: 0,
+        commits_this_month: 0,
+        total_branches: 0,
+        total_stashes: 0,
+        total_tags: 0,
+        most_active_project: None,
     };
+    let mut timeline_entries: Vec<ActivityEntry> = Vec::new();
+    let mut health: Vec<HealthIndicator> = Vec::new();
+    let mut daily_contributions: HashMap<String, DailyContribution> = HashMap::new();
 
-    Ok(analytics)
-}
-
-/// Generate only the dashboard overview section (fast)
-#[tauri::command]
-pub async fn generate_analytics_overview() -> Result<DashboardOverview, String> {
-    use chrono::{Duration, Utc};
-
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    let service = get_git_service()?;
-    let now = Utc::now();
-    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let week_start = today_start - Duration::days(7);
-    let month_start = today_start - Duration::days(30);
-
-    let mut total_branches = 0u32;
-    let mut total_stashes = 0u32;
-    let mut total_tags = 0u32;
-    let mut commits_today = 0u32;
-    let mut commits_this_week = 0u32;
-    let mut commits_this_month = 0u32;
-    let mut active_projects = 0usize;
-    let mut needs_attention = 0usize;
-    let mut project_commit_counts: HashMap<String, u32> = HashMap::new();
-
-    for project in projects.iter() {
+    for (idx, project) in projects.iter().enumerate() {
         let local_path = match &project.local_path {
             Some(path) => path,
             None => continue,
         };
 
-        // Check if project was recently synced (active)
         if let Some(last_synced) = &project.last_synced {
             if let Ok(last_sync_time) = chrono::DateTime::parse_from_rfc3339(last_synced) {
-                let last_sync_utc = last_sync_time.with_timezone(&Utc);
-                let days_since = (now - last_sync_utc).num_days();
-                if days_since <= 7 {
-                    active_projects += 1;
+                if (now - last_sync_time.with_timezone(&Utc)).num_days() <= 7 {
+                    overview.active_projects += 1;
                 }
             }
         }
 
-        // Check if needs attention
         if let Some(git_status) = &project.git_status {
-            if git_status.uncommitted_files > 0 || git_status.remote_branches.len() > 0 {
-                needs_attention += 1;
+            if git_status.uncommitted_files > 0 || !git_status.remote_branches.is_empty() {
+                overview.needs_attention += 1;
             }
         }
 
-        // Get commit counts (limited to improve speed)
-        let since = (today_start - Duration::days(90)).format("%Y-%m-%d").to_string();
-        if let Ok(commits) = service.get_analytics_commit_history(local_path, 100, Some(since), None, None) {
-            project_commit_counts.insert(project.id.clone(), commits.len() as u32);
+        let result = results.get(local_path.as_str()).copied();
+        health.push(project_health(project, result));
 
-            for commit in commits {
-                if let Ok(commit_date) = chrono::DateTime::parse_from_rfc3339(&commit.date) {
-                    if commit_date.naive_utc() >= today_start {
-                        commits_today += 1;
-                    }
-                    if commit_date.naive_utc() >= week_start {
-                        commits_this_week += 1;
-                    }
-                    if commit_date.naive_utc() >= month_start {
-                        commits_this_month += 1;
-                    }
+        let snapshot = match result.and_then(|r| r.snapshot.as_ref()) {
+            Some(snapshot) => snapshot,
+            None => continue,
+        };
+
+        overview.total_branches += snapshot.branches.len() as u32;
+        overview.total_stashes += snapshot.stash_count;
+        overview.total_tags += snapshot.tag_count;
+
+        let commit_count = snapshot.commit_dates.len() as u32;
+        if overview.most_active_project.as_ref().map_or(true, |p| commit_count > p.commit_count) {
+            overview.most_active_project = Some(MostActiveProject {
+                id: project.id.clone(),
+                name: project.name.clone(),
+                commit_count,
+            });
+        }
+
+        for date in &snapshot.commit_dates {
+            if let Ok(commit_date) = chrono::DateTime::parse_from_rfc3339(date) {
+                let commit_date = commit_date.naive_utc();
+                if commit_date >= today_start {
+                    overview.commits_today += 1;
+                }
+                if commit_date >= week_start {
+                    overview.commits_this_week += 1;
+                }
+                if commit_date >= month_start {
+                    overview.commits_this_month += 1;
                 }
             }
+
+            let date_key = date.split('T').next().unwrap_or(date).to_string();
+            let entry = daily_contributions.entry(date_key.clone()).or_insert(DailyContribution {
+                date: date_key,
+                count: 0,
+                projects: Vec::new(),
+                level: 0,
+            });
+            entry.count += 1;
+            if !entry.projects.contains(&project.id) {
+                entry.projects.push(project.id.clone());
+            }
         }
 
-        // Get aggregate stats
-        if let Ok(stats) = service.get_aggregate_stats(local_path) {
-            total_branches += stats.total_branches;
-            total_stashes += stats.total_stashes;
-            total_tags += stats.total_tags;
+        for commit in &snapshot.recent_commits {
+            timeline_entries.push(ActivityEntry {
+                id: format!("{}-{}", project.id, commit.hash),
+                project_id: project.id.clone(),
+                project_name: project.name.clone(),
+                project_color: format!("hsl({}, 70%, 50%)", (idx * 137) % 360),
+                commit_hash: commit.hash.clone(),
+                commit_message: commit.message.clone(),
+                author: commit.author.clone(),
+                email: commit.email.clone(),
+                date: commit.date.clone(),
+                branch: commit.branch.clone(),
+                files_changed: commit.files_changed,
+                additions: commit.additions,
+                deletions: commit.deletions,
+            });
         }
     }
 
-    let most_active_project = project_commit_counts
-        .iter()
-        .max_by_key(|(_, count)| *count)
-        .and_then(|(id, count)| {
-            projects.iter().find(|p| &p.id == id).map(|p| MostActiveProject {
-                id: p.id.clone(),
-                name: p.name.clone(),
-                commit_count: *count,
-            })
-        });
+    timeline_entries.sort_by(|a, b| b.date.cmp(&a.date));
+    timeline_entries.truncate(ANALYTICS_TIMELINE_ENTRIES);
 
-    Ok(DashboardOverview {
-        total_projects: projects.len(),
-        active_projects,
-        needs_attention,
-        commits_today,
-        commits_this_week,
-        commits_this_month,
-        total_branches,
-        total_stashes,
-        total_tags,
-        most_active_project,
+    Ok(AnalyticsData {
+        overview,
+        timeline: ActivityTimeline { entries: timeline_entries },
+        health,
+        heatmap: build_heatmap(daily_contributions, history_start, today),
+        last_updated: now.to_rfc3339(),
+        generated_at: now.to_rfc3339(),
     })
 }
 
-/// Generate timeline activity entries
-#[tauri::command]
-pub async fn generate_analytics_timeline() -> Result<Vec<ActivityEntry>, String> {
-    use chrono::{Duration, Utc};
-    use std::time::Instant;
+fn project_health(project: &Project, result: Option<&AnalyticsSnapshotResult>) -> HealthIndicator {
+    let snapshot = result.and_then(|r| r.snapshot.as_ref());
+    let days_since_last_commit = snapshot.and_then(|s| s.days_since_last_commit);
 
-    let start_time = Instant::now();
-    eprintln!("[Analytics Timeline] Starting generation...");
-
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    eprintln!("[Analytics Timeline] Loaded {} projects in {:?}", projects.len(), start_time.elapsed());
-
-    let service = get_git_service()?;
-    let now = Utc::now();
-    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let since = (today_start - Duration::days(30)).format("%Y-%m-%d").to_string(); // Reduced from 90 to 30 days
-
-    let mut timeline_entries: Vec<ActivityEntry> = Vec::new();
-
-    for (idx, project) in projects.iter().enumerate() {
-        let local_path = match &project.local_path {
-            Some(path) => path,
-            None => continue,
-        };
-
-        let project_start = Instant::now();
-        if let Ok(commits) = service.get_analytics_commit_history(local_path, 30, Some(since.clone()), None, None) { // Reduced from 100 to 30 commits
-            eprintln!("[Analytics Timeline] Project '{}': fetched {} commits in {:?}", project.name, commits.len(), project_start.elapsed());
-            for commit in commits {
-                timeline_entries.push(ActivityEntry {
-                    id: format!("{}-{}", project.id, commit.hash),
-                    project_id: project.id.clone(),
-                    project_name: project.name.clone(),
-                    project_color: format!("hsl({}, 70%, 50%)", (idx * 137) % 360),
-                    commit_hash: commit.hash,
-                    commit_message: commit.message,
-                    author: commit.author,
-                    email: commit.email,
-                    date: commit.date,
-                    branch: commit.branch,
-                    files_changed: commit.files_changed,
-                    additions: commit.additions,
-                    deletions: commit.deletions,
-                });
-            }
-        } else {
-            eprintln!("[Analytics Timeline] Project '{}': failed to fetch commits (took {:?})", project.name, project_start.elapsed());
+    let mut warnings = Vec::new();
+    let health_status = if let Some(error) = result.and_then(|r| r.error.as_ref()) {
+        warnings.push(format!("Could not read repository: {}", error));
+        "attention"
+    } else if let Some(days) = days_since_last_commit {
+        if days > 7 {
+            warnings.push(format!("No commits in {} days", days));
         }
-    }
-
-    timeline_entries.sort_by(|a, b| b.date.cmp(&a.date));
-    let result = timeline_entries.into_iter().take(50).collect(); // Reduced from 100 to 50
-
-    eprintln!("[Analytics Timeline] Total time: {:?}", start_time.elapsed());
-    Ok(result)
-}
-
-/// Generate health indicators
-#[tauri::command]
-pub async fn generate_analytics_health() -> Result<Vec<HealthIndicator>, String> {
-    use std::time::Instant;
-
-    let start_time = Instant::now();
-    eprintln!("[Analytics Health] Starting generation...");
-
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    eprintln!("[Analytics Health] Loaded {} projects", projects.len());
-
-    let service = get_git_service()?;
-    let mut health_indicators: Vec<HealthIndicator> = Vec::new();
-
-    for project in projects.iter() {
-        let local_path = match &project.local_path {
-            Some(path) => path,
-            None => continue,
-        };
-
-        let project_start = Instant::now();
-
-        let days_since_last_commit = service.get_days_since_last_commit(local_path).ok().flatten();
-
-        let mut warnings = Vec::new();
-        let health_status = if let Some(days) = days_since_last_commit {
-            if days > 30 {
-                warnings.push(format!("No commits in {} days", days));
-                "critical"
-            } else if days > 14 {
-                warnings.push(format!("No commits in {} days", days));
-                "warning"
-            } else if days > 7 {
-                warnings.push(format!("No commits in {} days", days));
-                "attention"
-            } else {
-                "healthy"
-            }
-        } else {
-            warnings.push("No commits found".to_string());
+        if days > 30 {
+            "critical"
+        } else if days > 14 {
+            "warning"
+        } else if days > 7 {
             "attention"
-        };
-
-        let uncommitted_duration = if let Some(git_status) = &project.git_status {
-            if git_status.uncommitted_files > 0 {
-                warnings.push(format!("{} uncommitted files", git_status.uncommitted_files));
-                Some(24)
-            } else {
-                None
-            }
         } else {
-            None
-        };
-
-        let stale_branches = service.get_branch_staleness(local_path)
-            .ok()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|b| b.days_since_last_commit > 30)
-            .map(|b| StaleBranchInfo {
-                name: b.name,
-                days_since_last_commit: b.days_since_last_commit,
-                is_remote: b.is_remote,
-            })
-            .collect::<Vec<_>>();
-
-        if !stale_branches.is_empty() {
-            warnings.push(format!("{} stale branches", stale_branches.len()));
+            "healthy"
         }
+    } else {
+        warnings.push("No commits found".to_string());
+        "attention"
+    };
 
-        eprintln!("[Analytics Health] Project '{}': analyzed in {:?}", project.name, project_start.elapsed());
+    let uncommitted_files = project.git_status.as_ref().map_or(0, |s| s.uncommitted_files);
+    let uncommitted_changes_duration = if uncommitted_files > 0 {
+        warnings.push(format!("{} uncommitted files", uncommitted_files));
+        Some(24)
+    } else {
+        None
+    };
 
-        health_indicators.push(HealthIndicator {
-            project_id: project.id.clone(),
-            project_name: project.name.clone(),
-            days_since_last_commit,
-            uncommitted_changes_duration: uncommitted_duration,
-            stale_branches,
-            health_status: health_status.to_string(),
-            warnings,
-        });
+    let stale_branches: Vec<StaleBranchInfo> = snapshot
+        .map(|s| s.branches.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(|b| b.days_since_last_commit > 30)
+        .map(|b| StaleBranchInfo {
+            name: b.name.clone(),
+            days_since_last_commit: b.days_since_last_commit,
+            is_remote: b.is_remote,
+        })
+        .collect();
+    if !stale_branches.is_empty() {
+        warnings.push(format!("{} stale branches", stale_branches.len()));
     }
 
-    eprintln!("[Analytics Health] Total time: {:?}", start_time.elapsed());
-    Ok(health_indicators)
+    HealthIndicator {
+        project_id: project.id.clone(),
+        project_name: project.name.clone(),
+        days_since_last_commit,
+        uncommitted_changes_duration,
+        stale_branches,
+        health_status: health_status.to_string(),
+        warnings,
+    }
 }
 
-/// Generate contribution heatmap
-#[tauri::command]
-pub async fn generate_analytics_heatmap() -> Result<ContributionHeatmap, String> {
-    use chrono::{Duration, Utc};
-    use std::time::Instant;
-
-    let start_time = Instant::now();
-    eprintln!("[Analytics Heatmap] Starting generation...");
-
-    let projects = project_cache::load_projects()
-        .map_err(|e| format!("Failed to load projects: {}", e))?;
-
-    eprintln!("[Analytics Heatmap] Loaded {} projects", projects.len());
-
-    let service = get_git_service()?;
-    let now = Utc::now();
-    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let year_start = today_start - Duration::days(90); // Reduced from 365 to 90 days
-    let since = year_start.format("%Y-%m-%d").to_string();
-
-    let mut daily_contributions: HashMap<String, DailyContribution> = HashMap::new();
-
-    for project in projects.iter() {
-        let local_path = match &project.local_path {
-            Some(path) => path,
-            None => continue,
-        };
-
-        let project_start = Instant::now();
-        if let Ok(commits) = service.get_analytics_commit_history(local_path, 500, Some(since.clone()), None, None) { // Reduced from 1000 to 500
-            eprintln!("[Analytics Heatmap] Project '{}': fetched {} commits in {:?}", project.name, commits.len(), project_start.elapsed());
-            for commit in commits {
-                let date_key = commit.date.split('T').next().unwrap_or(&commit.date).to_string();
-                let entry = daily_contributions.entry(date_key.clone()).or_insert(DailyContribution {
-                    date: date_key,
-                    count: 0,
-                    projects: Vec::new(),
-                    level: 0,
-                });
-                entry.count += 1;
-                if !entry.projects.contains(&project.id) {
-                    entry.projects.push(project.id.clone());
-                }
-            }
-        } else {
-            eprintln!("[Analytics Heatmap] Project '{}': failed to fetch commits (took {:?})", project.name, project_start.elapsed());
-        }
-    }
-
-    // Calculate contribution levels
+fn build_heatmap(
+    mut daily_contributions: HashMap<String, DailyContribution>,
+    start: chrono::NaiveDate,
+    today: chrono::NaiveDate,
+) -> ContributionHeatmap {
     let max_commits = daily_contributions.values().map(|d| d.count).max().unwrap_or(1);
     for contrib in daily_contributions.values_mut() {
+        let ratio = contrib.count as f32 / max_commits as f32;
         contrib.level = if contrib.count == 0 {
             0
-        } else if (contrib.count as f32 / max_commits as f32) < 0.25 {
+        } else if ratio < 0.25 {
             1
-        } else if (contrib.count as f32 / max_commits as f32) < 0.5 {
+        } else if ratio < 0.5 {
             2
-        } else if (contrib.count as f32 / max_commits as f32) < 0.75 {
+        } else if ratio < 0.75 {
             3
         } else {
             4
         };
     }
 
-    // Calculate streaks
     let mut current_streak = 0u32;
     let mut longest_streak = 0u32;
-    let mut temp_streak = 0u32;
-    let mut date = now.date_naive();
-
-    for _ in 0..90 { // Reduced from 365 to 90 days
-        let date_key = date.format("%Y-%m-%d").to_string();
-        if daily_contributions.contains_key(&date_key) {
-            temp_streak += 1;
-            if date == now.date_naive() || current_streak > 0 {
-                current_streak = temp_streak;
+    let mut run = 0u32;
+    let mut days_back = 0u32;
+    let mut date = today;
+    while date >= start {
+        days_back += 1;
+        if daily_contributions.contains_key(&date.format("%Y-%m-%d").to_string()) {
+            run += 1;
+            longest_streak = longest_streak.max(run);
+            // Only a run with no gap since today is the current streak.
+            if run == days_back {
+                current_streak = run;
             }
-            longest_streak = longest_streak.max(temp_streak);
         } else {
-            if current_streak > 0 {
-                current_streak = 0;
-            }
-            temp_streak = 0;
+            run = 0;
         }
-        date = date.pred_opt().unwrap();
+        date = match date.pred_opt() {
+            Some(previous) => previous,
+            None => break,
+        };
     }
 
     let most_productive_day = daily_contributions
@@ -1892,20 +1510,17 @@ pub async fn generate_analytics_heatmap() -> Result<ContributionHeatmap, String>
             date: d.date.clone(),
             count: d.count,
         });
+    let total_contributions = daily_contributions.values().map(|d| d.count).sum();
 
-    let total_contributions: u32 = daily_contributions.values().map(|d| d.count).sum();
-
-    eprintln!("[Analytics Heatmap] Total time: {:?}", start_time.elapsed());
-
-    Ok(ContributionHeatmap {
+    ContributionHeatmap {
         daily_contributions,
-        start_date: year_start.format("%Y-%m-%d").to_string(),
-        end_date: now.format("%Y-%m-%d").to_string(),
+        start_date: start.format("%Y-%m-%d").to_string(),
+        end_date: today.format("%Y-%m-%d").to_string(),
         total_contributions,
         current_streak,
         longest_streak,
         most_productive_day,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1935,5 +1550,84 @@ mod tests {
     fn other_templates_are_written_unchanged() {
         assert_eq!(keep_cargo_lock_tracked("node", RUST_TEMPLATE), RUST_TEMPLATE);
         assert_eq!(keep_cargo_lock_tracked("rust", ""), "");
+    }
+
+    fn day(date: &str) -> chrono::NaiveDate {
+        chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap()
+    }
+
+    fn contributions(days: &[(&str, u32)]) -> HashMap<String, DailyContribution> {
+        days.iter()
+            .map(|(date, count)| {
+                (date.to_string(), DailyContribution { date: date.to_string(), count: *count, projects: Vec::new(), level: 0 })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn current_streak_is_the_run_that_reaches_today() {
+        let days = [("2026-03-10", 1), ("2026-03-09", 2), ("2026-03-07", 1), ("2026-03-06", 1), ("2026-03-05", 1)];
+        let heatmap = build_heatmap(contributions(&days), day("2026-01-01"), day("2026-03-10"));
+        assert_eq!((heatmap.current_streak, heatmap.longest_streak), (2, 3));
+        assert_eq!(heatmap.total_contributions, 6);
+
+        // Without a commit today there is no current streak, whatever happened earlier.
+        let heatmap = build_heatmap(contributions(&days), day("2026-01-01"), day("2026-03-11"));
+        assert_eq!((heatmap.current_streak, heatmap.longest_streak), (0, 3));
+    }
+
+    #[test]
+    fn heatmap_levels_scale_to_the_busiest_day() {
+        let heatmap = build_heatmap(
+            contributions(&[("2026-03-10", 8), ("2026-03-09", 5), ("2026-03-08", 3), ("2026-03-07", 1)]),
+            day("2026-01-01"),
+            day("2026-03-10"),
+        );
+        let level = |date: &str| heatmap.daily_contributions[date].level;
+        assert_eq!((level("2026-03-10"), level("2026-03-09"), level("2026-03-08"), level("2026-03-07")), (4, 3, 2, 1));
+        assert_eq!(heatmap.most_productive_day.map(|d| (d.date, d.count)), Some(("2026-03-10".to_string(), 8)));
+    }
+
+    fn health_of(snapshot_result: serde_json::Value) -> HealthIndicator {
+        let project: Project = serde_json::from_value(serde_json::json!({
+            "id": "p1", "name": "Project", "localPath": "C:\\repo", "projectStatus": "ready", "createdAt": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+        let result: AnalyticsSnapshotResult = serde_json::from_value(snapshot_result).unwrap();
+        project_health(&project, Some(&result))
+    }
+
+    fn snapshot_with(days_since_last_commit: Option<i32>, branches: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "repoPath": "C:\\repo", "snapshot": {
+            "commitDates": [], "recentCommits": [], "branches": branches,
+            "daysSinceLastCommit": days_since_last_commit, "tagCount": 0, "stashCount": 0
+        }})
+    }
+
+    #[test]
+    fn health_status_follows_days_since_the_last_commit() {
+        let status = |days| health_of(snapshot_with(days, serde_json::json!([]))).health_status;
+        assert_eq!(status(Some(7)), "healthy");
+        assert_eq!(status(Some(8)), "attention");
+        assert_eq!(status(Some(15)), "warning");
+        assert_eq!(status(Some(31)), "critical");
+        assert_eq!(status(None), "attention");
+    }
+
+    #[test]
+    fn health_lists_only_branches_stale_for_over_thirty_days() {
+        let branch = |name: &str, days: i32| serde_json::json!({
+            "name": name, "daysSinceLastCommit": days, "isRemote": false, "lastCommitHash": "abc", "lastCommitDate": "2026-01-01T00:00:00Z"
+        });
+        let health = health_of(snapshot_with(Some(0), serde_json::json!([branch("fresh", 30), branch("old", 31)])));
+        assert_eq!(health.stale_branches.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), vec!["old"]);
+        assert_eq!(health.warnings, vec!["1 stale branches"]);
+    }
+
+    #[test]
+    fn an_unreadable_repository_is_reported_not_hidden() {
+        let health = health_of(serde_json::json!({ "repoPath": "C:\\repo", "error": "git log timed out after 30s" }));
+        assert_eq!(health.health_status, "attention");
+        assert_eq!(health.warnings, vec!["Could not read repository: git log timed out after 30s"]);
     }
 }

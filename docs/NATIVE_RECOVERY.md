@@ -14,8 +14,8 @@ receipts and restoration.
    so checkpoints of a deleted source stay listable and recoverable. It is forwarded unchanged
    (canonicalizing would add `\\?\` and change the service's vault key).
 3. Forwards `service.execute("recovery", {repoPath, request, vaultRoot})`. Rust
-   supplies the vault root from the application data directory; callers cannot override it. The service
-   holds its child lock for the whole response, so a slow recovery delays other Git commands.
+   supplies the vault root from the application data directory; callers cannot override it. A slow
+   recovery delays only later commands for the same project (see Service transport).
 4. Only `backup`, `verifyBackup`, `remoteList`, `remoteImport` read the credential-manager token and pass it
    via `setGithubToken` (service memory only); local actions never touch credentials. The token is never
    logged or persisted and is masked in returned errors; requests are not logged.
@@ -82,13 +82,43 @@ returns an empty list and writes nothing. A file that cannot be read (4 tries, ~
 writes fail with the reason and load serves the backup read-only. **Retrieve:** close BitGit, copy the wanted
 `.corrupt-*` file over `projects.json`.
 
+## Service transport
+
+`GitService::execute` matches responses by `id` on a reader thread, so a caller waits only for its own
+answer. Ordering lives in the service (`laneOf` in `ipc-server.ts`): commands sharing a `repoPath` or
+`localPath` run one at a time in arrival order, because Git's index and ref locks do not tolerate overlap.
+Other repositories run concurrently, and commands without a path share one lane. `ping` and
+`getAnalyticsSnapshots` skip ordering; a command added to that set must take no Git locks and touch no
+service state, or same-repository operations will fail on `index.lock`.
+
+A stray promise rejection belongs to no request: the service reports it redacted on stderr and keeps
+serving (`ipc-resilience.test.mjs`). An uncaught exception still exits, since its state is unknown.
+When the service exits, waiting callers fail at once and the next request restarts it. Service memory
+(the token) is lost on restart, so callers send the token before each use. A request unanswered for 30
+minutes fails without restarting the service: a restart would kill other repositories' running operations.
+
+## Content Security Policy
+
+`security.csp` allows only the app's own assets, `data:` images (evidence screenshots) and inline
+styles (`react-hot-toast` injects a `<style>` at runtime). No network, fonts or frames are used. Tauri
+adds a style nonce only for `<style>` tags in the built HTML; one there would disable `'unsafe-inline'`.
+`devCsp` is separate and permissive because Tauri 1 otherwise applies `csp` to the dev server, where
+Vite needs an inline refresh script and `ws://localhost`. A dev run proves nothing about `csp`: verify
+any change in a `tauri build --debug` binary with an isolated `BITGIT_TEST_DATA_DIR`.
+
 ## Verification and limits
 
-`cargo test` uses isolated temp dirs (never APPDATA) and no service; runtime IPC is not unit-tested.
+`cargo test` uses isolated temp dirs (never APPDATA). The transport tests in `git_service.rs` spawn
+`node -e` stand-ins, so they need Node on PATH. Ordering is covered by
+`git-service/tests/ipc-concurrency.test.mjs` against the real service.
 
-- By code reading, a service crash is not detected or restarted: later commands fail until the app restarts.
+- By code reading, `setGithubToken` is service-wide state: two remote recoveries running at once can clear
+  or replace each other's token between `setGithubToken` and `recovery`. Carrying the token inside the
+  request would close the window.
 - Local imports match by path only (no origin URL read), so a scan does not link to a GitHub-only project.
-- The cache lock is in-process: two BitGit processes on one data directory are not coordinated.
+- One GUI process per data directory: `main` holds `instance.lock` there, opened without sharing, and a
+  second process says BitGit is already running and exits. The OS releases the lock when the process
+  dies. The recovery CLI and the Node service never take it; the vault has its own `operation.lock`.
 
 Debug native smoke runs set an absolute `BITGIT_TEST_DATA_DIR`. Cache, settings, and recovery use that
 isolated directory, and credential access is disabled. Release builds ignore the test override.
