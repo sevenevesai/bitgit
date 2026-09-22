@@ -556,6 +556,22 @@ npm run tauri:build
 - [ ] Git service compiled
 - [ ] Windows manifest included
 
+### Automatic updates
+
+Since 1.1.2 the app asks `https://github.com/sevenevesai/bitgit/releases/latest/download/latest.json`
+at startup (Tauri's built-in updater, `tauri.updater` in `tauri.conf.json`) and offers to install a
+newer version. Installs of 1.1.1 and earlier have no updater and must download once by hand.
+
+- Artifacts are signed with the minisign key at `~/.tauri/bitgit.key`; its public half is
+  `tauri.updater.pubkey`. The private key is the `TAURI_PRIVATE_KEY` repository secret and has no
+  password. Losing it means shipped installs never accept another update, because the public key is
+  baked into every binary: back it up off this machine and never commit it.
+- `release.yml` builds `.nsis.zip`, `.app.tar.gz` and `.AppImage.tar.gz` bundles with `.sig` files
+  and uploads `latest.json`. The release is created as a draft and published only after every
+  platform has uploaded, so `releases/latest` never points at an incomplete release.
+- Updates reach Windows installs, macOS app bundles and the Linux AppImage. Debian and RPM installs
+  are outside Tauri 1's updater and keep using the package files.
+
 ---
 
 ## Resources

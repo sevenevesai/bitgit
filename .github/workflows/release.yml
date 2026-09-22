@@ -40,6 +40,7 @@ jobs:
             **Linux:** Download `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.deb` (Debian/Ubuntu) or `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage` (universal)
 
             ### What's New
+            - Automatic updates: from this version on, BitGit checks for a newer release at startup and offers to install it (Windows installers, macOS bundles and the Linux AppImage)
             - Save & Recover workspace: named milestones, byte-exact checkpoints, coverage and comparison, verified recovered copies, and selective file repair behind a safety checkpoint
             - Remote checkpoint backup and import through GitHub, with remote trust and verification
             - Explicit, scoped visual Git publishing: only selected whole files or committed changes are published, with honest status and validated tag pushes
@@ -48,7 +49,7 @@ jobs:
             - One BitGit process per data directory; unhandled frontend errors surface as toasts; the Git service survives stray promise rejections
             - Linux packages build again (wry 0.24.12); 1.1.0 shipped without them
 
-          draft: false
+          draft: true
           prerelease: false
 
   build-tauri:
@@ -107,8 +108,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
+          tagName: ${{ github.ref_name }}
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
   publish-release:
@@ -118,8 +122,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # By ID: the lookup by tag cannot see drafts and would create a second, empty release.
       - name: Publish release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref_name }}
-          draft: false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api --method PATCH "repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}" -F draft=false

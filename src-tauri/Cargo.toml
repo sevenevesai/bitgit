@@ -1,6 +1,6 @@
 [package]
 name = "bitgit"
-version = "1.1.1"
+version = "1.1.2"
 description = "A GitHub Repository Manager"
 authors = ["BitGit Team"]
 license = "MIT"
@@ -16,7 +16,8 @@ tauri = { version = "1.5", features = [
     "dialog-all",
     "fs-read-dir",
     "fs-read-file",
-    "path-all"
+    "path-all",
+    "updater"
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
