@@ -46,6 +46,7 @@ jobs:
             - Automatic idle saves, exact-version notes, screenshots and checks, guided regression search, and a JSON harness CLI
             - Analytics load from one local snapshot per repository; Git service requests run concurrently and a stopped service restarts on the next request
             - One BitGit process per data directory; unhandled frontend errors surface as toasts; the Git service survives stray promise rejections
+            - Linux packages build again (wry 0.24.12); 1.1.0 shipped without them
 
           draft: false
           prerelease: false
