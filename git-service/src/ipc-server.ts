@@ -29,7 +29,8 @@ const UNORDERED_COMMANDS = new Set(['ping', 'getAnalyticsSnapshots']);
 function laneOf(command: IPCCommand): string | null {
   if (UNORDERED_COMMANDS.has(command.type)) return null;
   const target: unknown = command.payload?.repoPath ?? command.payload?.localPath;
-  return typeof target === 'string' ? path.resolve(target).toLowerCase() : '';
+  // Backslashes are separators on Windows only, so fold them before resolving for a stable key everywhere.
+  return typeof target === 'string' ? path.resolve(target.replace(/\\/g, '/')).toLowerCase() : '';
 }
 
 export class IPCServer {
@@ -132,8 +133,11 @@ export class IPCServer {
         }
 
         case 'recovery': {
-          const { repoPath, request, vaultRoot } = command.payload;
-          const recovery = new RecoveryService(repoPath, { githubToken: this.githubToken, vaultRoot });
+          const { repoPath, request, vaultRoot, githubToken } = command.payload;
+          // A token sent with the request is scoped to it. The shared token is a fallback only: it lives in
+          // another lane, so concurrent recovery calls for other projects could change it mid-operation.
+          const token = typeof githubToken === 'string' && githubToken ? githubToken : this.githubToken;
+          const recovery = new RecoveryService(repoPath, { githubToken: token, vaultRoot });
           return { id: command.id, success: true, data: await recovery.dispatch(request) };
         }
 

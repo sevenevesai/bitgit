@@ -26,6 +26,19 @@ export function within(root: string, target: string): boolean {
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
 }
 
+// macOS ships /var, /tmp and /etc as root-owned links into /private (os.tmpdir() lives under /var).
+// Only those exact OS links are tolerated; every component below them is still checked.
+const DARWIN_SYSTEM_LINKS = new Map([['/var', 'private/var'], ['/tmp', 'private/tmp'], ['/etc', 'private/etc']]);
+async function isDarwinSystemLink(current: string): Promise<boolean> {
+  if (process.platform !== 'darwin') return false;
+  const expected = DARWIN_SYSTEM_LINKS.get(current);
+  if (!expected) return false;
+  try {
+    const [stat, link] = await Promise.all([fs.lstat(current), fs.readlink(current)]);
+    return stat.uid === 0 && link.replace(/^\//, '') === expected;
+  } catch { return false; }
+}
+
 export async function assertNoLinks(root: string, target: string): Promise<void> {
   if (!within(root, target)) throw new Error('Path escapes its expected directory');
   const parts = path.relative(root, target).split(path.sep).filter(Boolean);
@@ -33,7 +46,7 @@ export async function assertNoLinks(root: string, target: string): Promise<void>
   for (const part of ['', ...parts]) {
     if (part) current = path.join(current, part);
     const stat = await fs.lstat(current);
-    if (stat.isSymbolicLink()) throw new Error(`Linked paths are outside recovery coverage: ${current}`);
+    if (stat.isSymbolicLink() && !(await isDarwinSystemLink(current))) throw new Error(`Linked paths are outside recovery coverage: ${current}`);
   }
 }
 

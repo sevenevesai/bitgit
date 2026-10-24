@@ -25,9 +25,11 @@ export async function captureSource(repoPath: string, gitDir: string): Promise<C
   let sourceIsGit = false;
   try {
     const top = (await gitRun(repoPath, ['rev-parse', '--show-toplevel'])).toString('utf8').trim();
-    const sameRoot = process.platform === 'win32'
-      ? path.resolve(top).toLowerCase() === path.resolve(repoPath).toLowerCase()
-      : path.resolve(top) === path.resolve(repoPath);
+    const resolvedTop = await fs.realpath(top).catch(() => path.resolve(top));
+    const resolvedRepo = await fs.realpath(repoPath).catch(() => path.resolve(repoPath));
+    const sameRoot = (process.platform === 'win32' || process.platform === 'darwin')
+      ? resolvedTop.toLowerCase() === resolvedRepo.toLowerCase()
+      : resolvedTop === resolvedRepo;
     if (sameRoot) sourceIsGit = true;
   } catch {
     if (await exists(path.join(repoPath, '.git'))) throw new Error('The source Git metadata cannot be read. Existing saved versions can still be recovered.');

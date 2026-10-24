@@ -34,9 +34,13 @@ export class RecoveryService {
     if (!path.isAbsolute(repoPath)) throw new Error('Recovery requires an absolute source folder');
     this.repoPath = path.resolve(repoPath);
     this.options = options;
-    const normalized = process.platform === 'win32' ? this.repoPath.toLowerCase() : this.repoPath;
+    // Windows and default macOS (APFS) volumes are case-insensitive, so one folder must map to one vault.
+    const normalized = process.platform === 'win32' || process.platform === 'darwin' ? this.repoPath.toLowerCase() : this.repoPath;
     this.vaultKey = sha256(normalized).slice(0, 24);
-    const dataRoot = process.env.APPDATA || process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+    const platformDefault = process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Application Support')
+      : path.join(os.homedir(), '.local', 'share');
+    const dataRoot = process.env.APPDATA || process.env.XDG_DATA_HOME || platformDefault;
     const vaultRoot = options.vaultRoot || path.join(dataRoot, 'BitGit', 'checkpoints');
     this.vaultPath = path.resolve(vaultRoot, this.vaultKey);
     this.gitDir = path.join(this.vaultPath, 'repository.git');
