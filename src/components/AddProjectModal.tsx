@@ -99,13 +99,17 @@ export function AddProjectModal({ isOpen, onClose }: AddProjectModalProps) {
       const repos = await invoke<any[]>('fetch_github_repos', { token });
 
       // Transform to our format
-      const transformed: GitHubRepo[] = repos.map(repo => ({
-        name: repo.name,
-        owner: repo.githubOwner || credentials.username,
-        fullName: repo.githubRepo || `${credentials.username}/${repo.name}`,
-        cloneUrl: repo.githubUrl || '',
-        description: '',
-      }));
+      const transformed: GitHubRepo[] = (repos || []).map(repo => {
+        const owner = repo.githubOwner || repo.owner || credentials.username || '';
+        const name = repo.name || '';
+        return {
+          name,
+          owner,
+          fullName: repo.githubRepo || repo.fullName || (owner && name ? `${owner}/${name}` : name),
+          cloneUrl: repo.githubUrl || repo.cloneUrl || '',
+          description: repo.description || '',
+        };
+      });
 
       setGithubRepos(transformed);
 
@@ -205,10 +209,13 @@ export function AddProjectModal({ isOpen, onClose }: AddProjectModalProps) {
     }
   };
 
-  const filteredRepos = githubRepos.filter(repo =>
-    repo.name.toLowerCase().includes(githubSearchQuery.toLowerCase()) ||
-    repo.fullName.toLowerCase().includes(githubSearchQuery.toLowerCase())
-  );
+  const filteredRepos = githubRepos.filter(repo => {
+    const query = githubSearchQuery.toLowerCase();
+    return (
+      (repo.name?.toLowerCase() || '').includes(query) ||
+      (repo.fullName?.toLowerCase() || '').includes(query)
+    );
+  });
 
   if (!isOpen) return null;
 

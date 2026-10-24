@@ -48,10 +48,11 @@ export function Dashboard() {
   const filteredProjects = projects
     .filter((project) => {
       // Search filter
-      const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                           project.localPath?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                           (project.githubOwner && project.githubOwner.toLowerCase().includes(searchQuery.toLowerCase())) ||
-                           (project.githubRepo && project.githubRepo.toLowerCase().includes(searchQuery.toLowerCase()));
+      const query = searchQuery.toLowerCase();
+      const matchesSearch = (project.name?.toLowerCase() || '').includes(query) ||
+                           project.localPath?.toLowerCase().includes(query) ||
+                           (project.githubOwner && project.githubOwner.toLowerCase().includes(query)) ||
+                           (project.githubRepo && project.githubRepo.toLowerCase().includes(query));
 
       // Status filter
       const matchesStatus = statusFilter === 'all' || project.projectStatus === statusFilter;
@@ -161,30 +162,33 @@ export function Dashboard() {
       const target = e.target as HTMLElement;
       const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
 
-      // Ctrl+R: Refresh (re-reads Git state, not just the saved list)
-      if (e.ctrlKey && e.key === 'r') {
+      // Primary modifier key: Ctrl on Windows/Linux, Cmd (meta) or Ctrl on macOS
+      const modKey = e.ctrlKey || e.metaKey;
+
+      // Mod+R: Refresh (re-reads Git state, not just the saved list)
+      if (modKey && e.key === 'r') {
         e.preventDefault();
         void handleRefreshAll();
         return;
       }
 
-      // Ctrl+N: New Project
-      if (e.ctrlKey && e.key === 'n') {
+      // Mod+N: New Project
+      if (modKey && e.key === 'n') {
         e.preventDefault();
         setIsAddProjectOpen(true);
         return;
       }
 
-      // Ctrl+F: Focus search (only if not already in an input)
-      if (e.ctrlKey && e.key === 'f' && !isInputField) {
+      // Mod+F: Focus search (only if not already in an input)
+      if (modKey && e.key === 'f' && !isInputField) {
         e.preventDefault();
         const searchInput = document.querySelector('input[type="text"]') as HTMLInputElement;
         searchInput?.focus();
         return;
       }
 
-      // Ctrl+A: Select All (only if not in an input field)
-      if (e.ctrlKey && e.key === 'a' && !isInputField && projects.length > 0) {
+      // Mod+A: Select All (only if not in an input field)
+      if (modKey && e.key === 'a' && !isInputField && projects.length > 0) {
         e.preventDefault();
         selectAll();
         return;
@@ -196,8 +200,8 @@ export function Dashboard() {
         return;
       }
 
-      // Ctrl+D: Toggle theme (dark mode)
-      if (e.ctrlKey && e.key === 'd') {
+      // Mod+D: Toggle theme (dark mode)
+      if (modKey && e.key === 'd') {
         e.preventDefault();
         toggleTheme();
         return;

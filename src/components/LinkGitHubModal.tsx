@@ -44,8 +44,8 @@ export function LinkGitHubModal({ isOpen, onClose, onLink, projectName }: LinkGi
       setFilteredRepos(
         repos.filter(
           (repo) =>
-            repo.name.toLowerCase().includes(query) ||
-            repo.fullName.toLowerCase().includes(query)
+            (repo.name?.toLowerCase() || '').includes(query) ||
+            (repo.fullName?.toLowerCase() || '').includes(query)
         )
       );
     }
@@ -66,9 +66,27 @@ export function LinkGitHubModal({ isOpen, onClose, onLink, projectName }: LinkGi
       const token = await invoke<string>('get_github_token', { username: credentials.username });
 
       // Fetch repos
-      const fetchedRepos = await invoke<GitHubRepo[]>('fetch_github_repos', { token });
-      setRepos(fetchedRepos);
-      setFilteredRepos(fetchedRepos);
+      const fetchedRepos = await invoke<any[]>('fetch_github_repos', { token });
+      const transformed: GitHubRepo[] = (fetchedRepos || []).map((repo: any) => {
+        const owner = repo.owner || repo.githubOwner || credentials.username || '';
+        const name = repo.name || '';
+        const fullName =
+          repo.fullName ||
+          repo.githubRepo ||
+          (owner && name ? `${owner}/${name}` : name);
+        const cloneUrl = repo.cloneUrl || repo.githubUrl || '';
+        return {
+          name,
+          fullName,
+          cloneUrl,
+          htmlUrl: repo.htmlUrl || (cloneUrl ? cloneUrl.replace(/\.git$/, '') : ''),
+          owner,
+          isPrivate: Boolean(repo.isPrivate),
+          defaultBranch: repo.defaultBranch || 'main',
+        };
+      });
+      setRepos(transformed);
+      setFilteredRepos(transformed);
     } catch (error: any) {
       toast.error(`Failed to load repositories: ${error}`);
       setMode('manual'); // Fall back to manual mode
