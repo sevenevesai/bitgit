@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use windows::Security::Credentials::{PasswordCredential, PasswordVault};
 
+#[cfg(target_os = "windows")]
 const CREDENTIAL_RESOURCE: &str = "BitGit_GitHub_Token";
 #[cfg(not(target_os = "windows"))]
 const KEYRING_SERVICE: &str = "bitgit";
@@ -209,7 +210,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(target_os = "windows")]
     fn invalid_token_is_rejected_before_credential_storage() {
         let manager = CredentialManager::new().unwrap();
         let result = manager.save_token("bitgit-invalid-format-test", "invalid-token");

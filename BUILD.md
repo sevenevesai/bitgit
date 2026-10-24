@@ -1,11 +1,17 @@
 # BitGit Build & Distribution Guide
 
-This guide explains how to build the BitGit MSI installer for Windows distribution.
+This guide explains how to build BitGit for macOS (`.app` / `.dmg`) and Windows (`.msi`).
 
 ## Prerequisites
 
-Before building, ensure you have:
+### macOS Prerequisites:
+- ✅ macOS 11.0+ (Apple Silicon `arm64` or Intel `x86_64`)
+- ✅ Xcode Command Line Tools (`xcode-select --install`)
+- ✅ Node.js 18+ (`brew install node` or via NVM / Volta / fnm)
+- ✅ Rust toolchain (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+- ✅ Git (`brew install git` or system Git)
 
+### Windows Prerequisites:
 - ✅ Windows 10/11 (x64)
 - ✅ Node.js 18+ installed
 - ✅ Rust toolchain installed (https://rustup.rs/)
@@ -14,7 +20,36 @@ Before building, ensure you have:
 
 ## Quick Start
 
-### Option 1: Using PowerShell (Recommended)
+### macOS Build (`.app` and `.dmg`)
+
+```bash
+# 1. Install dependencies
+npm install
+cd git-service && npm install && npm run build && cd ..
+
+# 2. Build frontend
+npm run build
+
+# 3. Build macOS application bundle and DMG
+npm run tauri:build
+```
+
+#### macOS Output Artifacts:
+- **macOS App Bundle:** `src-tauri/target/release/bundle/macos/BitGit.app`
+- **macOS DMG Installer:** `src-tauri/target/release/bundle/dmg/BitGit_1.1.2_aarch64.dmg` (or `_x64.dmg` on Intel)
+
+#### Running on macOS:
+- To run the application directly from the terminal or test it:
+  ```bash
+  open src-tauri/target/release/bundle/macos/BitGit.app
+  ```
+- If downloaded or moved across machines and Gatekeeper blocks unnotarized apps:
+  ```bash
+  xattr -cr /Applications/BitGit.app
+  ```
+  Or right-click `BitGit.app` → **Open** → **Open**.
+
+### Windows Build (MSI Installer)
 
 ```powershell
 # 1. Create code signing certificate (run as Administrator, FIRST TIME ONLY)

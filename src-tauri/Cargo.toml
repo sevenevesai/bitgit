@@ -37,6 +37,9 @@ windows = { version = "0.52", features = [
 [target.'cfg(not(windows))'.dependencies]
 keyring = "2"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

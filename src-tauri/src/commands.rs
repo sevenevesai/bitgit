@@ -408,8 +408,8 @@ fn check_command_available(command: &str) -> bool {
     {
         // Use 'where' command on Windows to check if command exists in PATH
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        Command::new("cmd")
-            .args(&["/C", "where", command])
+        Command::new("where")
+            .arg(command)
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map(|output| output.status.success())
@@ -418,13 +418,46 @@ fn check_command_available(command: &str) -> bool {
 
     #[cfg(not(target_os = "windows"))]
     {
-        // Use 'which' command on Unix systems
+        // Use 'which' command on Unix systems with augmented PATH
         Command::new("which")
             .arg(command)
+            .env("PATH", crate::git_service::get_augmented_path())
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
     }
+}
+
+#[cfg(target_os = "macos")]
+fn find_macos_editor_app(preset: &str) -> Option<String> {
+    let candidates = match preset {
+        "vscode" => vec![
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+            "~/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+        ],
+        "cursor" => vec![
+            "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+            "~/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+        ],
+        "sublime" => vec![
+            "/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl",
+            "~/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl",
+        ],
+        _ => return None,
+    };
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    for candidate in candidates {
+        let path = if candidate.starts_with("~/") && !home.is_empty() {
+            std::path::PathBuf::from(&home).join(&candidate[2..])
+        } else {
+            std::path::PathBuf::from(candidate)
+        };
+        if path.exists() {
+            return Some(path.to_string_lossy().to_string());
+        }
+    }
+    None
 }
 
 /// Check if Sublime Text is available (has special path handling)
@@ -450,7 +483,9 @@ fn check_sublime_available() -> bool {
 
     #[cfg(target_os = "macos")]
     {
-        // Check for Sublime Text.app in Applications
+        if find_macos_editor_app("sublime").is_some() {
+            return true;
+        }
         return std::path::Path::new("/Applications/Sublime Text.app").exists();
     }
 
@@ -469,9 +504,19 @@ fn check_sublime_available() -> bool {
 /// Detect which editors are installed on the system
 #[tauri::command]
 pub async fn detect_installed_editors() -> Result<EditorAvailability, String> {
+    #[cfg(target_os = "macos")]
+    let vscode = check_command_available("code") || find_macos_editor_app("vscode").is_some();
+    #[cfg(not(target_os = "macos"))]
+    let vscode = check_command_available("code");
+
+    #[cfg(target_os = "macos")]
+    let cursor = check_command_available("cursor") || find_macos_editor_app("cursor").is_some();
+    #[cfg(not(target_os = "macos"))]
+    let cursor = check_command_available("cursor");
+
     Ok(EditorAvailability {
-        vscode: check_command_available("code"),
-        cursor: check_command_available("cursor"),
+        vscode,
+        cursor,
         sublime: check_sublime_available(),
     })
 }
@@ -483,8 +528,24 @@ fn get_editor_command(
     path: &str,
 ) -> Result<(String, Vec<String>), String> {
     match preset {
-        "vscode" => Ok(("code".to_string(), vec![path.to_string()])),
-        "cursor" => Ok(("cursor".to_string(), vec![path.to_string()])),
+        "vscode" => {
+            #[cfg(target_os = "macos")]
+            if let Some(app_bin) = find_macos_editor_app("vscode") {
+                if !check_command_available("code") {
+                    return Ok((app_bin, vec![path.to_string()]));
+                }
+            }
+            Ok(("code".to_string(), vec![path.to_string()]))
+        }
+        "cursor" => {
+            #[cfg(target_os = "macos")]
+            if let Some(app_bin) = find_macos_editor_app("cursor") {
+                if !check_command_available("cursor") {
+                    return Ok((app_bin, vec![path.to_string()]));
+                }
+            }
+            Ok(("cursor".to_string(), vec![path.to_string()]))
+        }
         "sublime" => {
             // Try subl first, then check common install paths on Windows
             if check_command_available("subl") {
@@ -508,6 +569,9 @@ fn get_editor_command(
 
             #[cfg(target_os = "macos")]
             {
+                if let Some(subl) = find_macos_editor_app("sublime") {
+                    return Ok((subl, vec![path.to_string()]));
+                }
                 let subl_path = "/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl";
                 if std::path::Path::new(subl_path).exists() {
                     return Ok((subl_path.to_string(), vec![path.to_string()]));
@@ -549,6 +613,16 @@ fn get_editor_command(
 fn execute_editor_command(command: &str, args: &[String]) -> Result<(), String> {
     use std::process::Command;
 
+    // Defense-in-depth: disallow control characters and NUL in commands and arguments
+    if command.chars().any(|c| c.is_control() || c == '\0') {
+        return Err("Invalid editor command".to_string());
+    }
+    for arg in args {
+        if arg.chars().any(|c| c.is_control() || c == '\0') {
+            return Err("Invalid editor arguments".to_string());
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -569,33 +643,54 @@ fn execute_editor_command(command: &str, args: &[String]) -> Result<(), String> 
                     )
                 })?;
         } else {
-            // Use cmd /C to resolve commands from PATH
-            let mut cmd = Command::new("cmd");
-            let mut cmd_args = vec!["/C".to_string(), command.to_string()];
-            cmd_args.extend(args.iter().cloned());
+            // Avoid unescaped cmd.exe /C shell interpretation where metacharacters (&, |) could be injected.
+            // First try resolving the command path via `where.exe`.
+            let resolved_path = Command::new("where.exe")
+                .arg(command)
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+                .ok()
+                .and_then(|output| {
+                    if output.status.success() {
+                        let lines = String::from_utf8_lossy(&output.stdout);
+                        lines.lines().next().map(|s| s.trim().to_string())
+                    } else {
+                        None
+                    }
+                });
 
-            cmd.args(&cmd_args).creation_flags(CREATE_NO_WINDOW);
-
-            cmd.spawn().map_err(|e| {
-                format!(
-                    "Failed to open editor: {}. Make sure '{}' is installed and available in PATH.",
-                    e, command
-                )
-            })?;
+            if let Some(target) = resolved_path {
+                Command::new(&target)
+                    .args(args)
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn()
+                    .map_err(|e| format!("Failed to open editor: {}", e))?;
+            } else {
+                Command::new(command)
+                    .args(args)
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn()
+                    .map_err(|e| {
+                        format!(
+                            "Failed to open editor: {}. Make sure '{}' is installed and available in PATH.",
+                            e, command
+                        )
+                    })?;
+            }
         }
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        Command::new(command)
-            .args(args)
-            .spawn()
-            .map_err(|e| {
-                format!(
-                    "Failed to open editor: {}. Make sure '{}' is installed and available in PATH.",
-                    e, command
-                )
-            })?;
+        let mut cmd = Command::new(command);
+        cmd.args(args);
+        cmd.env("PATH", crate::git_service::get_augmented_path());
+        cmd.spawn().map_err(|e| {
+            format!(
+                "Failed to open editor: {}. Make sure '{}' is installed and available in PATH.",
+                e, command
+            )
+        })?;
     }
 
     Ok(())
@@ -632,16 +727,21 @@ pub async fn open_in_editor(
         .canonicalize()
         .map_err(|e| format!("Failed to resolve path: {}", e))?;
 
-    let mut path_str = canonical_path.to_string_lossy().to_string();
-
-    // On Windows, canonicalize() returns paths with \\?\ prefix which confuses editors
-    // Strip this prefix for cleaner paths
-    #[cfg(target_os = "windows")]
-    {
-        if path_str.starts_with(r"\\?\") {
-            path_str = path_str[4..].to_string();
+    let path_str = {
+        let raw = canonical_path.to_string_lossy().to_string();
+        #[cfg(target_os = "windows")]
+        {
+            if raw.starts_with(r"\\?\") {
+                raw[4..].to_string()
+            } else {
+                raw
+            }
         }
-    }
+        #[cfg(not(target_os = "windows"))]
+        {
+            raw
+        }
+    };
 
     // Get the command for the selected editor
     let (command, args) = get_editor_command(&editor_preset, custom_command.as_deref(), &path_str)?;
@@ -1132,7 +1232,7 @@ pub async fn recovery_command(
         } else { get_git_service()? };
         let token = if request.needs_remote() { forward_stored_token(&service) } else { None };
 
-        service.recovery(&repo_path, request.into_request()).map_err(|e| {
+        service.recovery_with_token(&repo_path, request.into_request(), token.as_deref()).map_err(|e| {
             let message = format!("Recovery failed: {}", e);
             match &token {
                 Some(token) => recovery_request::redact_secret(&message, token),

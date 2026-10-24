@@ -92,6 +92,80 @@ fn read_responses(mut reader: BufReader<ChildStdout>, waiters: Arc<Mutex<Waiters
 }
 
 /// Requests to the service run concurrently; the service orders the ones that share a repository.
+#[cfg(not(windows))]
+pub fn get_augmented_path() -> OsString {
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let extra = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ];
+    let mut extra_strings = Vec::new();
+    if !home.is_empty() {
+        extra_strings.push(format!("{home}/.cargo/bin"));
+        extra_strings.push(format!("{home}/.volta/bin"));
+        extra_strings.push(format!("{home}/.fnm/current/bin"));
+        extra_strings.push(format!("{home}/.asdf/shims"));
+        extra_strings.push(format!("{home}/.local/share/mise/shims"));
+    }
+    let mut parts: Vec<String> = current_path.split(':').map(|s| s.to_string()).collect();
+    for p in extra_strings.iter().map(|s| s.as_str()).chain(extra.into_iter()) {
+        if !parts.iter().any(|existing| existing == p) && std::path::Path::new(p).exists() {
+            parts.push(p.to_string());
+        }
+    }
+    parts.join(":").into()
+}
+
+#[cfg(not(windows))]
+fn resolve_node_program() -> OsString {
+    let aug_path = get_augmented_path();
+    if let Ok(output) = Command::new("which").arg("node").env("PATH", &aug_path).output() {
+        if output.status.success() {
+            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path_str.is_empty() && std::path::Path::new(&path_str).exists() {
+                return path_str.into();
+            }
+        }
+    }
+
+    let mut candidates = vec![
+        std::path::PathBuf::from("/opt/homebrew/bin/node"),
+        std::path::PathBuf::from("/usr/local/bin/node"),
+        std::path::PathBuf::from("/usr/bin/node"),
+    ];
+
+    if let Ok(home) = std::env::var("HOME") {
+        let home_path = std::path::Path::new(&home);
+        candidates.push(home_path.join(".volta/bin/node"));
+        candidates.push(home_path.join(".asdf/shims/node"));
+        candidates.push(home_path.join(".local/share/mise/shims/node"));
+        candidates.push(home_path.join(".fnm/current/bin/node"));
+        candidates.push(home_path.join(".local/share/fnm/current/bin/node"));
+
+        let nvm_versions = home_path.join(".nvm/versions/node");
+        if let Ok(entries) = std::fs::read_dir(nvm_versions) {
+            let mut versions: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+            versions.sort();
+            if let Some(latest) = versions.last() {
+                candidates.push(latest.join("bin/node"));
+            }
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate.into_os_string();
+        }
+    }
+
+    "node".into()
+}
+
 /// A service that has exited is restarted by the next request.
 pub struct GitService {
     program: OsString,
@@ -113,12 +187,36 @@ impl GitService {
                 .parent()
                 .context("Failed to get executable directory")?
                 .to_path_buf();
-            exe_dir.join("_up_").join("git-service").join("dist").join("index.js")
+
+            let direct = exe_dir.join("_up_").join("git-service").join("dist").join("index.js");
+            // macOS .app bundle: Contents/MacOS/.. -> Contents/Resources/_up_/...
+            let macos_resources = exe_dir
+                .parent()
+                .map(|p| p.join("Resources").join("_up_").join("git-service").join("dist").join("index.js"));
+            // Linux package: /usr/bin/.. -> /usr/lib/bitgit/_up_/...
+            let linux_lib = exe_dir
+                .parent()
+                .map(|p| p.join("lib").join("bitgit").join("_up_").join("git-service").join("dist").join("index.js"));
+
+            if direct.exists() {
+                direct
+            } else if let Some(p) = macos_resources.filter(|p| p.exists()) {
+                p
+            } else if let Some(p) = linux_lib.filter(|p| p.exists()) {
+                p
+            } else {
+                direct
+            }
         };
 
         eprintln!("[Rust] Starting Git service from: {}", git_service_path.display());
 
-        let service = Self::with_launch("node".into(), vec![git_service_path.into_os_string()], RESPONSE_TIMEOUT);
+        #[cfg(windows)]
+        let node_program: OsString = "node".into();
+        #[cfg(not(windows))]
+        let node_program = resolve_node_program();
+
+        let service = Self::with_launch(node_program, vec![git_service_path.into_os_string()], RESPONSE_TIMEOUT);
         // Connect now so a missing Node.js or service bundle is reported at startup, not on first use.
         let connection = service.connect()?;
         *lock(&service.connection) = Some(connection);
@@ -148,6 +246,11 @@ impl GitService {
         {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        #[cfg(not(windows))]
+        {
+            cmd.env("PATH", get_augmented_path());
         }
 
         let mut child = cmd.spawn()
@@ -322,10 +425,23 @@ impl GitService {
 
     /// Forwards an already-validated recovery request. The service owns the vault
     /// location, so only the source path and the request travel over IPC.
-    pub fn recovery(&self, repo_path: &str, request: serde_json::Value) -> Result<serde_json::Value> {
+    pub fn recovery_with_token(
+        &self,
+        repo_path: &str,
+        request: serde_json::Value,
+        token: Option<&str>,
+    ) -> Result<serde_json::Value> {
         let vault_root = crate::app_data::config_dir()?.join("checkpoints");
-        let payload = serde_json::json!({ "repoPath": repo_path, "request": request, "vaultRoot": vault_root });
+        let mut payload = serde_json::json!({ "repoPath": repo_path, "request": request, "vaultRoot": vault_root });
+        if let Some(t) = token {
+            payload["githubToken"] = serde_json::Value::String(t.to_string());
+        }
         self.execute("recovery", payload)
+    }
+
+    #[allow(dead_code)]
+    pub fn recovery(&self, repo_path: &str, request: serde_json::Value) -> Result<serde_json::Value> {
+        self.recovery_with_token(repo_path, request, None)
     }
 
     /// Holds the token in the service process memory only; callers must not log it.

@@ -36,13 +36,46 @@ pub fn acquire(data_dir: &Path) -> Result<InstanceLock, AlreadyRunning> {
     }
 }
 
-// BitGit ships for Windows only; elsewhere the guard is a no-op.
-#[cfg(not(windows))]
+#[cfg(unix)]
+pub fn acquire(data_dir: &Path) -> Result<InstanceLock, AlreadyRunning> {
+    use std::os::unix::io::AsRawFd;
+
+    let opened = std::fs::create_dir_all(data_dir).and_then(|()| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(data_dir.join("instance.lock"))
+    });
+
+    match opened {
+        Ok(file) => {
+            let fd = file.as_raw_fd();
+            let res = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+            if res != 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::EWOULDBLOCK) || err.raw_os_error() == Some(libc::EAGAIN) {
+                    return Err(AlreadyRunning);
+                }
+                eprintln!("BitGit instance lock unavailable, starting without it: {err}");
+                return Ok(InstanceLock { _file: None });
+            }
+            Ok(InstanceLock { _file: Some(file) })
+        }
+        Err(error) => {
+            eprintln!("BitGit instance lock unavailable, starting without it: {error}");
+            Ok(InstanceLock { _file: None })
+        }
+    }
+}
+
+// Fallback for non-Windows, non-Unix targets.
+#[cfg(not(any(windows, unix)))]
 pub fn acquire(_data_dir: &Path) -> Result<InstanceLock, AlreadyRunning> {
     Ok(InstanceLock { _file: None })
 }
 
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, unix)))]
 mod tests {
     use super::*;
     use std::path::PathBuf;

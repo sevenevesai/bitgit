@@ -370,10 +370,14 @@ export function ProjectCard({ project }: ProjectCardProps) {
       setIsLoading(true);
       toast.loading('Cloning repository...', { id: 'clone' });
 
+      const separator = selectedPath.includes('\\') ? '\\' : '/';
+      const trimmed = selectedPath.replace(/[\\/]+$/, '');
+      const localPath = `${trimmed}${separator}${project.name}`;
+
       // Clone repository - Tauri automatically converts camelCase to snake_case
       await invoke<Project>('clone_repository', {
         githubUrl: project.githubUrl,
-        localPath: `${selectedPath}\\${project.name}`,
+        localPath,
         projectId: project.id,
       });
 

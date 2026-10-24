@@ -301,6 +301,7 @@ dependencies = [
  "chrono",
  "dirs",
  "keyring",
+ "libc",
  "once_cell",
  "serde",
  "serde_json",
