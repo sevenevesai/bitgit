@@ -35,12 +35,18 @@ jobs:
 
             **Windows:** Download and run `BitGit_${{ steps.get_version.outputs.VERSION }}_x64-setup.exe` (NSIS installer) or `BitGit_${{ steps.get_version.outputs.VERSION }}_x64_en-US.msi` (MSI installer)
 
-            **macOS (beta, macOS 11 or later):** Download `BitGit_${{ steps.get_version.outputs.VERSION }}_aarch64.dmg` (Apple Silicon) or `BitGit_${{ steps.get_version.outputs.VERSION }}_x64.dmg` (Intel), open it, and drag BitGit to your Applications folder. The app is signed and notarized. It needs Node.js 22 or later and Git (`xcode-select --install` provides Git).
+            **macOS:** This release has no macOS build yet. Signed and notarized builds are waiting on Apple signing credentials.
 
             **Linux (AppImage only):** Download `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage`, make it executable (`chmod +x`) and run it. It needs FUSE 2 (`libfuse2`; `libfuse2t64` on Ubuntu 24.04), Node.js 22 or later, Git, and a running Secret Service (GNOME Keyring, KWallet or KeePassXC) to store the GitHub token. The .deb and .rpm are no longer published: they need webkit2gtk 4.0, which current distributions do not ship. For a blank window on NVIDIA drivers, see [INSTALL.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALL.md).
 
             ### What's New
-            - Automatic updates: from this version on, BitGit checks for a newer release at startup and offers to install it (Windows installers, macOS bundles and the Linux AppImage)
+            - Linux: physical paths are resolved at the recovery boundary, a missing Secret Service is named, and timed-out Git groups end
+            - macOS support is in the code (11 or later, Keychain for the GitHub token), but no macOS build is published until signing credentials exist
+            - Linux: only the AppImage is published; the .deb and .rpm need webkit2gtk 4.0, which current distributions do not ship
+            - Windows installers are unchanged apart from the version
+
+            ### Since 1.1.0
+            - Automatic updates: BitGit checks for a newer release at startup and offers to install it (Windows installers and the Linux AppImage)
             - Save & Recover workspace: named milestones, byte-exact checkpoints, coverage and comparison, verified recovered copies, and selective file repair behind a safety checkpoint
             - Remote checkpoint backup and import through GitHub, with remote trust and verification
             - Explicit, scoped visual Git publishing: only selected whole files or committed changes are published, with honest status and validated tag pushes
@@ -118,8 +124,10 @@ jobs:
           echo '{"build":{"beforeBuildCommand":"npm run build"}}' > "$RUNNER_TEMP/bundle.conf.json"
 
       # Without an identity the bundler skips signing, and without the API key notarization, with
-      # only a warning. A macOS release must not ship unsigned.
-      - name: Require the signing secrets (macOS)
+      # only a warning. A macOS release must not ship unsigned: with none of the secrets set the
+      # macOS build is skipped with a warning, with only some set the job fails.
+      - name: Check the signing secrets (macOS)
+        id: apple
         if: runner.os == 'macOS'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -130,13 +138,22 @@ jobs:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
         run: |
           missing=0
+          total=0
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_CONTENT; do
-            if [ -z "${!name}" ]; then echo "::error::The $name secret is not set"; missing=1; fi
+            total=$((total + 1))
+            if [ -z "${!name}" ]; then echo "::error::The $name secret is not set"; missing=$((missing + 1)); fi
           done
-          exit $missing
+          if [ "$missing" -eq "$total" ]; then
+            echo "::warning title=macOS build skipped::None of the six Apple signing secrets are set, so no macOS build is published for ${{ matrix.target }}."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          elif [ "$missing" -gt 0 ]; then
+            exit 1
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Write the App Store Connect API key (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.ready == 'true'
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
         run: |
@@ -159,7 +176,7 @@ jobs:
       # with hardened runtime, notarizes with notarytool and staples the ticket; a rejected
       # submission fails the build. Variable names checked in tooling/bundler/src/bundle/macos/sign.rs.
       - name: Build, sign and notarize Tauri app (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.ready == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -177,7 +194,7 @@ jobs:
           args: ${{ matrix.args }} --config ${{ runner.temp }}/bundle.conf.json
 
       - name: Verify signature, notarization and Gatekeeper (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.ready == 'true'
         run: |
           APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/BitGit.app"
           codesign --verify --deep --strict --verbose=2 "$APP"
@@ -185,7 +202,7 @@ jobs:
           xcrun stapler validate "$APP"
 
       - name: Smoke-test the bundled Git service (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple.outputs.ready == 'true'
         run: node scripts/bundle-smoke.mjs "src-tauri/target/${{ matrix.target }}/release/bundle/macos/BitGit.app/Contents/Resources/_up_/git-service/dist/index.js"
 
       # Tests the published file: extracting needs no FUSE.
