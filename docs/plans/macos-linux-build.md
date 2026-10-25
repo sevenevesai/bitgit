@@ -29,7 +29,7 @@ Windows: projects, Git, publishing, recovery, editor launch and the GitHub token
 |---|---|
 | `src-tauri/tauri.conf.json` | Waits on D1 and D2: `minimumSystemVersion` and explicit `targets` (e.g. `nsis, msi, app, dmg, appimage, updater`). Today it is `10.13` and `"targets": "all"`, so a release still ships the webkit 4.0 deb. |
 | `.github/workflows/release.yml` | Waits on D2, D3 and D6: per-OS release-note text and the version. |
-| `ci.yml` first run | Expect failures that Windows cannot show. The `/var` temp link is handled in the service and the recovery tests. |
+| `ci.yml` first run | Known failure on macOS and Ubuntu: `ipc-concurrency.test.mjs` "a held repository delays only its own later commands" spells the same repo as `toUpperCase() + '\\'`, a different path on POSIX. Off Windows use e.g. `held.work + '/'`. Fix it once the uncommitted edit to that file in the main checkout lands. The `/var` temp link is already handled. |
 | Node floor | Startup failures on Unix name the node path, its version and the Node 20 floor. A Node 16 to 19 that can start the service is not refused: the service uses no Node 20-only API that was found. |
 | `xcode-select --install` hint | Not added. The service starts without Git, so a missing Xcode CLT shows up as the `xcrun` error text from the failing Git command. Add the hint where the service reports Git failures (Phase 2, `git-operations.ts`). |
 
