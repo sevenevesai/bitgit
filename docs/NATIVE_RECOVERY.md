@@ -17,8 +17,9 @@ receipts and restoration.
    supplies the vault root from the application data directory; callers cannot override it. A slow
    recovery delays only later commands for the same project (see Service transport).
 4. Only `backup`, `verifyBackup`, `remoteList`, `remoteImport` read the credential-manager token and pass it
-   via `setGithubToken` (service memory only); local actions never touch credentials. The token is never
-   logged or persisted and is masked in returned errors; requests are not logged.
+   inside that request's `token` field (the service's shared `setGithubToken` value is only a fallback);
+   local actions never touch credentials. The token is never logged or persisted and is masked in returned
+   errors; requests are not logged.
 
 ## Status
 
@@ -112,9 +113,6 @@ any change in a `tauri build --debug` binary with an isolated `BITGIT_TEST_DATA_
 `node -e` stand-ins, so they need Node on PATH. Ordering is covered by
 `git-service/tests/ipc-concurrency.test.mjs` against the real service.
 
-- By code reading, `setGithubToken` is service-wide state: two remote recoveries running at once can clear
-  or replace each other's token between `setGithubToken` and `recovery`. Carrying the token inside the
-  request would close the window.
 - Local imports match by path only (no origin URL read), so a scan does not link to a GitHub-only project.
 - One GUI process per data directory: `main` holds `instance.lock` there, opened without sharing, and a
   second process says BitGit is already running and exits. The OS releases the lock when the process

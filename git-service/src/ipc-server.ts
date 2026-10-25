@@ -132,8 +132,10 @@ export class IPCServer {
         }
 
         case 'recovery': {
-          const { repoPath, request, vaultRoot } = command.payload;
-          const recovery = new RecoveryService(repoPath, { githubToken: this.githubToken, vaultRoot });
+          const { repoPath, request, vaultRoot, token } = command.payload;
+          // The per-request token cannot be changed by another project's lane; the shared one is a fallback.
+          const githubToken = typeof token === 'string' && token ? token : this.githubToken;
+          const recovery = new RecoveryService(repoPath, { githubToken, vaultRoot });
           return { id: command.id, success: true, data: await recovery.dispatch(request) };
         }
 

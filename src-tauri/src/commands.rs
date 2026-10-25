@@ -400,26 +400,49 @@ pub struct EditorAvailability {
     pub sublime: bool,
 }
 
+/// Find the file a Windows command name refers to, the way the shell would: an existing path
+/// as given, otherwise each PATH directory with each PATHEXT extension.
+#[cfg(target_os = "windows")]
+fn resolve_windows_command(command: &str) -> Option<std::path::PathBuf> {
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    resolve_command_in(command, &path_var, &pathext)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn resolve_command_in(command: &str, path_var: &std::ffi::OsStr, pathext: &str) -> Option<std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+
+    let extensions: Vec<&str> = pathext.split(';').filter(|e| !e.is_empty()).collect();
+    let with_extensions = |base: PathBuf| -> Option<PathBuf> {
+        if base.extension().is_some() && base.is_file() {
+            return Some(base);
+        }
+        extensions.iter().find_map(|ext| {
+            let mut name = base.clone().into_os_string();
+            name.push(ext);
+            let candidate = PathBuf::from(name);
+            candidate.is_file().then_some(candidate)
+        })
+    };
+
+    if Path::new(command).is_absolute() || command.contains(['\\', '/']) {
+        return with_extensions(PathBuf::from(command));
+    }
+    std::env::split_paths(path_var).find_map(|dir| with_extensions(dir.join(command)))
+}
+
 /// Check if a command is available in PATH
 fn check_command_available(command: &str) -> bool {
-    use std::process::Command;
-
     #[cfg(target_os = "windows")]
     {
-        // Use 'where' command on Windows to check if command exists in PATH
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        Command::new("cmd")
-            .args(&["/C", "where", command])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
+        resolve_windows_command(command).is_some()
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         // Use 'which' command on Unix systems
-        Command::new("which")
+        std::process::Command::new("which")
             .arg(command)
             .output()
             .map(|output| output.status.success())
@@ -549,40 +572,26 @@ fn get_editor_command(
 fn execute_editor_command(command: &str, args: &[String]) -> Result<(), String> {
     use std::process::Command;
 
+    if command.chars().chain(args.iter().flat_map(|a| a.chars())).any(char::is_control) {
+        return Err("Editor command contains control characters".to_string());
+    }
+
     #[cfg(target_os = "windows")]
     {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        // Check if command is an absolute path or needs PATH resolution
-        let is_absolute = std::path::Path::new(command).is_absolute();
-
-        if is_absolute {
-            // Direct execution for absolute paths
-            Command::new(command)
-                .args(args)
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn()
-                .map_err(|e| {
-                    format!(
-                        "Failed to open editor: {}. Make sure '{}' exists.",
-                        e, command
-                    )
-                })?;
-        } else {
-            // Use cmd /C to resolve commands from PATH
-            let mut cmd = Command::new("cmd");
-            let mut cmd_args = vec!["/C".to_string(), command.to_string()];
-            cmd_args.extend(args.iter().cloned());
-
-            cmd.args(&cmd_args).creation_flags(CREATE_NO_WINDOW);
-
-            cmd.spawn().map_err(|e| {
-                format!(
-                    "Failed to open editor: {}. Make sure '{}' is installed and available in PATH.",
-                    e, command
-                )
-            })?;
-        }
+        // Spawn the resolved file directly: no shell ever sees the command or its arguments.
+        let resolved = resolve_windows_command(command).ok_or_else(|| {
+            format!(
+                "Failed to open editor: '{}' was not found. Make sure it is installed and available in PATH.",
+                command
+            )
+        })?;
+        Command::new(&resolved)
+            .args(args)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("Failed to open editor: {}. Make sure '{}' exists.", e, command))?;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1069,15 +1078,10 @@ pub async fn increment_project_stats(
 
 // ==================== RECOVERY ====================
 
-/// Pass the stored GitHub token to the service for remote recovery actions. It stays in
-/// the service's memory and is never logged or persisted here. Returns the token so the
-/// caller can redact it from error text. Local recovery works without one.
-fn forward_stored_token(service: &GitService) -> Option<String> {
-    // Clear a previously cached token if credentials were removed or became unavailable.
-    if let Err(error) = service.set_github_token("") {
-        eprintln!("[Rust] Could not reset the recovery credential context: {}", error);
-        return None;
-    }
+/// Read the stored GitHub token for a remote recovery action. It travels inside that one
+/// request, so a recovery for another project cannot change it, and it is never logged or
+/// persisted here. The caller redacts it from error text. Local recovery works without one.
+fn read_stored_token() -> Option<String> {
     let manager = match CredentialManager::new() {
         Ok(manager) => manager,
         Err(e) => {
@@ -1087,16 +1091,7 @@ fn forward_stored_token(service: &GitService) -> Option<String> {
     };
 
     match manager.get_stored_credential() {
-        Ok(Some((_, token))) => {
-            if let Err(e) = service.set_github_token(&token) {
-                eprintln!(
-                    "[Rust] Could not pass the GitHub token to recovery: {}",
-                    recovery_request::redact_secret(&e.to_string(), &token)
-                );
-                return None;
-            }
-            Some(token)
-        }
+        Ok(Some((_, token))) => Some(token),
         Ok(None) => None,
         Err(e) => {
             eprintln!("[Rust] Recovery continues without a GitHub token: {}", e);
@@ -1130,9 +1125,9 @@ pub async fn recovery_command(
         let service = if request.runs_check() {
             Arc::new(GitService::new().map_err(|e| format!("Could not start the check service: {}", e))?)
         } else { get_git_service()? };
-        let token = if request.needs_remote() { forward_stored_token(&service) } else { None };
+        let token = if request.needs_remote() { read_stored_token() } else { None };
 
-        service.recovery(&repo_path, request.into_request()).map_err(|e| {
+        service.recovery(&repo_path, request.into_request(), token.as_deref()).map_err(|e| {
             let message = format!("Recovery failed: {}", e);
             match &token {
                 Some(token) => recovery_request::redact_secret(&message, token),
@@ -1527,7 +1522,27 @@ fn build_heatmap(
 mod tests {
     use super::*;
 
-    const RUST_TEMPLATE: &str = "# Cargo\n/target/\nCargo.lock\n\n# IDE\n.vscode/\n";
+    #[test]
+    fn editor_command_resolves_through_path_and_pathext_without_a_shell() {
+        let dir = std::env::temp_dir().join(format!("bitgit-editor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("fake-editor.cmd"), "").unwrap();
+        let path_var = std::env::join_paths([&dir]).unwrap();
+
+        let found = resolve_command_in("fake-editor", &path_var, ".exe;.cmd");
+        assert_eq!(found, Some(dir.join("fake-editor.cmd")));
+        assert_eq!(resolve_command_in("missing & calc", &path_var, ".exe;.cmd"), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn editor_launch_rejects_control_characters() {
+        let err = execute_editor_command("code", &["a\nb".to_string()]).unwrap_err();
+        assert!(err.contains("control characters"));
+        assert!(execute_editor_command("co\0de", &[]).is_err());
+    }
+
+    const RUST_TEMPLATE: &str ="# Cargo\n/target/\nCargo.lock\n\n# IDE\n.vscode/\n";
 
     #[test]
     fn rust_template_keeps_cargo_lock_tracked() {

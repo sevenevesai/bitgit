@@ -54,5 +54,3 @@ started with an isolated `BITGIT_TEST_DATA_DIR`. It lands as its own commit so i
 
 - Code splitting: the 447 KB bundle loads from local disk, not a network. No measured startup cost
   justifies lazy routes and their loading states.
-- `setGithubToken` race between concurrent remote recoveries: recorded in `docs/NATIVE_RECOVERY.md`
-  with its remedy; it changes the recovery request contract and is its own task.

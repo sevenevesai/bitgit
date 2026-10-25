@@ -321,18 +321,15 @@ impl GitService {
     }
 
     /// Forwards an already-validated recovery request. The service owns the vault
-    /// location, so only the source path and the request travel over IPC.
-    pub fn recovery(&self, repo_path: &str, request: serde_json::Value) -> Result<serde_json::Value> {
+    /// location, so only the source path and the request travel over IPC. The token travels
+    /// with the request, so a recovery for another project cannot change it; callers must not log it.
+    pub fn recovery(&self, repo_path: &str, request: serde_json::Value, token: Option<&str>) -> Result<serde_json::Value> {
         let vault_root = crate::app_data::config_dir()?.join("checkpoints");
-        let payload = serde_json::json!({ "repoPath": repo_path, "request": request, "vaultRoot": vault_root });
+        let mut payload = serde_json::json!({ "repoPath": repo_path, "request": request, "vaultRoot": vault_root });
+        if let Some(token) = token {
+            payload["token"] = serde_json::json!(token);
+        }
         self.execute("recovery", payload)
-    }
-
-    /// Holds the token in the service process memory only; callers must not log it.
-    pub fn set_github_token(&self, token: &str) -> Result<()> {
-        let payload = serde_json::json!({ "token": token });
-        self.execute("setGithubToken", payload)?;
-        Ok(())
     }
 
     pub fn verify_github_token(&self, token: &str) -> Result<TokenVerification> {
