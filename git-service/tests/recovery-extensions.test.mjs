@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { RecoveryService } from '../dist/recovery-service.js';
 import { parseCliArgs, parseCliRequest } from '../dist/recovery-cli.js';
 
-// Resolved: macOS reaches its temp folder through the /var link, which recovery refuses.
+// Resolved: macOS reaches its temp folder through the /var link, and the service reports physical paths.
 const TMP = await fs.realpath(os.tmpdir());
 
 const MINUTE = 60_000;
@@ -324,6 +324,17 @@ test('screenshots are copied into the vault, verified by type, and independent o
   }
   assert.equal((await service.readCheckpoint(checkpoint.id)).evidence.length, count, 'rejected screenshots record nothing');
   assert.deepEqual((await fs.readdir(path.join(service.vaultPath, 'evidence', checkpoint.id))).length, count, 'and leave no copies behind');
+});
+
+test('a screenshot in a linked folder is copied off Windows and refused on Windows', async t => {
+  const { service, save, root } = await fixtures(t);
+  const checkpoint = await save('Linked pictures');
+  const shots = path.join(root, 'shots'), linked = path.join(root, 'linked-shots');
+  await fs.mkdir(shots); await fs.writeFile(path.join(shots, 'login.png'), PNG);
+  await fs.symlink(shots, linked, process.platform === 'win32' ? 'junction' : 'dir');
+  const recorded = service.dispatch({ action: 'evidence', checkpointId: checkpoint.id, description: 'Looks right', outcome: 'passed', screenshotPath: path.join(linked, 'login.png') });
+  if (process.platform === 'win32') await assert.rejects(recorded, /Linked paths/);
+  else assert.deepEqual(await fs.readFile((await recorded).screenshotPath), PNG);
 });
 
 // ---------- explicit checks ----------

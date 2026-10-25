@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { RecoveryService } from '../dist/recovery-service.js';
 
-// Resolved: macOS reaches its temp folder through the /var link, which recovery refuses.
+// Resolved: macOS reaches its temp folder through the /var link, and the service reports physical paths.
 const TMP = await fs.realpath(os.tmpdir());
 
 async function fixture(t) {

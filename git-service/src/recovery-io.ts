@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -24,6 +25,26 @@ export function safeRelative(file: string): string {
 export function within(root: string, target: string): boolean {
   const rel = path.relative(path.resolve(root), path.resolve(target));
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+}
+
+// Off Windows, recovery works on physical paths: assertNoLinks refuses every linked component
+// from the root, so a linked ancestor (Fedora Atomic's /home, macOS /tmp and /var) would refuse
+// the whole project. The deepest existing ancestor is resolved, so a missing folder keeps the
+// path, and the vault key, it had while it existed. The JS realpathSync resolves links only;
+// .native would also change letter case on macOS and with it every existing vault key.
+// Windows keeps the lexical path, and with it the junction refusal.
+export function physicalPath(file: string, platform: NodeJS.Platform = process.platform): string {
+  const resolved = path.resolve(file);
+  if (platform === 'win32') return resolved;
+  const missing: string[] = [];
+  for (let current = resolved; ; current = path.dirname(current)) {
+    try { return path.join(realpathSync(current), ...missing); } catch (error) {
+      // Missing, unreadable or looped: try the parent. Every caller still runs assertNoLinks
+      // and its own file operations on the result, and those report what is wrong.
+      if (path.dirname(current) === current) throw error;
+      missing.unshift(path.basename(current));
+    }
+  }
 }
 
 export async function assertNoLinks(root: string, target: string): Promise<void> {

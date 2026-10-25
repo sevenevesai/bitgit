@@ -11,6 +11,13 @@ directory. `options.vaultRoot` supports tests and portable CLI use. The director
 normalized absolute source path, so the UI and CLI share history. Source deletion must not prevent
 listing or recovering checkpoints. Never initialize or modify the source repository during reads.
 
+On macOS and Linux, `physicalPath` (`recovery-io.ts`) first resolves the source folder, the vault
+root, a recovery destination's parent and a screenshot's folder: the realpath of the deepest
+existing ancestor plus the missing rest, so a deleted source keeps its key. A linked ancestor, such
+as Fedora Atomic's `/home` or macOS `/tmp`, is followed; every `assertNoLinks` check then runs on
+the physical path. Receipts keep the caller's spelling, and project config stores it. Windows keeps
+lexical paths and refuses a junction anywhere on them.
+
 Capture records the actual working files, including eligible untracked files, without changing
 HEAD, branches, remotes, or the real index. Enumerate candidates without following links or entering
 nested repositories. Honor Git ignore rules and tracked files, then apply the shared protection
@@ -45,8 +52,9 @@ shell. The explicitly requested check command is the only recovery API that exec
 
 Comparison describes the effect of restoring the checkpoint: add, replace, delete. Render text
 previews with size limits and binary markers. Do not infer feature boundaries from file names.
-Default recovery creates a new, previously nonexistent folder outside the source/vault. Reject
-links, traversal, reserved paths, and collisions. Reject `.git` and Windows `git~<digits>` aliases
+Default recovery creates a new, previously nonexistent folder outside the source/vault, judged on
+the physical folder, so a linked parent cannot lead into either. Reject links, traversal, reserved
+paths, and collisions. Reject `.git` and Windows `git~<digits>` aliases
 in every path component; repair also checks canonical parents to keep writes out of Git metadata.
 The [Git path validator](https://raw.githubusercontent.com/git/git/master/path.c) explains the
 short-name alias boundary. Write into a private temporary sibling folder,

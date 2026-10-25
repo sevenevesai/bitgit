@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { assertNoLinks, atomicJson, atomicWrite, exists, gitRun, safeRelative, sha256, within, withVaultLock } from './recovery-io.js';
+import { assertNoLinks, atomicJson, atomicWrite, exists, gitRun, physicalPath, safeRelative, sha256, within, withVaultLock } from './recovery-io.js';
 import { captureSource, fingerprint, selectCapture, type CapturedSource, type SnapshotFile } from './recovery-capture.js';
 import { COVERAGE_LIMITS, exclusionReason, MAX_CAPTURE_BYTES, MAX_CAPTURE_FILES, MAX_FILE_BYTES } from './recovery-policy.js';
 import { pendingRepair, repairFiles, rollbackRepair } from './recovery-repair.js';
@@ -32,7 +32,9 @@ const validId = (id: unknown): id is string => typeof id === 'string' && /^[0-9a
 const validOid = (oid: string): boolean => /^[0-9a-f]{40}$/.test(oid);
 
 export class RecoveryService {
+  // The physical source folder; displayPath keeps the caller's spelling for receipts.
   readonly repoPath: string;
+  readonly displayPath: string;
   readonly vaultPath: string;
   readonly gitDir: string;
   readonly vaultKey: string;
@@ -40,12 +42,13 @@ export class RecoveryService {
 
   constructor(repoPath: string, options: RecoveryOptions = {}) {
     if (!path.isAbsolute(repoPath)) throw new Error('Recovery requires an absolute source folder');
-    this.repoPath = path.resolve(repoPath);
+    this.displayPath = path.resolve(repoPath);
+    this.repoPath = physicalPath(repoPath);
     this.options = options;
     const normalized = process.platform === 'win32' ? this.repoPath.toLowerCase() : this.repoPath;
     this.vaultKey = sha256(normalized).slice(0, 24);
     const vaultRoot = options.vaultRoot || path.join(defaultDataRoot(), 'BitGit', 'checkpoints');
-    this.vaultPath = path.resolve(vaultRoot, this.vaultKey);
+    this.vaultPath = path.join(physicalPath(vaultRoot), this.vaultKey);
     this.gitDir = path.join(this.vaultPath, 'repository.git');
     if (within(this.repoPath, this.vaultPath)) throw new Error('Checkpoint storage must be outside the source folder');
   }
@@ -252,10 +255,12 @@ export class RecoveryService {
   }
   async recover(id: string, destination: string): Promise<RecoveryReceipt> {
     if (typeof destination !== 'string' || !path.isAbsolute(destination)) throw new Error('Choose an absolute path for the new recovered folder');
-    const target = path.resolve(destination);
-    safeRelative(path.basename(target));
+    const requested = path.resolve(destination);
+    safeRelative(path.basename(requested));
+    // Separation is judged on the physical folder: a linked parent may lead into the source.
+    const parent = physicalPath(path.dirname(requested));
+    const target = path.join(parent, path.basename(requested));
     if (within(this.repoPath, target) || within(target, this.repoPath) || within(this.vaultPath, target) || within(target, this.vaultPath)) throw new Error('Recover into a separate folder outside the source and checkpoint storage');
-    const parent = path.dirname(target);
     await assertNoLinks(path.parse(parent).root, parent);
     if (await exists(target)) throw new Error('The destination already exists. Choose a new folder so nothing is overwritten.');
     const checkpoint = await this.readCheckpoint(id), files = await this.readSnapshot(checkpoint);
@@ -275,7 +280,7 @@ export class RecoveryService {
       try { await this.updateMetadata(id, { recoveredAt: verifiedAt }); } catch {
         warnings.push('The recovered files were verified, but the recovery receipt could not be saved. Existing metadata was preserved.');
       }
-      return { checkpointId: id, destination: target, fileCount: files.length, verifiedAt, ...(warnings.length ? { warnings } : {}) };
+      return { checkpointId: id, destination: requested, fileCount: files.length, verifiedAt, ...(warnings.length ? { warnings } : {}) };
     } finally { await fs.rm(staging, { recursive: true, force: true }); }
   }
   async dispatch<R extends RecoveryRequest>(request: R): Promise<RecoveryResults[R['action']]> {

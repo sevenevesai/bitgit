@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { assertNoLinks, sha256 } from './recovery-io.js';
+import { assertNoLinks, physicalPath, sha256 } from './recovery-io.js';
 import { captureSource } from './recovery-capture.js';
 import { WINDOWS_CHECK_SCRIPT } from './recovery-windows-check.js';
 import type { RecoveryService } from './recovery-service.js';
@@ -58,7 +58,9 @@ function imageExtension(bytes: Buffer): 'png' | 'jpg' | 'webp' | null {
 
 async function copyScreenshot(service: RecoveryService, checkpointId: string, evidenceId: string, source: unknown): Promise<string> {
   if (typeof source !== 'string' || !path.isAbsolute(source)) throw new Error('Choose the screenshot using its absolute file path');
-  const file = path.resolve(source);
+  // Only the folder is resolved: a linked screenshot file stays refused below.
+  const requested = path.resolve(source);
+  const file = path.join(physicalPath(path.dirname(requested)), path.basename(requested));
   await assertNoLinks(path.parse(file).root, path.dirname(file));
   const stat = await fs.lstat(file);
   if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('The screenshot must be a regular file, not a link or folder');

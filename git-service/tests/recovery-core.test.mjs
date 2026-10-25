@@ -5,10 +5,12 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { RecoveryService, defaultDataRoot } from '../dist/recovery-service.js';
-import { safeRelative, withVaultLock, sha256 } from '../dist/recovery-io.js';
+import { physicalPath, safeRelative, withVaultLock, sha256 } from '../dist/recovery-io.js';
 
-// Resolved: macOS reaches its temp folder through the /var link, which recovery refuses.
+// Resolved: macOS reaches its temp folder through the /var link, and the service reports physical paths.
 const TMP = await fs.realpath(os.tmpdir());
+// Windows symlinks need a privilege; junctions do not.
+const LINK = process.platform === 'win32' ? 'junction' : 'dir';
 
 const fixtures = async t => {
   const root = await fs.mkdtemp(path.join(TMP, 'bitgit-recovery-core-'));
@@ -164,12 +166,52 @@ test('ordinary folder captures without initializing Git', async t => {
 test('links and linked parents cannot escape capture or recovery', async t => {
   const { service, root, repo } = await fixtures(t);
   const external = path.join(root, 'external'); await fs.mkdir(external); await fs.writeFile(path.join(external, 'private.txt'), 'outside project');
-  await fs.symlink(external, path.join(repo, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  await fs.symlink(external, path.join(repo, 'linked'), LINK);
   const preview = await service.dispatch({ action: 'preview' });
   assert.ok(!preview.coverage.included.some(file => file.path.startsWith('linked/')));
   const saved = await service.dispatch({ action: 'create', label: 'No links' });
-  const linkedParent = path.join(root, 'linked-destination'); await fs.symlink(external, linkedParent, process.platform === 'win32' ? 'junction' : 'dir');
-  await assert.rejects(service.dispatch({ action: 'recover', checkpointId: saved.id, destination: path.join(linkedParent, 'copy') }), /Linked paths/);
+  const linkedParent = path.join(root, 'linked-destination'); await fs.symlink(external, linkedParent, LINK);
+  const intoSource = path.join(root, 'into-source'); await fs.symlink(repo, intoSource, LINK);
+  const recover = destination => service.dispatch({ action: 'recover', checkpointId: saved.id, destination });
+  if (process.platform === 'win32') {
+    await assert.rejects(recover(path.join(linkedParent, 'copy')), /Linked paths/);
+    await assert.rejects(recover(path.join(intoSource, 'copy')), /Linked paths/);
+  } else {
+    const receipt = await recover(path.join(linkedParent, 'copy'));
+    assert.equal(receipt.destination, path.join(linkedParent, 'copy'), 'the receipt keeps the requested spelling');
+    assert.equal(await fs.readFile(path.join(external, 'copy', 'app.txt'), 'utf8'), 'working\r\n', 'the copy lands in the physical folder');
+    await assert.rejects(recover(path.join(intoSource, 'copy')), /separate folder outside the source/);
+    await assert.rejects(fs.lstat(path.join(repo, 'copy')), { code: 'ENOENT' });
+  }
+});
+
+test('a linked ancestor of the source or vault is followed off Windows and refused on Windows', async t => {
+  const { service, root, repo } = await fixtures(t);
+  const alias = path.join(root, 'alias'); await fs.symlink(root, alias, LINK);
+  const aliased = () => new RecoveryService(path.join(alias, 'project'), { vaultRoot: path.join(alias, 'vault') });
+  if (process.platform === 'win32') {
+    await assert.rejects(new RecoveryService(path.join(alias, 'project'), { vaultRoot: path.dirname(service.vaultPath) }).dispatch({ action: 'create', label: 'Linked source' }), /Linked paths/);
+    await assert.rejects(new RecoveryService(repo, { vaultRoot: path.join(alias, 'vault') }).dispatch({ action: 'state' }), /Linked paths/);
+  } else {
+    assert.equal(aliased().repoPath, repo); assert.equal(aliased().vaultPath, service.vaultPath);
+    const saved = await aliased().dispatch({ action: 'create', label: 'Through the link' });
+    assert.deepEqual((await service.dispatch({ action: 'state' })).checkpoints.map(item => item.id), [saved.id], 'both spellings share one history');
+    await fs.rm(repo, { recursive: true });
+    assert.equal(aliased().vaultPath, service.vaultPath, 'a missing source keeps its vault');
+    const state = await aliased().dispatch({ action: 'state' });
+    assert.equal(state.sourceAvailable, false); assert.deepEqual(state.checkpoints.map(item => item.id), [saved.id]);
+  }
+});
+
+test('physicalPath resolves the deepest existing ancestor off Windows and stays lexical on Windows', async t => {
+  const { root } = await fixtures(t);
+  const real = path.join(root, 'real'), alias = path.join(root, 'alias');
+  await fs.mkdir(path.join(real, 'Inner'), { recursive: true }); await fs.symlink(real, alias, LINK);
+  // Junctions resolve like symlinks here, so the Unix branch is exercised on every OS.
+  assert.equal(physicalPath(path.join(alias, 'Inner'), 'linux'), path.join(real, 'Inner'));
+  assert.equal(physicalPath(path.join(alias, 'inner'), 'darwin'), path.join(real, 'inner'), 'letter case is kept');
+  assert.equal(physicalPath(path.join(alias, 'missing', 'child'), 'linux'), path.join(real, 'missing', 'child'), 'missing components are kept');
+  assert.equal(physicalPath(path.join(alias, 'Inner'), 'win32'), path.join(alias, 'Inner'), 'Windows keeps the lexical path');
 });
 
 test('multiple service instances serialize writes and active process locks fail clearly', async t => {

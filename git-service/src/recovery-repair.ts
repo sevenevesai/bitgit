@@ -130,7 +130,7 @@ export async function repairFiles(service: RecoveryService, request: Extract<Rec
       if ((written ? sha256(written) : null) !== entry.afterHash) throw new Error(`Could not verify repaired file: ${entry.path}`);
     }
     await cleanJournal(service, journal);
-    return { checkpointId: checkpoint.id, destination: service.repoPath, fileCount: paths.length, verifiedAt: service.now(), safetyCheckpointId: safety.id };
+    return { checkpointId: checkpoint.id, destination: service.displayPath, fileCount: paths.length, verifiedAt: service.now(), safetyCheckpointId: safety.id };
   } catch (error: any) {
     // Retain both the safety checkpoint and exact-byte journal until explicit rollback.
     throw new Error(`${error.message}. Repair is incomplete. Undo the interrupted repair or recover safety checkpoint ${safety.id}.`);
@@ -169,6 +169,6 @@ export async function rollbackRepair(service: RecoveryService): Promise<Recovery
     if ((restored ? sha256(restored) : null) !== entry.beforeHash) throw new Error(`Could not verify rollback: ${entry.path}`);
   }
   await cleanJournal(service, journal);
-  return { checkpointId: journal.safetyCheckpointId, destination: service.repoPath, fileCount: journal.entries.length,
+  return { checkpointId: journal.safetyCheckpointId, destination: service.displayPath, fileCount: journal.entries.length,
     verifiedAt: service.now(), safetyCheckpointId: journal.safetyCheckpointId };
 }

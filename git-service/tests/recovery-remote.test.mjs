@@ -8,7 +8,7 @@ import { RecoveryService } from '../dist/recovery-service.js';
 import { validateBackupRemote } from '../dist/recovery-remote.js';
 import { sha256 } from '../dist/recovery-io.js';
 
-// Resolved: macOS reaches its temp folder through the /var link, which recovery refuses.
+// Resolved: macOS reaches its temp folder through the /var link, and the service reports physical paths.
 const TMP = await fs.realpath(os.tmpdir());
 
 async function fixture(t) {
