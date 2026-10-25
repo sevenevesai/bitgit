@@ -37,7 +37,9 @@ function heldRepository(name) {
   fx.git(work, 'branch', 'other');
   const gate = `${sandbox.dir(`${name}-gate`)}`.replace(/\\/g, '/');
   const hook = join(work, '.git', 'hooks', 'post-checkout');
-  writeFileSync(hook, `#!/bin/sh\nwhile [ ! -f "${gate}" ]; do sleep 0.1; done\n`);
+  // Bounded (~2 min, above the IPC timeouts): a run that dies before release() orphans git and this hook,
+  // because the IPC server exits without killing its git children.
+  writeFileSync(hook, `#!/bin/sh\ni=0\nwhile [ ! -f "${gate}" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done\n`);
   chmodSync(hook, 0o755);
   return { work, release: () => writeFileSync(gate, '') };
 }
@@ -45,28 +47,35 @@ function heldRepository(name) {
 test('a held repository delays only its own later commands', async t => {
   const call = await ipcSession(t);
   const held = heldRepository('held');
-  const { work: free } = fx.seedProject(sandbox, 'free');
-  const order = [];
-  const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10);
+  // A failed assertion must still release: the session's after-hook closes stdin, the server exits at once,
+  // and the held checkout would be left running.
+  try {
+    const { work: free } = fx.seedProject(sandbox, 'free');
+    const order = [];
+    const day = (offset) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10);
 
-  const checkout = call('switchBranch', { repoPath: held.work, branchName: 'other' }).then(r => { order.push('checkout'); return r; });
-  // Same repository under a different spelling: it must still queue behind the checkout.
-  const behind = call('getCurrentBranch', { repoPath: held.work.toUpperCase() + '\\' }).then(r => { order.push('behind'); return r; });
+    const checkout = call('switchBranch', { repoPath: held.work, branchName: 'other' }).then(r => { order.push('checkout'); return r; });
+    // Same repository under a different spelling: it must still queue behind the checkout.
+    const respelled = process.platform === 'win32' ? held.work.toUpperCase() + '\\' : held.work + '/';
+    const behind = call('getCurrentBranch', { repoPath: respelled }).then(r => { order.push('behind'); return r; });
 
-  const other = await call('getFileChanges', { repoPath: free });
-  assert.equal(other.success, true);
-  const snapshots = await call('getAnalyticsSnapshots', {
-    repoPaths: [held.work], params: { historySince: day(-90), recentSince: day(-30), recentLimit: 30 },
-  });
-  assert.equal(snapshots.success, true);
-  assert.equal((await call('ping', {})).data, 'pong');
-  assert.deepEqual(order, [], 'nothing in the held repository may finish before its checkout does');
+    const other = await call('getFileChanges', { repoPath: free });
+    assert.equal(other.success, true);
+    const snapshots = await call('getAnalyticsSnapshots', {
+      repoPaths: [held.work], params: { historySince: day(-90), recentSince: day(-30), recentLimit: 30 },
+    });
+    assert.equal(snapshots.success, true);
+    assert.equal((await call('ping', {})).data, 'pong');
+    assert.deepEqual(order, [], 'nothing in the held repository may finish before its checkout does');
 
-  held.release();
-  assert.equal((await checkout).success, true);
-  const current = await behind;
-  assert.deepEqual(order, ['checkout', 'behind']);
-  assert.equal(current.data, 'other', 'the queued read must observe the finished checkout');
+    held.release();
+    assert.equal((await checkout).success, true);
+    const current = await behind;
+    assert.deepEqual(order, ['checkout', 'behind']);
+    assert.equal(current.data, 'other', 'the queued read must observe the finished checkout');
+  } finally {
+    held.release();
+  }
 });
 
 test('a failing command does not block the ones queued behind it', async t => {
