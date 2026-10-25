@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as readline from 'readline';
-import { GitOperations, cloneRepository, initRepository, addRemote, pushToRemote, getAnalyticsSnapshots, errorText } from './git-operations.js';
+import { GitOperations, cloneRepository, initRepository, addRemote, pushToRemote, getAnalyticsSnapshots, errorText, withGitSetupHint } from './git-operations.js';
 import { GitHubAPI } from './github-api.js';
 import { RecoveryService } from './recovery-service.js';
 
@@ -374,7 +374,7 @@ export class IPCServer {
       return {
         id: command.id,
         success: false,
-        error: error.message,
+        error: withGitSetupHint(error.message),
       };
     }
   }

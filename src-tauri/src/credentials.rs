@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[cfg(target_os = "windows")]
 use windows::Security::Credentials::{PasswordCredential, PasswordVault};
 
+#[cfg(target_os = "windows")]
 const CREDENTIAL_RESOURCE: &str = "BitGit_GitHub_Token";
 #[cfg(not(target_os = "windows"))]
 const KEYRING_SERVICE: &str = "bitgit";
@@ -21,6 +22,20 @@ fn get_config_dir() -> Result<PathBuf> {
 
 fn get_username_file() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("github_username.txt"))
+}
+
+/// Commands report only the outermost message, so it must name the fix. Linux keeps the token in
+/// the Secret Service, which bare window managers do not run; keyring reports a missing or locked
+/// store only as a platform or access failure.
+#[cfg(not(target_os = "windows"))]
+fn keyring_error(error: keyring::Error, action: &str) -> anyhow::Error {
+    let unreachable = matches!(error, keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_));
+    let message = if cfg!(target_os = "linux") && unreachable {
+        format!("{action}: no unlocked Secret Service was reachable ({error}). BitGit keeps the token in GNOME Keyring, KWallet or KeePassXC through the Secret Service; start and unlock one, then try again")
+    } else {
+        action.to_string()
+    };
+    anyhow::Error::new(error).context(message)
 }
 
 pub struct CredentialManager {
@@ -83,7 +98,7 @@ impl CredentialManager {
             let entry = keyring::Entry::new(KEYRING_SERVICE, username)
                 .context("Failed to create keyring entry")?;
             entry.set_password(token)
-                .context("Failed to save token to keyring")?;
+                .map_err(|error| keyring_error(error, "Failed to save token to keyring"))?;
         }
 
         // Save username to file for later retrieval
@@ -122,7 +137,7 @@ impl CredentialManager {
             let entry = keyring::Entry::new(KEYRING_SERVICE, username)
                 .context("Failed to create keyring entry")?;
             entry.get_password()
-                .context("Failed to retrieve token from keyring")
+                .map_err(|error| keyring_error(error, "Failed to retrieve token from keyring"))
         }
     }
 
@@ -152,7 +167,7 @@ impl CredentialManager {
             let entry = keyring::Entry::new(KEYRING_SERVICE, username)
                 .context("Failed to create keyring entry")?;
             entry.delete_password()
-                .context("Failed to delete token from keyring")
+                .map_err(|error| keyring_error(error, "Failed to delete token from keyring"))
         }
     }
 
@@ -209,11 +224,21 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(target_os = "windows")]
     fn invalid_token_is_rejected_before_credential_storage() {
         let manager = CredentialManager::new().unwrap();
         let result = manager.save_token("bitgit-invalid-format-test", "invalid-token");
         assert!(result.is_err());
         // No real credential or username file is created, overwritten, read or deleted.
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn only_linux_names_the_secret_service_and_only_for_an_unreachable_store() {
+        let locked = keyring::Error::NoStorageAccess(Box::new(std::io::Error::other("collection is locked")));
+        let message = keyring_error(locked, "Failed to save token to keyring").to_string();
+        assert!(message.starts_with("Failed to save token to keyring"));
+        assert_eq!(message.contains("Secret Service"), cfg!(target_os = "linux"));
+        let missing = keyring_error(keyring::Error::NoEntry, "Failed to retrieve token from keyring");
+        assert_eq!(missing.to_string(), "Failed to retrieve token from keyring");
     }
 }

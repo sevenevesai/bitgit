@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import * as fx from './git-reliability-fixtures.mjs';
 
 const sandbox = fx.createSandbox();
-const { GitOperations, PublishError, BranchIntegrationError, pushToRemote } = await import('../dist/git-operations.js');
+const { GitOperations, PublishError, BranchIntegrationError, pushToRemote, withGitSetupHint } = await import('../dist/git-operations.js');
 
 const serviceLog = console.error;
 console.error = (...args) => {
@@ -169,6 +169,35 @@ describe('checkStatus', () => {
     assert.equal(fx.head(work), headBefore);
     assert.equal(fx.indexBytes(work), indexBefore);
     assert.equal(fx.git(work, 'rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD');
+  });
+
+  it('ends every transport helper of a status fetch that times out', {
+    skip: process.platform === 'win32' && 'Windows ends the tree with taskkill /T', timeout: 90_000,
+  }, async () => {
+    const { work } = project();
+    // git signals only its direct child, so the helper's own background child records the SIGTERM.
+    const marker = join(sandbox.root, 'helper-terminated');
+    const helper = join(sandbox.root, 'helper-child.sh');
+    const ssh = join(sandbox.root, 'hanging-ssh.sh');
+    writeFileSync(helper, `#!/bin/sh\ntrap 'echo terminated > "${marker}"; exit 143' TERM\nsleep 300 &\nwait\n`);
+    writeFileSync(ssh, `#!/bin/sh\n/bin/sh "${helper}" &\nwait\n`);
+    chmodSync(ssh, 0o755);
+    fx.git(work, 'config', 'core.sshCommand', ssh);
+    fx.git(work, 'config', 'ssh.variant', 'simple');
+    fx.git(work, 'remote', 'set-url', 'origin', 'ssh://example.invalid/hanging.git');
+    const status = await new GitOperations(work).checkStatus();
+    assert.match(status.remoteError, /timed out/);
+    for (let i = 0; i < 100 && !existsSync(marker); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(existsSync(marker), 'the helper process group received SIGTERM');
+  });
+
+  it('names the Xcode Command Line Tools install when the macOS git stub fails', () => {
+    const stub = 'xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), missing xcrun';
+    const hinted = withGitSetupHint(stub, 'darwin');
+    assert.ok(hinted.startsWith(stub) && hinted.includes('xcode-select --install'));
+    assert.equal(withGitSetupHint(hinted, 'darwin'), hinted, 'the hint is added once');
+    assert.equal(withGitSetupHint(stub, 'linux'), stub);
+    assert.equal(withGitSetupHint('fatal: not a git repository', 'darwin'), 'fatal: not a git repository');
   });
 });
 

@@ -27,7 +27,9 @@ interface GitRunOptions { input?: string | Buffer; timeoutMs?: number; readOnly?
 function runGit(cwd: string, args: string[], options: GitRunOptions = {}): Promise<GitRun> {
   const fullArgs = [...(options.readOnly ? ['--no-optional-locks'] : []), '--literal-pathspecs', '-c', 'core.quotepath=false', ...args];
   return new Promise((resolve, reject) => {
-    const child = spawn('git', fullArgs, { cwd, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' } });
+    // Off Windows a timed git leads its own process group, so the timeout reaches its transport helpers too.
+    const ownGroup = process.platform !== 'win32' && Boolean(options.timeoutMs);
+    const child = spawn('git', fullArgs, { cwd, windowsHide: true, detached: ownGroup, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' } });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let settled = false;
@@ -40,7 +42,10 @@ function runGit(cwd: string, args: string[], options: GitRunOptions = {}): Promi
     // Settle at the deadline instead of waiting for 'close': a surviving transport helper can hold the pipes open.
     const timer = options.timeoutMs ? setTimeout(() => {
       if (process.platform === 'win32' && child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-      else child.kill();
+      else if (ownGroup && child.pid) {
+        // SIGTERM, not SIGKILL: git removes its lock files on SIGTERM.
+        try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } // The group is gone: signal the leader.
+      } else child.kill();
       settle(() => reject(new Error(`git ${args[0]} timed out after ${Math.round((options.timeoutMs ?? 0) / 1000)}s`)));
     }, options.timeoutMs) : null;
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
@@ -63,7 +68,16 @@ export function errorText(error: unknown): string {
 
 function gitMessage(run: GitRun): string {
   const text = (run.stderr.trim() || run.stdout.toString('utf8').trim()).slice(0, 800);
-  return redactSecrets(text) || `exit code ${run.code}`;
+  return withGitSetupHint(redactSecrets(text) || `exit code ${run.code}`);
+}
+
+// Until the Command Line Tools are installed, macOS's /usr/bin/git is a stub that fails every
+// command with xcrun or xcode-select text, which does not say what to do.
+const MISSING_XCODE_TOOLS = /xcrun: error|xcode-select: note|command line developer tools/i;
+const XCODE_TOOLS_HINT = 'Install the Xcode Command Line Tools with `xcode-select --install`, then try again.';
+export function withGitSetupHint(text: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'darwin' || !MISSING_XCODE_TOOLS.test(text) || text.includes(XCODE_TOOLS_HINT)) return text;
+  return `${text}\n${XCODE_TOOLS_HINT}`;
 }
 
 async function gitOutput(cwd: string, args: string[], options?: GitRunOptions): Promise<string> {
