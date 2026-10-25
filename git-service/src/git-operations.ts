@@ -1,4 +1,4 @@
-import simpleGit, { SimpleGit, StatusResult, LogResult, DiffResult } from 'simple-git';
+import { simpleGit, SimpleGit, StatusResult, LogResult, DiffResult } from 'simple-git';
 import { spawn } from 'child_process';
 import {
   StatusInfo, SyncResult, SyncOutcome, PublishOptions, BranchInfo, CommitInfo, StashInfo, TagInfo,
