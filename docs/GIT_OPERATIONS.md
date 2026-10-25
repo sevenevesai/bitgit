@@ -113,6 +113,16 @@ absent origin from `remoteUrl` is added first (fetching needs it).
 - `pushToRemote(localPath, remoteName, branch, options?)` pushes through
   `pushExistingCommits(remote, branch, options)` with validation.
 
+## Argument hardening
+
+Branch and tag names pass `validateRefName` before `switchBranch`, `deleteBranch` and `deleteTag`, and
+those commands end options with `--`. `cloneRepository` and `addRemote` accept only `https`, `http`,
+`ssh`, `git` or scp-style URLs and an absolute destination; `ext::`, `file:`, option-like and
+control-character values are refused, clone runs with `protocol.ext.allow=never`, and `addRemote`
+also validates the remote name. Stash messages go through `stash push -m` (max 1000 chars, no NUL/CR),
+stash indexes must be integers 0-100000 and history limits 1-1000. Publishing keeps its own
+`assertRemoteUrl`, which still allows local paths.
+
 ## IPC and native callers
 
 IPC forwards `selectedFiles`/`allowWarnings` for publishing, validation and merges, `scope` for

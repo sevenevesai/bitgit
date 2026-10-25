@@ -1249,9 +1249,11 @@ export class GitOperations {
    * Switch to a different branch
    */
   async switchBranch(branchName: string): Promise<void> {
+    GitOperations.validateRefName(branchName, 'branch');
     await this.ensureGitRepo();
     try {
-      await this.git.checkout(branchName);
+      // The trailing `--` keeps the name from being read as a pathspec.
+      await this.git.raw(['checkout', branchName, '--']);
     } catch (error) {
       throw new Error(`Failed to switch branch: ${error}`);
     }
@@ -1261,10 +1263,11 @@ export class GitOperations {
    * Delete a branch
    */
   async deleteBranch(branchName: string, force: boolean = false): Promise<void> {
+    GitOperations.validateRefName(branchName, 'branch');
     await this.ensureGitRepo();
     try {
-      const flag = force ? '-D' : '-d';
-      await this.git.branch([flag, branchName]);
+      const flag = force === true ? '-D' : '-d';
+      await this.git.branch([flag, '--', branchName]);
     } catch (error) {
       throw new Error(`Failed to delete branch: ${error}`);
     }
@@ -1274,6 +1277,7 @@ export class GitOperations {
    * Get commit history with limit
    */
   async getCommitHistory(limit: number = 50): Promise<CommitInfo[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('Commit history limit must be 1-1000');
     await this.ensureGitRepo();
     try {
       const log: LogResult = await this.git.log({ maxCount: limit });
@@ -1379,16 +1383,24 @@ export class GitOperations {
    * Stash management
    */
   async createStash(message?: string): Promise<void> {
+    if (message !== undefined && message !== null && (typeof message !== 'string' || message.length > 1000 || /[\x00\r]/.test(message))) {
+      throw new Error('Invalid stash message');
+    }
     await this.ensureGitRepo();
     try {
       if (message) {
-        await this.git.stash(['save', message]);
+        // `-m <message>` keeps a message beginning with `-` from being parsed as an option.
+        await this.git.stash(['push', '-m', message]);
       } else {
         await this.git.stash();
       }
     } catch (error) {
       throw new Error(`Failed to create stash: ${error}`);
     }
+  }
+
+  private static validateStashIndex(index: number): void {
+    if (!Number.isInteger(index) || index < 0 || index > 100000) throw new Error('Invalid stash index');
   }
 
   async listStashes(): Promise<StashInfo[]> {
@@ -1408,6 +1420,7 @@ export class GitOperations {
   }
 
   async applyStash(index: number): Promise<void> {
+    GitOperations.validateStashIndex(index);
     await this.ensureGitRepo();
     try {
       await this.git.stash(['apply', `stash@{${index}}`]);
@@ -1426,6 +1439,7 @@ export class GitOperations {
   }
 
   async dropStash(index: number): Promise<void> {
+    GitOperations.validateStashIndex(index);
     await this.ensureGitRepo();
     try {
       await this.git.stash(['drop', `stash@{${index}}`]);
@@ -1624,9 +1638,10 @@ export class GitOperations {
   }
 
   async deleteTag(tagName: string): Promise<void> {
+    GitOperations.validateRefName(tagName, 'tag');
     await this.ensureGitRepo();
     try {
-      await this.git.tag(['-d', tagName]);
+      await this.git.tag(['-d', '--', tagName]);
     } catch (error) {
       throw new Error(`Failed to delete tag: ${error}`);
     }
@@ -1804,12 +1819,37 @@ export async function getAnalyticsSnapshots(repoPaths: string[], params: Analyti
 
 // Standalone Git operations (not tied to a specific repository)
 
+// Only network transports (and scp-style SSH) may be cloned or linked. `ext::` and other remote helpers,
+// option-like values and control characters are refused before Git sees them.
+function assertNetworkRemoteUrl(remoteUrl: unknown): asserts remoteUrl is string {
+  if (typeof remoteUrl !== 'string' || !remoteUrl.trim() || remoteUrl.length > 2048 || remoteUrl.startsWith('-')
+    || /[\x00-\x1f\x7f\s]/.test(remoteUrl) || /^[a-z0-9+.-]+::/i.test(remoteUrl)) {
+    throw new Error('Invalid remote URL');
+  }
+  const scpLike = /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:(?!\/\/)[^\s]+$/.test(remoteUrl);
+  if (!scpLike && !/^(?:https?|ssh|git):\/\/[^/\s]+/i.test(remoteUrl)) {
+    throw new Error('Use an HTTPS or SSH Git remote URL');
+  }
+}
+
+function assertAbsoluteLocalPath(localPath: unknown): asserts localPath is string {
+  if (typeof localPath !== 'string' || !path.isAbsolute(localPath) || localPath.startsWith('-')
+    || /[\x00-\x1f\x7f]/.test(localPath) || localPath.split(/[\\/]/).includes('..')) {
+    throw new Error('Invalid local path: must be an absolute path');
+  }
+}
+
 export async function cloneRepository(githubUrl: string, localPath: string): Promise<void> {
   try {
-    const git = simpleGit();
-    await git.clone(githubUrl, localPath);
+    assertNetworkRemoteUrl(githubUrl);
+    assertAbsoluteLocalPath(localPath);
+    const parent = path.dirname(localPath);
+    if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) throw new Error('The destination folder does not exist');
+    // `--` ends option parsing; protocol.ext.allow=never forbids the command-running ext transport.
+    const run = await runGit(parent, ['-c', 'protocol.ext.allow=never', 'clone', '--', githubUrl, localPath], { timeoutMs: NETWORK_TIMEOUT_MS });
+    if (run.code !== 0) throw new Error(gitMessage(run));
   } catch (error) {
-    throw new Error(`Failed to clone repository: ${error}`);
+    throw new Error(`Failed to clone repository: ${errorText(error)}`);
   }
 }
 
@@ -1828,6 +1868,9 @@ export async function initRepository(localPath: string): Promise<void> {
 
 export async function addRemote(localPath: string, remoteName: string, remoteUrl: string): Promise<void> {
   try {
+    assertAbsoluteLocalPath(localPath);
+    if (typeof remoteName !== 'string' || !/^[A-Za-z0-9][\w.-]{0,99}$/.test(remoteName)) throw new Error('Invalid remote name');
+    assertNetworkRemoteUrl(remoteUrl);
     const git = simpleGit(localPath);
 
     // Check if remote already exists
@@ -1840,11 +1883,11 @@ export async function addRemote(localPath: string, remoteName: string, remoteUrl
         throw new Error('This remote already points to a different repository. Change it explicitly in Git before linking.');
       }
     } else {
-      // Add new remote
-      await git.addRemote(remoteName, remoteUrl);
+      // `--` keeps both values positional.
+      await git.raw(['remote', 'add', '--', remoteName, remoteUrl]);
     }
   } catch (error) {
-    throw new Error(`Failed to add remote: ${error}`);
+    throw new Error(`Failed to add remote: ${errorText(error)}`);
   }
 }
 
