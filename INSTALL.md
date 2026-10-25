@@ -82,9 +82,10 @@ BitGit for macOS is in beta. It needs macOS 11 (Big Sur) or later.
 3. **Install BitGit:** download `BitGit_<version>_aarch64.dmg` (Apple Silicon) or
    `BitGit_<version>_x64.dmg` (Intel), open it and drag BitGit to Applications.
 
-Release downloads are signed and notarized, so macOS opens them normally. An unsigned build, such
-as one built from source on another Mac, is blocked on first launch: try to open it once, then
-choose **Open Anyway** under System Settings > Privacy & Security.
+Release downloads are not signed or notarized by Apple yet, so macOS blocks the first launch:
+open BitGit once and close the warning, then choose **Open Anyway** under System Settings >
+Privacy & Security (System Preferences > Security & Privacy on macOS 12 and earlier) and confirm.
+Later launches open normally.
 
 The GitHub token is kept in your login Keychain. If macOS asks whether BitGit may use it, choose
 **Always Allow**.

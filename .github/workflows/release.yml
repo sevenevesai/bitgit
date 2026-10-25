@@ -35,18 +35,18 @@ jobs:
 
             **Windows:** Download and run `BitGit_${{ steps.get_version.outputs.VERSION }}_x64-setup.exe` (NSIS installer) or `BitGit_${{ steps.get_version.outputs.VERSION }}_x64_en-US.msi` (MSI installer)
 
-            **macOS:** This release has no macOS build yet. Signed and notarized builds are waiting on Apple signing credentials.
+            **macOS 11 or later:** Download `BitGit_${{ steps.get_version.outputs.VERSION }}_aarch64.dmg` (Apple Silicon) or `BitGit_${{ steps.get_version.outputs.VERSION }}_x64.dmg` (Intel), open it and drag BitGit to Applications. This build is not signed or notarized by Apple, so macOS blocks its first launch: open BitGit once and close the warning, then choose **Open Anyway** under System Settings > Privacy & Security (System Preferences > Security & Privacy on macOS 12 and earlier) and confirm. BitGit needs Git (`xcode-select --install`) and Node.js 22 or later; see [INSTALL.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALL.md#macos).
 
             **Linux (AppImage only):** Download `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage`, make it executable (`chmod +x`) and run it. It needs FUSE 2 (`libfuse2`; `libfuse2t64` on Ubuntu 24.04), Node.js 22 or later, Git, and a running Secret Service (GNOME Keyring, KWallet or KeePassXC) to store the GitHub token. The .deb and .rpm are no longer published: they need webkit2gtk 4.0, which current distributions do not ship. For a blank window on NVIDIA drivers, see [INSTALL.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALL.md).
 
             ### What's New
             - Linux: physical paths are resolved at the recovery boundary, a missing Secret Service is named, and timed-out Git groups end
-            - macOS support is in the code (11 or later, Keychain for the GitHub token), but no macOS build is published until signing credentials exist
+            - macOS: the first build, for macOS 11 or later on Apple Silicon and Intel, with the GitHub token in the Keychain. It is not signed or notarized by Apple; see Installation
             - Linux: only the AppImage is published; the .deb and .rpm need webkit2gtk 4.0, which current distributions do not ship
             - Windows installers are unchanged apart from the version
 
             ### Since 1.1.0
-            - Automatic updates: BitGit checks for a newer release at startup and offers to install it (Windows installers and the Linux AppImage)
+            - Automatic updates: BitGit checks for a newer release at startup and offers to install it (Windows installers, the macOS app and the Linux AppImage)
             - Save & Recover workspace: named milestones, byte-exact checkpoints, coverage and comparison, verified recovered copies, and selective file repair behind a safety checkpoint
             - Remote checkpoint backup and import through GitHub, with remote trust and verification
             - Explicit, scoped visual Git publishing: only selected whole files or committed changes are published, with honest status and validated tag pushes
@@ -124,8 +124,8 @@ jobs:
           echo '{"build":{"beforeBuildCommand":"npm run build"}}' > "$RUNNER_TEMP/bundle.conf.json"
 
       # Without an identity the bundler skips signing, and without the API key notarization, with
-      # only a warning. A macOS release must not ship unsigned: with none of the secrets set the
-      # macOS build is skipped with a warning, with only some set the job fails.
+      # only a warning. With all six secrets set the app is signed and notarized; with none it is
+      # signed ad hoc and not notarized; with only some set the job fails.
       - name: Check the signing secrets (macOS)
         id: apple
         if: runner.os == 'macOS'
@@ -137,23 +137,23 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
         run: |
-          missing=0
-          total=0
+          missing=""
+          count=0
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_CONTENT; do
-            total=$((total + 1))
-            if [ -z "${!name}" ]; then echo "::error::The $name secret is not set"; missing=$((missing + 1)); fi
+            if [ -z "${!name}" ]; then missing="$missing $name"; count=$((count + 1)); fi
           done
-          if [ "$missing" -eq "$total" ]; then
-            echo "::warning title=macOS build skipped::None of the six Apple signing secrets are set, so no macOS build is published for ${{ matrix.target }}."
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          elif [ "$missing" -gt 0 ]; then
-            exit 1
+          if [ "$count" -eq 0 ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          elif [ "$count" -eq 6 ]; then
+            echo "::warning title=Unsigned macOS build::None of the six Apple signing secrets are set, so the ${{ matrix.target }} app is signed ad hoc and not notarized."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
+            for name in $missing; do echo "::error::The $name secret is not set"; done
+            exit 1
           fi
 
       - name: Write the App Store Connect API key (macOS)
-        if: runner.os == 'macOS' && steps.apple.outputs.ready == 'true'
+        if: runner.os == 'macOS' && steps.apple.outputs.signed == 'true'
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
         run: |
@@ -176,7 +176,7 @@ jobs:
       # with hardened runtime, notarizes with notarytool and staples the ticket; a rejected
       # submission fails the build. Variable names checked in tooling/bundler/src/bundle/macos/sign.rs.
       - name: Build, sign and notarize Tauri app (macOS)
-        if: runner.os == 'macOS' && steps.apple.outputs.ready == 'true'
+        if: runner.os == 'macOS' && steps.apple.outputs.signed == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -193,17 +193,65 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }} --config ${{ runner.temp }}/bundle.conf.json
 
+      # Apple Silicon calls a downloaded app with no signature damaged and offers no Open Anyway;
+      # with an ad-hoc signature ("-") it offers Open Anyway. The bundler signs the DMG with
+      # the same identity, and macOS 15 then blocks the DMG itself (tauri-apps/tauri#12288), so
+      # only the app and the updater archive are bundled here; the DMG is packaged further down.
+      - name: Build Tauri app, signed ad hoc (macOS)
+        if: runner.os == 'macOS' && steps.apple.outputs.signed == 'false'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          APPLE_SIGNING_IDENTITY: '-'
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          tagName: ${{ github.ref_name }}
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }} --bundles app,updater --config ${{ runner.temp }}/bundle.conf.json
+
       - name: Verify signature, notarization and Gatekeeper (macOS)
-        if: runner.os == 'macOS' && steps.apple.outputs.ready == 'true'
+        if: runner.os == 'macOS' && steps.apple.outputs.signed == 'true'
         run: |
           APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/BitGit.app"
           codesign --verify --deep --strict --verbose=2 "$APP"
           spctl --assess --type execute --verbose=2 "$APP"
           xcrun stapler validate "$APP"
 
+      # spctl and stapler reject any app without a Developer ID and a notarization ticket.
+      - name: Verify the ad-hoc signature (macOS)
+        if: runner.os == 'macOS' && steps.apple.outputs.signed == 'false'
+        run: codesign --verify --deep --strict --verbose=2 "src-tauri/target/${{ matrix.target }}/release/bundle/macos/BitGit.app"
+
       - name: Smoke-test the bundled Git service (macOS)
-        if: runner.os == 'macOS' && steps.apple.outputs.ready == 'true'
+        if: runner.os == 'macOS'
         run: node scripts/bundle-smoke.mjs "src-tauri/target/${{ matrix.target }}/release/bundle/macos/BitGit.app/Contents/Resources/_up_/git-service/dist/index.js"
+
+      # Uploads by release ID: a lookup by tag can pick an older draft. A rerun of the job replaces
+      # its earlier upload. hdiutil fails intermittently on hosted runners (actions/runner-images#7522).
+      - name: Package and attach the unsigned DMG (macOS)
+        if: runner.os == 'macOS' && steps.apple.outputs.signed == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').package.version")
+          NAME="BitGit_${VERSION}_${{ matrix.target == 'x86_64-apple-darwin' && 'x64' || 'aarch64' }}.dmg"
+          STAGE="$RUNNER_TEMP/dmg-stage"
+          mkdir -p "$STAGE" "$BUNDLE/dmg"
+          ditto "$BUNDLE/macos/BitGit.app" "$STAGE/BitGit.app"
+          ln -s /Applications "$STAGE/Applications"
+          for attempt in 1 2 3; do
+            hdiutil create -volname BitGit -srcfolder "$STAGE" -format UDZO -ov "$BUNDLE/dmg/$NAME" && break
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 10
+          done
+          API="repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}"
+          for id in $(gh api "$API/assets" --paginate --jq ".[] | select(.name == \"$NAME\") | .id"); do
+            gh api --method DELETE "repos/${{ github.repository }}/releases/assets/$id"
+          done
+          gh api --method POST -H 'Content-Type: application/octet-stream' --input "$BUNDLE/dmg/$NAME" \
+            "https://uploads.github.com/$API/assets?name=$NAME" --jq .browser_download_url
 
       # Tests the published file: extracting needs no FUSE.
       - name: Smoke-test the bundled Git service (Linux)

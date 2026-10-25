@@ -1,7 +1,8 @@
 # macOS and Linux build plan
 
 Status (2026-10-25): the Phase 1 runtime (8d3e51a) and the decided release work
-(`git log cea9ca6..` on `main`) are on local `main` and pass the Windows gates. Nothing is pushed or
+(`git log cea9ca6..` on `main`) are on local `main` and pass the Windows gates. Version 1.2.0 is
+prepared to ship Windows, an unsigned macOS build and the Linux AppImage. Nothing is pushed or
 released, and nothing has run on a Mac or a Linux machine. `ci.yml` and `release.yml` start on the
 first push.
 
@@ -17,9 +18,13 @@ Windows: projects, Git, publishing, recovery, editor launch and the GitHub token
 - Linux ships the AppImage only. `targets` lists `nsis, msi, app, dmg, appimage, updater`. The deb
   needs `libwebkit2gtk-4.0-37`, which Ubuntu 24.04 and Debian 13 lack; deb and rpm return with
   Tauri 2.
-- macOS releases are signed and notarized with the existing Developer ID (as Graal RC and Loom
-  are). `release.yml` fails without the six secrets in [BUILD.md](../../BUILD.md#macos-and-linux)
-  and verifies with `codesign`, `spctl` and `stapler`. No Windows signing, no spend.
+- macOS releases ship unsigned until the user adds the six secrets in
+  [BUILD.md](../../BUILD.md#macos-and-linux) (user's decision, 2026-10-25). Without them
+  `release.yml` signs the app ad hoc, because Apple Silicon calls an unsigned download damaged and
+  offers no Open Anyway. It packages the DMG unsigned, because macOS 15 blocks an ad-hoc signed DMG
+  (tauri-apps/tauri#12288), and checks only `codesign --verify`. With all six set, the Developer
+  ID path (as Graal RC and Loom) signs, notarizes and checks `codesign`, `spctl` and `stapler`.
+  With some set, the job fails. No Windows signing, no spend.
 - macOS bundles carry only the service's runtime dependencies: the dev dependencies include
   esbuild's unsigned binary, which notarization rejects. A release adding a native dependency to
   `git-service` must sign it or keep it out of the bundle.
@@ -34,14 +39,13 @@ Windows: projects, Git, publishing, recovery, editor launch and the GitHub token
 ## Open items
 
 For the user, at publish time:
-- The version (1.2.0 proposed) and whether to annotate the 1.1.2 notes, whose deb no longer
-  installs on current distributions. This work bumps no version.
-- Add `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
-  `APPLE_API_ISSUER`, `APPLE_API_KEY` and `APPLE_API_KEY_CONTENT` to the repository, reusing the
-  Developer ID and App Store Connect key that Graal RC and Loom use.
-- Rewrite "What's New" in `release.yml`: it still describes 1.1.2.
+- Whether to annotate the 1.1.2 notes, whose deb no longer installs on current distributions.
 - `softprops/action-gh-release@v1` runs on a retired Node version (actionlint); move to v2 before
   the first tagged release.
+- Later, to sign: add `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
+  `APPLE_API_ISSUER`, `APPLE_API_KEY` and `APPLE_API_KEY_CONTENT` to the repository, reusing the
+  Developer ID and App Store Connect key that Graal RC and Loom use. Then drop the Open Anyway
+  steps from the release notes and `INSTALL.md`.
 
 Code and docs, not started:
 - `src/components/Dashboard.tsx`: accept `metaKey` on macOS and show ⌘ in hints.
@@ -62,8 +66,10 @@ sidecar, Linux arm64, a macOS universal binary, cgroup-scoped checks on Linux, F
 - `ci.yml` green on windows-2025, macos-15 (arm64) and ubuntu-22.04. The Unix-only tests run there
   first: physical paths, the status-fetch process-group kill, the Secret Service message. x64 macOS
   is cross-compiled only.
-- First release run: the secrets check, notarization accepted with the pruned dependencies, the
-  `codesign`/`spctl`/`stapler` checks, the bundle smoke pong on macOS and Linux, the prerelease flag.
+- First release run: the secrets check takes the unsigned path, `codesign --verify` passes on the
+  ad-hoc app, the DMG uploads by release ID, `latest.json` lists both darwin platforms, the bundle
+  smoke pong on macOS and Linux, the prerelease flag. The signed path (notarization with the
+  pruned dependencies, `spctl`, `stapler`) first runs once the secrets exist.
 - Hardened runtime without entitlements on a Mac: Keychain access, spawning `node` and the login
   shell, the webview.
 - On a real Mac and a Linux desktop (or VMs):
@@ -71,7 +77,9 @@ sidecar, Linux arm64, a macOS universal binary, cgroup-scoped checks on Linux, F
   - A second launch shows the "already running" dialog, shown before the event loop starts.
   - Token save, read and restart; on Linux, the Secret Service error without a keyring.
   - Each editor preset opens, including the macOS app-bundle fallback without the shell command.
-  - The notarized DMG opens without a Gatekeeper prompt.
+  - On macOS 15 the downloaded DMG mounts without a prompt, the app is not called damaged, and
+    Open Anyway opens it. After an in-app update, expect a new Keychain prompt: an ad-hoc
+    signature's designated requirement is its cdhash (unverified).
   - The 1.1.2 to next-version update for `.app` and AppImage.
   - AppImage on Ubuntu 24.04 and Fedora, including Wayland, and the NVIDIA workaround in INSTALL.md.
   - A check timeout and a status-fetch timeout end their process groups.

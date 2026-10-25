@@ -77,13 +77,21 @@ Bundles land in `src-tauri/target/release/bundle/`: `macos/BitGit.app` and `dmg/
 Local builds are unsigned (`signingIdentity` is null). A Mac opens one built on that Mac; a copy
 taken to another Mac needs **Open Anyway** under System Settings > Privacy & Security once.
 
-Release builds come from `.github/workflows/release.yml`, which signs and notarizes the macOS app
-with the Developer ID. It fails before building unless these repository secrets are set:
-`APPLE_CERTIFICATE` (base64 .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
-`APPLE_API_ISSUER`, `APPLE_API_KEY` (key ID) and `APPLE_API_KEY_CONTENT` (the .p8 text). After the
-build it runs `codesign --verify`, `spctl --assess` and `stapler validate`, then pings the Git
-service inside the macOS app and the Linux AppImage (`scripts/bundle-smoke.mjs`). Releases are
-published as prereleases, which the updater does not see until the prerelease flag is cleared.
+Release builds come from `.github/workflows/release.yml`. The macOS build depends on six
+repository secrets: `APPLE_CERTIFICATE` (base64 .p12), `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY` (key ID) and `APPLE_API_KEY_CONTENT`
+(the .p8 text).
+
+- All six set: the app is signed with the Developer ID and notarized, then checked with
+  `codesign --verify`, `spctl --assess` and `stapler validate`.
+- None set (1.2.0): the app is signed ad hoc and checked with `codesign --verify`; users approve
+  the first launch with **Open Anyway**. The DMG is packaged unsigned and attached by a workflow
+  step, because macOS 15 blocks an ad-hoc signed DMG.
+- Only some set: the job fails.
+
+Both paths then ping the Git service inside the macOS app, as the Linux job does inside the
+AppImage (`scripts/bundle-smoke.mjs`). Releases are published as prereleases, which the updater
+does not see until the prerelease flag is cleared.
 
 ## Code Signing Setup (First Time Only)
 
