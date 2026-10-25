@@ -10,7 +10,7 @@ jobs:
   create-release:
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     outputs:
       release_id: ${{ steps.create-release.outputs.id }}
       release_upload_url: ${{ steps.create-release.outputs.upload_url }}
@@ -35,9 +35,9 @@ jobs:
 
             **Windows:** Download and run `BitGit_${{ steps.get_version.outputs.VERSION }}_x64-setup.exe` (NSIS installer) or `BitGit_${{ steps.get_version.outputs.VERSION }}_x64_en-US.msi` (MSI installer)
 
-            **macOS:** Download `BitGit_${{ steps.get_version.outputs.VERSION }}_x64.dmg` (Intel) or `BitGit_${{ steps.get_version.outputs.VERSION }}_aarch64.dmg` (Apple Silicon), open it, and drag BitGit to your Applications folder
+            **macOS (beta, macOS 11 or later):** Download `BitGit_${{ steps.get_version.outputs.VERSION }}_aarch64.dmg` (Apple Silicon) or `BitGit_${{ steps.get_version.outputs.VERSION }}_x64.dmg` (Intel), open it, and drag BitGit to your Applications folder. The app is signed and notarized. It needs Node.js 22 or later and Git (`xcode-select --install` provides Git).
 
-            **Linux:** Download `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.deb` (Debian/Ubuntu) or `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage` (universal)
+            **Linux (AppImage only):** Download `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage`, make it executable (`chmod +x`) and run it. It needs FUSE 2 (`libfuse2`; `libfuse2t64` on Ubuntu 24.04), Node.js 22 or later, Git, and a running Secret Service (GNOME Keyring, KWallet or KeePassXC) to store the GitHub token. The .deb and .rpm are no longer published: they need webkit2gtk 4.0, which current distributions do not ship. For a blank window on NVIDIA drivers, see [INSTALL.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALL.md).
 
             ### What's New
             - Automatic updates: from this version on, BitGit checks for a newer release at startup and offers to install it (Windows installers, macOS bundles and the Linux AppImage)
@@ -59,14 +59,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Pinned labels. macos-15 is arm64 and cross-compiles the x64 build.
         include:
-          - platform: 'macos-latest'
+          - platform: 'macos-15'
+            target: 'x86_64-apple-darwin'
             args: '--target x86_64-apple-darwin'
-          - platform: 'macos-latest'
+          - platform: 'macos-15'
+            target: 'aarch64-apple-darwin'
             args: '--target aarch64-apple-darwin'
           - platform: 'ubuntu-22.04'
             args: ''
-          - platform: 'windows-latest'
+          - platform: 'windows-2025'
             args: ''
 
     runs-on: ${{ matrix.platform }}
@@ -83,7 +86,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'x86_64-apple-darwin,aarch64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-15' && 'x86_64-apple-darwin,aarch64-apple-darwin' || '' }}
 
       - name: Install dependencies (Ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
@@ -104,7 +107,44 @@ jobs:
           cd git-service
           npm run build
 
+      # Apple's notary service rejects any unsigned Mach-O file in the app, and the service's dev
+      # dependencies carry esbuild's binary. The service is already built, so the bundle's
+      # beforeBuildCommand is overridden to skip rebuilding it without TypeScript.
+      - name: Keep only the service's runtime dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd git-service
+          npm ci --omit=dev
+          echo '{"build":{"beforeBuildCommand":"npm run build"}}' > "$RUNNER_TEMP/bundle.conf.json"
+
+      # Without an identity the bundler skips signing, and without the API key notarization, with
+      # only a warning. A macOS release must not ship unsigned.
+      - name: Require the signing secrets (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          missing=0
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_CONTENT; do
+            if [ -z "${!name}" ]; then echo "::error::The $name secret is not set"; missing=1; fi
+          done
+          exit $missing
+
+      - name: Write the App Store Connect API key (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          umask 077
+          printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
+
       - name: Build Tauri app
+        if: runner.os != 'macOS'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,15 +155,60 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
+      # Tauri CLI 1.6.3 (bundler 1.7.1) imports the certificate into a temporary keychain, signs
+      # with hardened runtime, notarizes with notarytool and staples the ticket; a rejected
+      # submission fails the build. Variable names checked in tooling/bundler/src/bundle/macos/sign.rs.
+      - name: Build, sign and notarize Tauri app (macOS)
+        if: runner.os == 'macOS'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          tagName: ${{ github.ref_name }}
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }} --config ${{ runner.temp }}/bundle.conf.json
+
+      - name: Verify signature, notarization and Gatekeeper (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/BitGit.app"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl --assess --type execute --verbose=2 "$APP"
+          xcrun stapler validate "$APP"
+
+      - name: Smoke-test the bundled Git service (macOS)
+        if: runner.os == 'macOS'
+        run: node scripts/bundle-smoke.mjs "src-tauri/target/${{ matrix.target }}/release/bundle/macos/BitGit.app/Contents/Resources/_up_/git-service/dist/index.js"
+
+      # Tests the published file: extracting needs no FUSE.
+      - name: Smoke-test the bundled Git service (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          APPIMAGE=$(ls "$GITHUB_WORKSPACE"/src-tauri/target/release/bundle/appimage/*.AppImage)
+          chmod +x "$APPIMAGE"
+          cd "$RUNNER_TEMP"
+          "$APPIMAGE" --appimage-extract > /dev/null
+          node "$GITHUB_WORKSPACE/scripts/bundle-smoke.mjs" "$(find "$RUNNER_TEMP/squashfs-root" -path '*/_up_/git-service/dist/index.js')"
+
   publish-release:
     needs: [create-release, build-tauri]
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       # By ID: the lookup by tag cannot see drafts and would create a second, empty release.
+      # As a prerelease: releases/latest, which the updater reads, skips it until a person clears
+      # the prerelease flag.
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh api --method PATCH "repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}" -F draft=false
+        run: gh api --method PATCH "repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}" -F draft=false -F prerelease=true

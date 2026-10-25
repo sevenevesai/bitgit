@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-22.04]
+        # Pinned: a moving -latest label changes the OS under a passing build.
+        # macos-15 is arm64; ubuntu-22.04 matches the release AppImage's glibc and webkit2gtk 4.0.
+        os: [windows-2025, macos-15, ubuntu-22.04]
 
     runs-on: ${{ matrix.os }}
 
