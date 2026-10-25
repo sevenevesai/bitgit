@@ -1,13 +1,14 @@
 # BitGit Installation Guide
 
-Simple guide for installing BitGit on Windows.
+Simple guide for installing BitGit on Windows. For macOS and Linux, see [macOS](#macos) and
+[Linux](#linux).
 
 ## System Requirements
 
 - **Operating System:** Windows 10 or Windows 11 (64-bit)
 - **Prerequisites:**
   - Git for Windows ([Download here](https://git-scm.com/download/win))
-  - Node.js 18+ ([Download here](https://nodejs.org/))
+  - Node.js 20 or later; 22 or 24 recommended ([Download here](https://nodejs.org/))
 - **Disk Space:** ~100 MB
 
 ## Installation Steps
@@ -67,6 +68,51 @@ This warning appears because the app uses a self-signed certificate. The applica
 
 - Find **BitGit** in your Start Menu
 - Or run from desktop shortcut (if created)
+
+## macOS
+
+BitGit for macOS is in beta. It needs macOS 11 (Big Sur) or later.
+
+1. **Install Git:** run `xcode-select --install` in Terminal (the Command Line Tools include
+   Git), or install Git with Homebrew. Until the tools are installed, macOS's built-in `git` only
+   prints an `xcrun` error, and BitGit's errors then point to `xcode-select --install`.
+2. **Install Node.js 22 or later** from https://nodejs.org/, Homebrew, nvm, fnm or Volta. BitGit
+   reads your login shell's PATH, so it finds the same `node` and `git` as Terminal even when you
+   start it from Finder or the Dock.
+3. **Install BitGit:** download `BitGit_<version>_aarch64.dmg` (Apple Silicon) or
+   `BitGit_<version>_x64.dmg` (Intel), open it and drag BitGit to Applications.
+
+Release downloads are signed and notarized, so macOS opens them normally. An unsigned build, such
+as one built from source on another Mac, is blocked on first launch: try to open it once, then
+choose **Open Anyway** under System Settings > Privacy & Security.
+
+The GitHub token is kept in your login Keychain. If macOS asks whether BitGit may use it, choose
+**Always Allow**.
+
+## Linux
+
+Linux releases ship as an AppImage only. The `.deb` and `.rpm` packages are no longer published:
+they need webkit2gtk 4.0, which current distributions do not ship. If you installed the 1.1.2
+`.deb`, remove it (`sudo apt remove bit-git`) and use the AppImage.
+
+1. **Install the prerequisites:** Git, Node.js 22 or later (20 is the minimum), and FUSE 2 for
+   AppImages: `libfuse2` on Ubuntu 22.04 and Debian, `libfuse2t64` on Ubuntu 24.04, `fuse-libs`
+   on Fedora, `fuse2` on Arch.
+2. **Install BitGit:** download `bit-git_<version>_amd64.AppImage`, make it executable with
+   `chmod +x bit-git_*.AppImage`, and run it. Keep it in a folder you can write to: updates
+   replace the AppImage file in place.
+3. **Store the GitHub token:** BitGit keeps it in the Secret Service, so a running and unlocked
+   provider is needed: GNOME Keyring, KWallet, or KeePassXC with Secret Service integration
+   enabled. GNOME and KDE desktops provide one; a bare window manager may not. Without one,
+   saving the token fails with an error that names the Secret Service.
+
+### Linux troubleshooting
+
+- **The AppImage does not start and mentions FUSE:** install FUSE 2 as above, or run
+  `./bit-git_*.AppImage --appimage-extract-and-run`.
+- **Blank or white window on NVIDIA drivers:** start BitGit with
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1 ./bit-git_*.AppImage`. This is the usual WebKitGTK workaround
+  for this driver issue.
 
 ## First Time Setup
 
@@ -164,6 +210,9 @@ BitGit stores configuration and logs in:
 C:\Users\YourUsername\AppData\Roaming\BitGit\
 ```
 
+On macOS it is `~/Library/Application Support/BitGit/`; on Linux, `$XDG_CONFIG_HOME/BitGit/` or
+`~/.config/BitGit/`.
+
 This folder is **NOT** automatically deleted on uninstall. Delete it manually if you want to remove all data.
 
 ## Update Instructions
@@ -183,6 +232,7 @@ For issues or questions:
 
 ## Privacy & Security
 
-- GitHub tokens are stored securely in Windows Credential Manager
+- GitHub tokens are stored in the system credential store: Windows Credential Manager, the macOS
+  Keychain, or the Secret Service on Linux
 - No data is sent to external servers (except GitHub API calls)
 - All Git operations happen locally on your machine

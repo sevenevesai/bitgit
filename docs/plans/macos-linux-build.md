@@ -1,80 +1,82 @@
 # macOS and Linux build plan
 
-Status: Phase 1 runtime code landed 2026-10-25 (`git log -- src-tauri/src/login_path.rs`) and passes
-the Windows gates. It is not released and has not run on a Mac or a Linux machine. `ci.yml` has
-not run yet: it starts on the first push. The decisions below are still open, and Phase 1's
-bundle-config and release-notes rows wait on them. The file is over the 6 KiB plan target while
-D1 to D7 are open.
+Status (2026-10-25): the Phase 1 runtime (8d3e51a) and the decided release work
+(`git log cea9ca6..` on `main`) are on local `main` and pass the Windows gates. Nothing is pushed or
+released, and nothing has run on a Mac or a Linux machine. `ci.yml` and `release.yml` start on the
+first push.
 
 ## Goal
 
-BitGit should install and run its full workflow on macOS and Linux with the same invariants as on
+BitGit installs and runs its full workflow on macOS and Linux with the same invariants as on
 Windows: projects, Git, publishing, recovery, editor launch and the GitHub token.
 
-## Decisions for the user
+## Decisions that constrain further changes
 
-| # | Question | Recommendation and reason |
-|---|---|---|
-| D1 | Minimum macOS | 11.0. Node.js 22 needs macOS 11 or later (its BUILDING.md), and the aarch64 Rust target starts at 11. The current `10.13` cannot be tested on GitHub runners. |
-| D2 | Linux formats | AppImage only for now. The 1.1.2 deb depends on `libwebkit2gtk-4.0-37` (verified), which Ubuntu 24.04 and Debian 13 do not ship. The AppImage carries its webview and gets Tauri updates. deb and rpm come back with Tauri 2. Alternative: keep the deb, labelled Ubuntu 22.04 / Debian 12. |
-| D3 | macOS signing and notarization | Ship unsigned first. Signing needs an Apple Developer account ($99/yr). Without it, on macOS 15 each user must allow the app once under System Settings > Privacy & Security > Open Anyway. Keychain may also prompt again after updates, because ad-hoc signatures change. |
-| D4 | Node.js | Keep Node a user prerequisite, as on Windows, found through the login-shell PATH. Bundling Node as a sidecar removes the prerequisite but adds a Node binary per target and needs signing on macOS. Defer. |
-| D5 | Symlinked ancestors of a project | `assertNoLinks` checks every path component from `/`. So Fedora Atomic (`/home` → `/var/home`) rejects every project and the vault, and macOS rejects anything under `/tmp`, `/var` or `/etc`. Proposal: on macOS and Linux, store the `realpath` when a project is added, and check links from the project root down. This changes a recovery coverage rule. Windows unchanged. |
-| D6 | The 1.1.2 macOS and Linux artifacts | Release Phase 1 as 1.1.3. The updater reaches `.app` and AppImage installs; deb and rpm users must reinstall by hand. Separately, decide whether to annotate the 1.1.2 release notes now. |
-| D7 | Local Linux testing | No WSL or Docker here (verified). WSL2 would allow Linux tests and a WSLg GUI smoke. Optional system change. |
+- macOS 11.0 minimum: Node.js 22 and the aarch64 target need it, and older versions cannot be
+  tested on GitHub runners.
+- Linux ships the AppImage only. `targets` lists `nsis, msi, app, dmg, appimage, updater`. The deb
+  needs `libwebkit2gtk-4.0-37`, which Ubuntu 24.04 and Debian 13 lack; deb and rpm return with
+  Tauri 2.
+- macOS releases are signed and notarized with the existing Developer ID (as Graal RC and Loom
+  are). `release.yml` fails without the six secrets in [BUILD.md](../../BUILD.md#macos-and-linux)
+  and verifies with `codesign`, `spctl` and `stapler`. No Windows signing, no spend.
+- macOS bundles carry only the service's runtime dependencies: the dev dependencies include
+  esbuild's unsigned binary, which notarization rejects. A release adding a native dependency to
+  `git-service` must sign it or keep it out of the bundle.
+- Node.js stays a user prerequisite, found through the login-shell PATH. The code floor is 20;
+  docs recommend 22 or 24.
+- On macOS and Linux the service resolves physical paths at its boundary (`physicalPath`, see
+  [recovery design](../RECOVERY_DESIGN.md#storage-and-capture)). Project config and receipts keep
+  the user's spelling. Windows is unchanged, junction refusal included.
+- Releases publish as prereleases: `releases/latest`, the updater feed, skips them until a person
+  clears the flag.
 
-## Phase 1: what remains
+## Open items
 
-| Item | State |
-|---|---|
-| `src-tauri/tauri.conf.json` | Waits on D1 and D2: `minimumSystemVersion` and explicit `targets` (e.g. `nsis, msi, app, dmg, appimage, updater`). Today it is `10.13` and `"targets": "all"`, so a release still ships the webkit 4.0 deb. |
-| `.github/workflows/release.yml` | Waits on D2, D3 and D6: per-OS release-note text and the version. |
-| `ci.yml` first run | Known failure on macOS and Ubuntu: `ipc-concurrency.test.mjs` "a held repository delays only its own later commands" spells the same repo as `toUpperCase() + '\\'`, a different path on POSIX. Off Windows use e.g. `held.work + '/'`. Fix it once the uncommitted edit to that file in the main checkout lands. The `/var` temp link is already handled. |
-| Node floor | Startup failures on Unix name the node path, its version and the Node 20 floor. A Node 16 to 19 that can start the service is not refused: the service uses no Node 20-only API that was found. |
-| `xcode-select --install` hint | Not added. The service starts without Git, so a missing Xcode CLT shows up as the `xcrun` error text from the failing Git command. Add the hint where the service reports Git failures (Phase 2, `git-operations.ts`). |
+For the user, at publish time:
+- The version (1.2.0 proposed) and whether to annotate the 1.1.2 notes, whose deb no longer
+  installs on current distributions. This work bumps no version.
+- Add `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
+  `APPLE_API_ISSUER`, `APPLE_API_KEY` and `APPLE_API_KEY_CONTENT` to the repository, reusing the
+  Developer ID and App Store Connect key that Graal RC and Loom use.
+- Rewrite "What's New" in `release.yml`: it still describes 1.1.2.
+- `softprops/action-gh-release@v1` runs on a retired Node version (actionlint); move to v2 before
+  the first tagged release.
 
-The Unix code compiles on Windows where it uses only portable std APIs. The remaining
-`cfg(unix)` and `cfg(target_os = "macos")` code was type-checked for `aarch64-apple-darwin` in a
-scratch crate. It has never run.
-
-## Phase 2: docs and polish
-
-| File | Change |
-|---|---|
-| `CLAUDE.md` | The product line names three OSes. The credential invariant names Windows Credential Manager, macOS Keychain and Linux Secret Service. Add the Unix test command. |
-| `docs/RECOVERY_DEVELOPMENT.md`, `BUILD.md`, `INSTALL.md`, `README.md` | Per-OS prerequisites: Node 20+, Git, Xcode CLT, a Secret Service. Add the Gatekeeper first launch and AppImage use. The README waits for the uncommitted README edit in the main checkout. |
-| `docs/NATIVE_RECOVERY.md`, `docs/RECOVERY_GUIDE.md` | Unix instance lock is a `flock` (the doc says "opened without sharing"); the login-shell PATH (`login_path.rs`); credential backends; a `setsid` check can escape its process group. |
-| `src-tauri/src/credentials.rs` | The Linux error names the missing Secret Service. Ungate the format test, which rejects the token before touching any store. |
-| `git-service/src/git-operations.ts` | Process-group kill for `runGit` timeouts on Unix (a timeout now kills only `git`, so transport helpers can survive). The `xcode-select --install` hint on Git failures. |
-| `src/components/Dashboard.tsx` | Accept `metaKey` on macOS and show ⌘ in hints. |
-| `src/components/AddProjectModal.tsx`, `LinkLocalModal.tsx` | Placeholders that are not Windows paths. |
-| `src-tauri/src/commands.rs` | Scrub AppImage variables (`APPDIR`, `GTK_*`, `GDK_*`) for editor launches, if a test shows them leaking. |
-
-Linux Secret Service needs gnome-keyring, KWallet or KeePassXC running and unlocked; bare window
-managers lack one.
+Code and docs, not started:
+- `src/components/Dashboard.tsx`: accept `metaKey` on macOS and show ⌘ in hints.
+- `AddProjectModal.tsx`, `LinkLocalModal.tsx`: placeholders that are not Windows paths.
+- `src-tauri/src/commands.rs`: scrub AppImage variables (`APPDIR`, `GTK_*`, `GDK_*`) for editor
+  launches, if a test shows them leaking.
+- `README.md`: per-OS prerequisites. It waits for another session's uncommitted README edit.
+- Known limit: when a symlinked project root's target is deleted, the dangling link's own path
+  becomes the vault key, so that history shows only under the target's spelling until it returns.
 
 ## Later
 
-- Migrate to Tauri 2. That brings webkit2gtk 4.1 and current-distro deb/rpm. Keep v1-compatible updater
-  artifacts so 1.1.x installs still update.
-- macOS Developer ID signing and notarization (D3), a Node sidecar (D4), Linux arm64, a macOS
-  universal binary, cgroup-scoped checks on Linux, Flatpak and Snap.
+Tauri 2 (webkit2gtk 4.1, current-distro deb and rpm; keep v1-compatible updater artifacts), a Node
+sidecar, Linux arm64, a macOS universal binary, cgroup-scoped checks on Linux, Flatpak and Snap.
 
 ## Verification still needed
 
-- `ci.yml` green on `windows-latest`, `macos-latest` (arm64) and `ubuntu-22.04`. x64 macOS is
-  cross-compiled only.
+- `ci.yml` green on windows-2025, macos-15 (arm64) and ubuntu-22.04. The Unix-only tests run there
+  first: physical paths, the status-fetch process-group kill, the Secret Service message. x64 macOS
+  is cross-compiled only.
+- First release run: the secrets check, notarization accepted with the pruned dependencies, the
+  `codesign`/`spctl`/`stapler` checks, the bundle smoke pong on macOS and Linux, the prerelease flag.
+- Hardened runtime without entitlements on a Mac: Keychain access, spawning `node` and the login
+  shell, the webview.
 - On a real Mac and a Linux desktop (or VMs):
   - Finder and menu launch with Node from nvm only finds node and git.
-  - A second launch shows the "already running" dialog. It is shown before the event loop starts;
-    whether that works on macOS and GTK is unverified.
-  - Token save, read and restart work.
+  - A second launch shows the "already running" dialog, shown before the event loop starts.
+  - Token save, read and restart; on Linux, the Secret Service error without a keyring.
   - Each editor preset opens, including the macOS app-bundle fallback without the shell command.
-  - Gatekeeper first launch.
-  - The 1.1.2 → 1.1.3 update for `.app` and AppImage.
-  - AppImage on Ubuntu 24.04 and Fedora, including Wayland.
-  - A check timeout ends its process group.
-  - Recovery save, compare, recover copy and repair on a real project.
+  - The notarized DMG opens without a Gatekeeper prompt.
+  - The 1.1.2 to next-version update for `.app` and AppImage.
+  - AppImage on Ubuntu 24.04 and Fedora, including Wayland, and the NVIDIA workaround in INSTALL.md.
+  - A check timeout and a status-fetch timeout end their process groups.
+  - Recovery save, compare, recover copy and repair on a real project, including one under a
+    linked ancestor (Fedora Atomic's `/var/home`, macOS `/tmp`).
 
-Fork `zznam/bitgit` 17f5b3c: its ungated credential test is still to take (Phase 2). Leave out its
-`xattr -cr` advice: it strips quarantine wholesale. Document Open Anyway, or sign (D3).
+The `zznam/bitgit` fork's ungated credential test is taken (1fb1a3a). Leave out its `xattr -cr`
+advice: it strips quarantine wholesale.

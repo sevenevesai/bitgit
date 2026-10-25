@@ -1,13 +1,14 @@
 # BitGit Build & Distribution Guide
 
-This guide explains how to build the BitGit MSI installer for Windows distribution.
+This guide explains how to build the BitGit MSI installer for Windows distribution. macOS and Linux
+builds are covered under [macOS and Linux](#macos-and-linux).
 
 ## Prerequisites
 
 Before building, ensure you have:
 
 - ✅ Windows 10/11 (x64)
-- ✅ Node.js 18+ installed
+- ✅ Node.js 20+ installed (22 or 24 recommended)
 - ✅ Rust toolchain installed (https://rustup.rs/)
 - ✅ Git for Windows installed
 - ✅ PowerShell 5.1+ or PowerShell Core
@@ -48,6 +49,41 @@ npm install
 npm run build
 npm run tauri build
 ```
+
+## macOS and Linux
+
+Prerequisites: Node.js 20 or later (22 or 24 recommended), Git, and Rust at the `rust-version` in
+`src-tauri/Cargo.toml`.
+
+- **macOS 11 or later:** the Xcode Command Line Tools (`xcode-select --install`).
+- **Linux:** build on Ubuntu 22.04 (or Debian 12), as the release does. Tauri 1 needs
+  webkit2gtk 4.0, which Ubuntu 24.04 no longer ships:
+  `sudo apt-get install libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev`
+
+Build and test from the project root in bash:
+
+```bash
+npm ci
+npm --prefix git-service ci
+npm --prefix git-service run build
+npm run tauri:build
+node --test git-service/tests/*.test.mjs
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Bundles land in `src-tauri/target/release/bundle/`: `macos/BitGit.app` and `dmg/` on macOS,
+`appimage/` on Linux. `targets` in `tauri.conf.json` limits Linux to the AppImage.
+
+Local builds are unsigned (`signingIdentity` is null). A Mac opens one built on that Mac; a copy
+taken to another Mac needs **Open Anyway** under System Settings > Privacy & Security once.
+
+Release builds come from `.github/workflows/release.yml`, which signs and notarizes the macOS app
+with the Developer ID. It fails before building unless these repository secrets are set:
+`APPLE_CERTIFICATE` (base64 .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
+`APPLE_API_ISSUER`, `APPLE_API_KEY` (key ID) and `APPLE_API_KEY_CONTENT` (the .p8 text). After the
+build it runs `codesign --verify`, `spctl --assess` and `stapler validate`, then pings the Git
+service inside the macOS app and the Linux AppImage (`scripts/bundle-smoke.mjs`). Releases are
+published as prereleases, which the updater does not see until the prerelease flag is cleared.
 
 ## Code Signing Setup (First Time Only)
 
@@ -146,7 +182,7 @@ explorer "src-tauri\target\release\bundle\msi"
 **System Requirements:**
 - Windows 10/11 (x64)
 - Git for Windows must be installed
-- Node.js 18+ must be installed
+- Node.js 20+ must be installed (22 or 24 recommended)
 - ~100MB disk space
 
 ### SmartScreen Warnings
@@ -258,6 +294,9 @@ Then rebuild:
 ## CI/CD Integration
 
 ### GitHub Actions Example
+
+BitGit's own pipelines are `.github/workflows/ci.yml` and `release.yml`. The example below is a
+minimal Windows-only MSI build.
 
 ```yaml
 name: Build MSI

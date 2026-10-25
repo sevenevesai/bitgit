@@ -1,11 +1,11 @@
 # BitGit project instructions
 
-BitGit is a Windows desktop app for visual Git and code recovery during AI-assisted development.
+BitGit is a Windows, macOS and Linux desktop app for visual Git and code recovery in AI-assisted work.
 Stack: React/TypeScript/Zustand/Tailwind → Tauri IPC/Rust → Node Git service/simple-git/Octokit.
 
 ## Commands
 
-Run from the project root unless stated otherwise. Each build/check must exit 0.
+Run from the project root; each command must exit 0.
 
 ```powershell
 npm ci
@@ -20,6 +20,7 @@ $testFiles = (Get-ChildItem git-service/tests -Filter '*.test.mjs').FullName
 node --test $testFiles              # Disposable repositories; all tests must pass
 ```
 
+In bash (macOS, Linux) the tests are `node --test git-service/tests/*.test.mjs`.
 When a port is busy, identify the owning process and stop only this task's dev server.
 Development conventions: [recovery development](docs/RECOVERY_DEVELOPMENT.md).
 
@@ -34,8 +35,9 @@ Development conventions: [recovery development](docs/RECOVERY_DEVELOPMENT.md).
   checkpoint; interrupted repair exposes explicit rollback and never silently rewrites current work.
 - Preserve damaged cache bytes before replacement; use atomic writes and recover valid backups.
   Keep recovery history accessible when source files or automation settings are unavailable.
-- GitHub tokens live in Windows Credential Manager, never files. Token validation happens in
-  Settings; required scopes are `repo` or `public_repo`, plus `read:user`.
+- GitHub tokens live in the OS store (Windows Credential Manager, macOS Keychain, Linux Secret
+  Service), never files. Settings validates the token; scopes: `repo` or `public_repo`, plus
+  `read:user`.
 - Check commands run only on explicit request, with normal user permissions, in a recovered copy.
   Saving, listing and restoring never install dependencies or execute project scripts.
 

@@ -2,10 +2,18 @@
 
 ## Setup and gates
 
-Use Windows 10/11, Git for Windows and Node.js 20 or later. Source builds also require Rust and
-the Tauri Windows build prerequisites. Install both dependency trees with `npm ci` and
-`npm --prefix git-service ci`. Build the service before the first `npm run tauri:dev`.
-The root [CLAUDE.md](../CLAUDE.md#commands) holds the authoritative build/test commands.
+Develop on Windows 10/11, macOS 11+ or Linux (Ubuntu 22.04 matches the release build) with Git and
+Node.js 20 or later; use 22 or 24, since 20 is past end of life. Source builds also require Rust
+and Tauri's per-OS prerequisites ([BUILD.md](../BUILD.md#macos-and-linux) lists the macOS and Linux
+packages). Install both dependency trees with `npm ci` and `npm --prefix git-service ci`. Build the
+service before the first `npm run tauri:dev`. The root [CLAUDE.md](../CLAUDE.md#commands) holds the
+authoritative build/test commands; in bash, `node --test git-service/tests/*.test.mjs` runs the
+service tests.
+
+Some tests run on one side only, gated on `process.platform` or `cfg(target_os)`: junction refusal
+on Windows; physical paths, process-group kills and the Secret Service message off Windows. CI runs
+both sides on windows-2025, macos-15 and ubuntu-22.04. A Windows run proves nothing about the Unix
+side: say so when a change touches it.
 
 `npm run tauri:dev` starts Vite and the native app. Drive the affected workflow and inspect errors;
 a frontend build does not verify native IPC or filesystem effects. If port 5173 is occupied,
@@ -67,12 +75,15 @@ OAuth application is registered; no client ID or credentials should be invented 
 
 ## Storage and verification
 
-Projects live in `%APPDATA%/BitGit/projects.json`; atomic replacement, `.bak` recovery, quarantine
-and their limits are defined in [NATIVE_RECOVERY.md](NATIVE_RECOVERY.md#cache-and-preservation).
+Projects live in `projects.json` in the data folder (`%APPDATA%/BitGit`; macOS
+`~/Library/Application Support/BitGit`; Linux `$XDG_CONFIG_HOME/BitGit` or `~/.config/BitGit`).
+Atomic replacement, `.bak` recovery, quarantine and their limits are defined in
+[NATIVE_RECOVERY.md](NATIVE_RECOVERY.md#cache-and-preservation).
 Recovery vaults are separate from source repositories. Use the design and automation docs for
 capture, remote receipts, evidence and interrupted-repair contracts.
 
 Debug native tests may set an absolute `BITGIT_TEST_DATA_DIR`. That isolates cache, settings and
 vault storage and disables credential access. Release builds ignore the override. Use disposable
 repositories and bare remotes; record any untested GitHub/network or platform boundary explicitly.
-Production installer creation and cross-platform support require their own verification.
+Production installer creation requires its own verification. macOS and Linux have not yet run on
+real machines; [the plan](plans/macos-linux-build.md) lists what still needs checking.

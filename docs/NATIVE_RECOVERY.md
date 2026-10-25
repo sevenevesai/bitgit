@@ -12,7 +12,8 @@ receipts and restoration.
    **A field or action added to `recovery-types.ts` must also be added to `recovery_request.rs`.**
 2. The project comes from the saved cache; its `local_path` must be absolute with no `..` but need not exist,
    so checkpoints of a deleted source stay listable and recoverable. It is forwarded unchanged
-   (canonicalizing would add `\\?\` and change the service's vault key).
+   (canonicalizing would add `\\?\` and change the service's vault key). On macOS and Linux the
+   service resolves the physical path itself ([recovery design](RECOVERY_DESIGN.md#storage-and-capture)).
 3. Forwards `service.execute("recovery", {repoPath, request, vaultRoot})`. Rust
    supplies the vault root from the application data directory; callers cannot override it. A slow
    recovery delays only later commands for the same project (see Service transport).
@@ -98,6 +99,19 @@ When the service exits, waiting callers fail at once and the next request restar
 (the token) is lost on restart, so callers send the token before each use. A request unanswered for 30
 minutes fails without restarting the service: a restart would kill other repositories' running operations.
 
+## Platform layer
+
+- Credentials: Windows Credential Manager (`PasswordVault`); macOS login Keychain and Linux Secret
+  Service through `keyring` 2. On Linux an unreachable or locked Secret Service is reported by
+  name, since bare window managers run none.
+- Child processes on macOS and Linux get the login shell's PATH (`login_path.rs`), so Finder and
+  menu launches find `node`, `git` and editors from Homebrew, nvm, fnm or Volta.
+- The bundled service script comes from the exe folder's `_up_` on Windows and from Tauri's
+  resource resolver elsewhere (`Contents/Resources`, `/usr/lib/<package>`, `$APPDIR`).
+- Timeouts end process trees: `taskkill /T` on Windows; off Windows a timed `git` leads its own
+  process group and gets SIGTERM (git removes its locks), and a check's group gets SIGKILL. A child
+  that calls `setsid` leaves the group and escapes the kill.
+
 ## Content Security Policy
 
 `security.csp` allows only the app's own assets, `data:` images (evidence screenshots) and inline
@@ -114,8 +128,8 @@ any change in a `tauri build --debug` binary with an isolated `BITGIT_TEST_DATA_
 `git-service/tests/ipc-concurrency.test.mjs` against the real service.
 
 - Local imports match by path only (no origin URL read), so a scan does not link to a GitHub-only project.
-- One GUI process per data directory: `main` holds `instance.lock` there, opened without sharing, and a
-  second process says BitGit is already running and exits. The OS releases the lock when the process
+- One GUI process per data directory: `main` holds `instance.lock` there (opened without sharing on
+  Windows, `File::try_lock` elsewhere), and a second process says BitGit is already running and exits. The OS releases the lock when the process
   dies. The recovery CLI and the Node service never take it; the vault has its own `operation.lock`.
 
 Debug native smoke runs set an absolute `BITGIT_TEST_DATA_DIR`. Cache, settings, and recovery use that
