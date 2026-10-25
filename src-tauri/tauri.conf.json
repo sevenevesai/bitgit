@@ -31,7 +31,7 @@
     },
     "bundle": {
       "active": true,
-      "targets": "all",
+      "targets": ["nsis", "msi", "app", "dmg", "appimage", "updater"],
       "identifier": "com.bitgit.app",
       "category": "DeveloperTool",
       "shortDescription": "Git repository manager for quick syncing",
@@ -58,7 +58,7 @@
         "entitlements": null,
         "exceptionDomain": null,
         "frameworks": [],
-        "minimumSystemVersion": "10.13",
+        "minimumSystemVersion": "11.0",
         "signingIdentity": null
       },
       "appimage": {
