@@ -6,14 +6,17 @@ import * as os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { RecoveryService } from '../dist/recovery-service.js';
 
+// Resolved: macOS reaches its temp folder through the /var link, which recovery refuses.
+const TMP = await fs.realpath(os.tmpdir());
+
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bitgit-metadata-'));
+  const root = await fs.mkdtemp(path.join(TMP, 'bitgit-metadata-'));
   const source = path.join(root, 'source');
   await fs.mkdir(source); await fs.writeFile(path.join(source, 'app.txt'), 'saved bytes\r\n');
   const service = new RecoveryService(source, { vaultRoot: path.join(root, 'vault') });
   const saved = await service.dispatch({ action: 'create', label: 'Intact snapshot' });
   t.after(async () => {
-    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'bitgit-metadata-'));
+    assert.ok(path.resolve(root).startsWith(TMP + path.sep + 'bitgit-metadata-'));
     await fs.rm(root, { recursive: true, force: true });
   });
   return { root, source, service, saved };
@@ -83,7 +86,7 @@ test('redaction expansion cannot invalidate a check receipt', async t => {
   const entry = await service.dispatch({ action: 'runCheck', checkpointId: saved.id, command });
   t.after(async () => {
     const holder = path.dirname(entry.workingCopyPath);
-    assert.ok(holder.startsWith(path.resolve(os.tmpdir()) + path.sep + 'bitgit-check-'));
+    assert.ok(holder.startsWith(TMP + path.sep + 'bitgit-check-'));
     await fs.rm(holder, { recursive: true, force: true });
   });
   assert.equal(entry.command.length, 4000);
@@ -124,7 +127,7 @@ test('a completed check reports the retained copy when its result exceeds receip
   assert.ok(workingCopy);
   t.after(async () => {
     const holder = path.dirname(workingCopy);
-    assert.ok(holder.startsWith(path.resolve(os.tmpdir()) + path.sep + 'bitgit-check-'));
+    assert.ok(holder.startsWith(TMP + path.sep + 'bitgit-check-'));
     await fs.rm(holder, { recursive: true, force: true });
   });
   assert.equal(await fs.readFile(path.join(workingCopy, 'app.txt'), 'utf8'), 'saved bytes\r\n');

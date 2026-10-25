@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/api/dialog';
 import { Copy, FolderInput, FolderSearch, Loader2 } from 'lucide-react';
 import type { RecoveryReceipt } from '../../types/recovery';
 import { errorMessage } from '../../lib/recovery';
+import { joinPath } from '../../lib/paths';
 import { formatTimestamp, inputClass, primaryButton, safeText, secondaryButton } from './format';
 import { useRecoveryGate } from './gate';
 import { Notice } from './Notice';
@@ -30,11 +31,6 @@ function validateFolderName(name: string): string | null {
   if (trimmed === '.' || trimmed === '..') return 'Choose a real folder name.';
   if (/[. ]$/.test(trimmed)) return 'The folder name cannot end with a dot or a space.';
   return null;
-}
-
-function joinPath(parent: string, name: string): string {
-  const separator = parent.includes('\\') ? '\\' : '/';
-  return `${parent.replace(/[\\/]+$/, '')}${separator}${name}`;
 }
 
 function isInsidePath(path: string, root: string): boolean {

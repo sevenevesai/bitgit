@@ -400,22 +400,34 @@ pub struct EditorAvailability {
     pub sublime: bool,
 }
 
-/// Find the file a Windows command name refers to, the way the shell would: an existing path
-/// as given, otherwise each PATH directory with each PATHEXT extension.
-#[cfg(target_os = "windows")]
-fn resolve_windows_command(command: &str) -> Option<std::path::PathBuf> {
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
-    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-    resolve_command_in(command, &path_var, &pathext)
+/// Find the file a command name refers to, the way the user's shell would. Windows searches PATH
+/// with PATHEXT. Unix searches the login shell's PATH, then on macOS the editor CLIs inside their
+/// app bundles, which are on PATH only after the user installs the shell command.
+fn resolve_command(command: &str) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let path_var = std::env::var_os("PATH").unwrap_or_default();
+        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        resolve_command_in(command, &path_var, &pathext)
+    }
+
+    #[cfg(unix)]
+    {
+        let found = resolve_command_in(command, crate::login_path::login_path(), "");
+        #[cfg(target_os = "macos")]
+        let found = found.or_else(|| macos_bundled_command(command));
+        found
+    }
 }
 
-#[cfg(any(target_os = "windows", test))]
+/// An existing path as given, otherwise each PATH directory in turn. Windows also tries each PATHEXT
+/// extension; Unix accepts only a regular file with an execute bit.
 fn resolve_command_in(command: &str, path_var: &std::ffi::OsStr, pathext: &str) -> Option<std::path::PathBuf> {
     use std::path::{Path, PathBuf};
 
     let extensions: Vec<&str> = pathext.split(';').filter(|e| !e.is_empty()).collect();
     let with_extensions = |base: PathBuf| -> Option<PathBuf> {
-        if base.extension().is_some() && base.is_file() {
+        if runs_as_named(&base) {
             return Some(base);
         }
         extensions.iter().find_map(|ext| {
@@ -426,28 +438,42 @@ fn resolve_command_in(command: &str, path_var: &std::ffi::OsStr, pathext: &str) 
         })
     };
 
-    if Path::new(command).is_absolute() || command.contains(['\\', '/']) {
+    if Path::new(command).is_absolute() || command.chars().any(std::path::is_separator) {
         return with_extensions(PathBuf::from(command));
     }
     std::env::split_paths(path_var).find_map(|dir| with_extensions(dir.join(command)))
 }
 
+#[cfg(not(unix))]
+fn runs_as_named(candidate: &std::path::Path) -> bool {
+    candidate.extension().is_some() && candidate.is_file()
+}
+
+#[cfg(unix)]
+fn runs_as_named(candidate: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(candidate).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_bundled_command(command: &str) -> Option<std::path::PathBuf> {
+    let inside_bundle = match command {
+        "code" => "Visual Studio Code.app/Contents/Resources/app/bin/code",
+        "cursor" => "Cursor.app/Contents/Resources/app/bin/cursor",
+        "subl" => "Sublime Text.app/Contents/SharedSupport/bin/subl",
+        _ => return None,
+    };
+    let user_apps = dirs::home_dir().map(|home| home.join("Applications"));
+    [Some(std::path::PathBuf::from("/Applications")), user_apps]
+        .into_iter()
+        .flatten()
+        .map(|apps| apps.join(inside_bundle))
+        .find(|candidate| runs_as_named(candidate))
+}
+
 /// Check if a command is available in PATH
 fn check_command_available(command: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        resolve_windows_command(command).is_some()
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        // Use 'which' command on Unix systems
-        std::process::Command::new("which")
-            .arg(command)
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-    }
+    resolve_command(command).is_some()
 }
 
 /// Check if Sublime Text is available (has special path handling)
@@ -471,19 +497,14 @@ fn check_sublime_available() -> bool {
             .any(|p| std::path::Path::new(p).exists());
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        // Check for Sublime Text.app in Applications
-        return std::path::Path::new("/Applications/Sublime Text.app").exists();
-    }
-
     #[cfg(target_os = "linux")]
     {
         // Also check sublime_text command on Linux
         return check_command_available("sublime_text");
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    // macOS finds subl inside the app bundle through resolve_command.
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         false
     }
@@ -529,14 +550,6 @@ fn get_editor_command(
                 }
             }
 
-            #[cfg(target_os = "macos")]
-            {
-                let subl_path = "/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl";
-                if std::path::Path::new(subl_path).exists() {
-                    return Ok((subl_path.to_string(), vec![path.to_string()]));
-                }
-            }
-
             #[cfg(target_os = "linux")]
             {
                 if check_command_available("sublime_text") {
@@ -576,36 +589,29 @@ fn execute_editor_command(command: &str, args: &[String]) -> Result<(), String> 
         return Err("Editor command contains control characters".to_string());
     }
 
+    // Spawn the resolved file directly: no shell ever sees the command or its arguments.
+    let resolved = resolve_command(command).ok_or_else(|| {
+        format!(
+            "Failed to open editor: '{}' was not found. Make sure it is installed and available in PATH.",
+            command
+        )
+    })?;
+    let mut editor = Command::new(&resolved);
+    editor.args(args);
+
     #[cfg(target_os = "windows")]
     {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-        // Spawn the resolved file directly: no shell ever sees the command or its arguments.
-        let resolved = resolve_windows_command(command).ok_or_else(|| {
-            format!(
-                "Failed to open editor: '{}' was not found. Make sure it is installed and available in PATH.",
-                command
-            )
-        })?;
-        Command::new(&resolved)
-            .args(args)
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .map_err(|e| format!("Failed to open editor: {}. Make sure '{}' exists.", e, command))?;
+        editor.creation_flags(CREATE_NO_WINDOW);
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        Command::new(command)
-            .args(args)
-            .spawn()
-            .map_err(|e| {
-                format!(
-                    "Failed to open editor: {}. Make sure '{}' is installed and available in PATH.",
-                    e, command
-                )
-            })?;
-    }
+    // Editors start terminals and tools of their own; give them the PATH the user's shell has.
+    #[cfg(unix)]
+    editor.env("PATH", crate::login_path::login_path());
+
+    editor
+        .spawn()
+        .map_err(|e| format!("Failed to open editor: {}. Make sure '{}' exists.", e, command))?;
 
     Ok(())
 }
@@ -1532,6 +1538,26 @@ mod tests {
         let found = resolve_command_in("fake-editor", &path_var, ".exe;.cmd");
         assert_eq!(found, Some(dir.join("fake-editor.cmd")));
         assert_eq!(resolve_command_in("missing & calc", &path_var, ".exe;.cmd"), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_commands_resolve_only_to_executable_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("bitgit-unix-editor-{}", std::process::id()));
+        let (first, second) = (dir.join("first"), dir.join("second"));
+        std::fs::create_dir_all(first.join("folder")).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        for (file, mode) in [(first.join("editor"), 0o644), (second.join("editor"), 0o755)] {
+            std::fs::write(&file, "").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let path_var = std::env::join_paths([&first, &second]).unwrap();
+
+        assert_eq!(resolve_command_in("editor", &path_var, ""), Some(second.join("editor")));
+        assert_eq!(resolve_command_in("folder", &path_var, ""), None);
+        assert_eq!(resolve_command_in(first.join("editor").to_str().unwrap(), &path_var, ""), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

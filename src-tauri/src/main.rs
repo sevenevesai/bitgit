@@ -8,6 +8,7 @@ mod credentials;
 mod git_service;
 mod gitignore;
 mod instance_lock;
+mod login_path;
 mod models;
 mod project_cache;
 mod project_sync;
@@ -39,6 +40,17 @@ fn main() {
     };
 
     tauri::Builder::default()
+        .setup(|_app| {
+            // Windows keeps finding the script next to the executable: there the resolver would
+            // hand Node a \\?\ verbatim path.
+            #[cfg(not(windows))]
+            match _app.path_resolver().resolve_resource("../git-service/dist/index.js") {
+                Some(script) => git_service::set_bundled_script(script),
+                // GitService::new reports the missing script when a command needs the service.
+                None => eprintln!("[Rust] The app bundle's resource directory could not be resolved"),
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             get_repositories,

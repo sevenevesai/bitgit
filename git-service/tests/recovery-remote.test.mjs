@@ -8,14 +8,17 @@ import { RecoveryService } from '../dist/recovery-service.js';
 import { validateBackupRemote } from '../dist/recovery-remote.js';
 import { sha256 } from '../dist/recovery-io.js';
 
+// Resolved: macOS reaches its temp folder through the /var link, which recovery refuses.
+const TMP = await fs.realpath(os.tmpdir());
+
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bitgit-recovery-remote-'));
+  const root = await fs.mkdtemp(path.join(TMP, 'bitgit-recovery-remote-'));
   const source = path.join(root, 'source'), remote = path.join(root, 'remote with spaces.git');
   await fs.mkdir(source); await fs.writeFile(path.join(source, 'app.txt'), 'known bytes\r\n');
   const init = spawnSync('git', ['init', '--bare', '--initial-branch=main', remote], { encoding: 'utf8', windowsHide: true });
   assert.equal(init.status, 0, init.stderr);
   t.after(async () => {
-    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'bitgit-recovery-remote-'));
+    assert.ok(path.resolve(root).startsWith(TMP + path.sep + 'bitgit-recovery-remote-'));
     await fs.rm(root, { recursive: true, force: true });
   });
   const service = new RecoveryService(source, { vaultRoot: path.join(root, 'vault') });

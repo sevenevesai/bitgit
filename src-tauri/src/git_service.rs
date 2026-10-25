@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -31,6 +32,72 @@ struct IPCResponse {
 // A wedged service must not hold its caller forever. Pushes and recovery checks may legitimately run for
 // ten minutes and clones have no ceiling, so this is a backstop, not a responsiveness control.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+const MIN_NODE_MAJOR: u32 = 20;
+
+// macOS and Linux bundles keep resources away from the binary (`Contents/Resources`,
+// `/usr/lib/<package>`, `$APPDIR/usr/lib/<package>`), so the app records Tauri's resolved path at setup.
+#[cfg(not(windows))]
+static BUNDLED_SCRIPT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[cfg(not(windows))]
+pub fn set_bundled_script(script: PathBuf) {
+    // Setup runs once per process, so the slot is always empty here.
+    let _ = BUNDLED_SCRIPT.set(script);
+}
+
+fn service_script() -> Result<PathBuf> {
+    if cfg!(debug_assertions) {
+        // Development mode: running from src-tauri directory
+        return Ok(PathBuf::from("../git-service/dist/index.js"));
+    }
+    #[cfg(windows)]
+    {
+        // Production mode: Tauri bundles resources in _up_ directory
+        let exe_dir = std::env::current_exe()
+            .context("Failed to get executable path")?
+            .parent()
+            .context("Failed to get executable directory")?
+            .to_path_buf();
+        Ok(exe_dir.join("_up_").join("git-service").join("dist").join("index.js"))
+    }
+    #[cfg(not(windows))]
+    {
+        BUNDLED_SCRIPT.get().cloned().context("The Git service script was not found in the app bundle")
+    }
+}
+
+/// Names the Node.js that PATH reaches and its version, so a missing or too old Node reads as such
+/// instead of as a service crash.
+#[cfg_attr(windows, allow(dead_code))]
+fn describe_node(program: &OsStr, path: &OsStr) -> String {
+    let probe = Command::new(program)
+        .args(["-p", "process.version + ' ' + process.execPath"])
+        .env("PATH", path)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    match probe {
+        Ok(output) => describe_node_probe(&String::from_utf8_lossy(&output.stdout)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("[Rust] node is not on PATH {}", path.to_string_lossy());
+            format!("Node.js was not found on your login shell's PATH. Install Node.js {MIN_NODE_MAJOR} or later.")
+        }
+        Err(error) => format!("Node.js could not be run ({error}). BitGit needs Node.js {MIN_NODE_MAJOR} or later."),
+    }
+}
+
+/// Reads `node -p "process.version + ' ' + process.execPath"` output, e.g. `v20.19.2 /usr/bin/node`.
+#[cfg_attr(windows, allow(dead_code))]
+fn describe_node_probe(output: &str) -> String {
+    let (version, node_path) = output.trim().split_once(' ').unwrap_or((output.trim(), "an unknown path"));
+    let major = version.strip_prefix('v').and_then(|v| v.split('.').next()).and_then(|v| v.parse::<u32>().ok());
+    match major {
+        Some(major) if major >= MIN_NODE_MAJOR => format!("It ran Node.js {version} at {node_path}."),
+        Some(_) => format!("Node.js {version} at {node_path} is too old: BitGit needs Node.js {MIN_NODE_MAJOR} or later."),
+        None => format!("Node.js did not report its version. BitGit needs Node.js {MIN_NODE_MAJOR} or later."),
+    }
+}
 
 // The guarded sections cannot leave their data half-updated, so a poisoned lock is still usable.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -103,18 +170,7 @@ pub struct GitService {
 
 impl GitService {
     pub fn new() -> Result<Self> {
-        let git_service_path = if cfg!(debug_assertions) {
-            // Development mode: running from src-tauri directory
-            std::path::PathBuf::from("../git-service/dist/index.js")
-        } else {
-            // Production mode: Tauri bundles resources in _up_ directory
-            let exe_dir = std::env::current_exe()
-                .context("Failed to get executable path")?
-                .parent()
-                .context("Failed to get executable directory")?
-                .to_path_buf();
-            exe_dir.join("_up_").join("git-service").join("dist").join("index.js")
-        };
+        let git_service_path = service_script()?;
 
         eprintln!("[Rust] Starting Git service from: {}", git_service_path.display());
 
@@ -150,8 +206,14 @@ impl GitService {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let mut child = cmd.spawn()
-            .context("Failed to spawn Git service process. Ensure Node.js is installed.")?;
+        // Also the PATH `node` is looked up on, and the one the service runs `git` with.
+        #[cfg(unix)]
+        cmd.env("PATH", crate::login_path::login_path());
+
+        let mut child = cmd.spawn().with_context(|| match self.node_report() {
+            Some(report) => format!("Failed to spawn Git service process. {report}"),
+            None => "Failed to spawn Git service process. Ensure Node.js is installed.".to_string(),
+        })?;
 
         let handshake = (|| -> Result<(ChildStdin, BufReader<ChildStdout>)> {
             let mut stdin = child.stdin.take().context("Failed to access stdin")?;
@@ -175,7 +237,10 @@ impl GitService {
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                anyhow::bail!("Git service did not start: {}", error);
+                match self.node_report() {
+                    Some(report) => anyhow::bail!("Git service did not start: {}. {}", error, report),
+                    None => anyhow::bail!("Git service did not start: {}", error),
+                }
             }
         };
 
@@ -187,6 +252,14 @@ impl GitService {
             .spawn(move || read_responses(reader, waiters))
             .context("Failed to start the Git service reader")?;
         Ok(connection)
+    }
+
+    /// What a failed start tells the user about Node.js. Windows keeps its original messages.
+    fn node_report(&self) -> Option<String> {
+        #[cfg(unix)]
+        return Some(describe_node(&self.program, crate::login_path::login_path()));
+        #[cfg(not(unix))]
+        None
     }
 
     pub fn execute(&self, command_type: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
@@ -953,6 +1026,19 @@ mod tests {
         let error = service.execute("unanswered", serde_json::json!({})).unwrap_err().to_string();
         assert!(error.contains("did not respond to unanswered"), "{}", error);
         assert_eq!(service.execute("echo", serde_json::json!("still here")).unwrap(), "still here");
+    }
+
+    #[test]
+    fn a_node_below_the_floor_is_named_with_its_version_and_path() {
+        let old = describe_node_probe("v12.22.9 /usr/bin/node\n");
+        assert!(old.contains("v12.22.9 at /usr/bin/node is too old"), "{}", old);
+        assert!(old.contains("Node.js 20 or later"), "{}", old);
+
+        let current = describe_node_probe("v20.19.2 /Users/me/.nvm/versions/node/v20.19.2/bin/node\n");
+        assert_eq!(current, "It ran Node.js v20.19.2 at /Users/me/.nvm/versions/node/v20.19.2/bin/node.");
+
+        let silent = describe_node_probe("");
+        assert!(silent.contains("did not report its version") && silent.contains("20 or later"), "{}", silent);
     }
 
     #[test]

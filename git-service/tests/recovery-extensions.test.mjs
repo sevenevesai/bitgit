@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { RecoveryService } from '../dist/recovery-service.js';
 import { parseCliArgs, parseCliRequest } from '../dist/recovery-cli.js';
 
+// Resolved: macOS reaches its temp folder through the /var link, which recovery refuses.
+const TMP = await fs.realpath(os.tmpdir());
+
 const MINUTE = 60_000;
 const START = Date.parse('2026-09-21T10:00:00.000Z');
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('not-a-real-image-but-a-real-signature')]);
@@ -17,11 +20,11 @@ const ENABLED = { automaticEnabled: true, idleMinutes: 5, retention: 'keep_all' 
 const HOLDER = /^bitgit-check-/;
 
 const fixtures = async (t, { git: useGit = false, githubToken } = {}) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bitgit-recovery-ext-'));
+  const root = await fs.mkdtemp(path.join(TMP, 'bitgit-recovery-ext-'));
   const repo = path.join(root, 'project'), vaultRoot = path.join(root, 'vault');
   await fs.mkdir(repo);
   t.after(async () => {
-    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'bitgit-recovery-ext-'));
+    assert.ok(path.resolve(root).startsWith(TMP + path.sep + 'bitgit-recovery-ext-'));
     await fs.rm(root, { recursive: true, force: true });
   });
   const clock = { time: START };
@@ -51,7 +54,7 @@ const fixtures = async (t, { git: useGit = false, githubToken } = {}) => {
 
 const keepCopy = (t, evidence) => t.after(async () => {
   const holder = path.dirname(evidence.workingCopyPath);
-  assert.ok(HOLDER.test(path.basename(holder)) && path.dirname(holder) === path.resolve(os.tmpdir()));
+  assert.ok(HOLDER.test(path.basename(holder)) && path.dirname(holder) === TMP);
   await fs.rm(holder, { recursive: true, force: true });
 });
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };

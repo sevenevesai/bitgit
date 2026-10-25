@@ -115,6 +115,11 @@ from any process.
 node git-service/dist/recovery-cli.js --repo <absolute project> [--vault-root <absolute folder>]
 ```
 
+Without `--vault-root` the CLI uses the app's vault, `BitGit/checkpoints` under the OS config folder
+(`%APPDATA%`, `~/Library/Application Support`, `$XDG_CONFIG_HOME` or `~/.config`). On macOS and Linux,
+CLI vaults made by 1.1.2 and earlier sit under the data folder instead and need
+`--vault-root ${XDG_DATA_HOME:-~/.local/share}/BitGit/checkpoints`.
+
 One `RecoveryRequest` JSON object on stdin (max 1 MiB) per invocation; one JSON line on stdout,
 `{"success":true,"data":...}` or `{"success":false,"error":"..."}`. Exit 0 = success, 1 = request
 failed, 2 = bad arguments, empty/oversized/malformed input or unknown action. Nothing is sent or

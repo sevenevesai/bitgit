@@ -16,6 +16,20 @@ pub fn config_dir() -> Result<PathBuf> {
     } else {
         dirs::config_dir().context("Failed to get config directory")?.join("BitGit")
     };
-    std::fs::create_dir_all(&directory).context("Failed to create application data directory")?;
+    create_private_dir(&directory).context("Failed to create application data directory")?;
     Ok(directory)
+}
+
+// Vaults hold source, including untracked secrets. Windows APPDATA is already per-user; Unix would
+// create the directory 0755.
+fn create_private_dir(directory: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(directory)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(directory)
+    }
 }

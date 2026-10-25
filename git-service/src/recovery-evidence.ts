@@ -241,7 +241,8 @@ export async function runCheckpointCheck(service: RecoveryService, request: Extr
   const checkpoint = await service.readCheckpoint(request.checkpointId);
   if (checkpoint.evidence.length >= MAX_EVIDENCE_PER_CHECKPOINT) throw new Error(`This milestone already has ${MAX_EVIDENCE_PER_CHECKPOINT} evidence entries`);
   const { manifest } = await service.readManifest(checkpoint.commitOid);
-  const holder = await fs.mkdtemp(path.join(os.tmpdir(), 'bitgit-check-'));
+  // Resolved: recover() refuses a destination reached through a link, and macOS reaches its temp folder through /var.
+  const holder = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'bitgit-check-'));
   const workingCopy = path.join(holder, 'source');
   try { await service.recover(checkpoint.id, workingCopy); } catch (error) {
     await fs.rm(holder, { recursive: true, force: true });

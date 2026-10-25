@@ -4,6 +4,7 @@ import { useAppStore, describeSyncResult, syncMovedData, syncActionLabel } from 
 import { invoke } from '@tauri-apps/api/tauri';
 import { open } from '@tauri-apps/api/dialog';
 import toast from 'react-hot-toast';
+import { joinPath } from '../lib/paths';
 import { LinkLocalModal } from './LinkLocalModal';
 import { LinkGitHubModal } from './LinkGitHubModal';
 import { CreateRepoModal } from './CreateRepoModal';
@@ -373,7 +374,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
       // Clone repository - Tauri automatically converts camelCase to snake_case
       await invoke<Project>('clone_repository', {
         githubUrl: project.githubUrl,
-        localPath: `${selectedPath}\\${project.name}`,
+        localPath: joinPath(selectedPath, project.name),
         projectId: project.id,
       });
 

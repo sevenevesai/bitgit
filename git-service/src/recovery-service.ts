@@ -20,6 +20,14 @@ export interface CheckpointManifest extends Omit<Checkpoint, 'commitOid' | 'tree
   version: 1;
   entries: Array<{ path: string; sizeBytes: number; sha256: string; mode: '100644' | '100755' }>;
 }
+// The app's data root, as Rust's dirs::config_dir() finds it, so the CLI and the app share one
+// history. Older macOS and Linux CLI vaults under the XDG data folder need an explicit --vault-root.
+export function defaultDataRoot(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, home = os.homedir()): string {
+  if (platform === 'win32') return env.APPDATA || env.XDG_DATA_HOME || path.join(home, '.local', 'share');
+  if (platform === 'darwin') return path.join(home, 'Library', 'Application Support');
+  const configured = env.XDG_CONFIG_HOME;
+  return configured && path.isAbsolute(configured) ? configured : path.join(home, '.config');
+}
 const validId = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 const validOid = (oid: string): boolean => /^[0-9a-f]{40}$/.test(oid);
 
@@ -36,8 +44,7 @@ export class RecoveryService {
     this.options = options;
     const normalized = process.platform === 'win32' ? this.repoPath.toLowerCase() : this.repoPath;
     this.vaultKey = sha256(normalized).slice(0, 24);
-    const dataRoot = process.env.APPDATA || process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
-    const vaultRoot = options.vaultRoot || path.join(dataRoot, 'BitGit', 'checkpoints');
+    const vaultRoot = options.vaultRoot || path.join(defaultDataRoot(), 'BitGit', 'checkpoints');
     this.vaultPath = path.resolve(vaultRoot, this.vaultKey);
     this.gitDir = path.join(this.vaultPath, 'repository.git');
     if (within(this.repoPath, this.vaultPath)) throw new Error('Checkpoint storage must be outside the source folder');
@@ -48,7 +55,8 @@ export class RecoveryService {
     return withVaultLock(this.vaultPath, async () => { await this.initialize(); return operation(); });
   }
   async initialize(): Promise<void> {
-    await fs.mkdir(this.vaultPath, { recursive: true });
+    // Vaults hold source, including untracked secrets: private to the user on Unix. Windows ignores the mode.
+    await fs.mkdir(this.vaultPath, { recursive: true, mode: 0o700 });
     await assertNoLinks(path.parse(this.vaultPath).root, this.vaultPath);
     if (!(await exists(this.gitDir))) {
       const emptyTemplate = path.join(this.vaultPath, 'empty-template');

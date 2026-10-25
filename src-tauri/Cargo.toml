@@ -6,6 +6,7 @@ authors = ["BitGit Team"]
 license = "MIT"
 repository = ""
 edition = "2021"
+rust-version = "1.89"
 
 [build-dependencies]
 tauri-build = { version = "1.5", features = [] }

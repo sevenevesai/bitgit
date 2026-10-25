@@ -4,15 +4,18 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { RecoveryService } from '../dist/recovery-service.js';
+import { RecoveryService, defaultDataRoot } from '../dist/recovery-service.js';
 import { safeRelative, withVaultLock, sha256 } from '../dist/recovery-io.js';
 
+// Resolved: macOS reaches its temp folder through the /var link, which recovery refuses.
+const TMP = await fs.realpath(os.tmpdir());
+
 const fixtures = async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'bitgit-recovery-core-'));
+  const root = await fs.mkdtemp(path.join(TMP, 'bitgit-recovery-core-'));
   const repo = path.join(root, 'project'), vaultRoot = path.join(root, 'vault');
   await fs.mkdir(repo);
   t.after(async () => {
-    assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep + 'bitgit-recovery-core-'));
+    assert.ok(path.resolve(root).startsWith(TMP + path.sep + 'bitgit-recovery-core-'));
     await fs.rm(root, { recursive: true, force: true });
   });
   const git = (...args) => {
@@ -260,4 +263,12 @@ test('repair can protect an empty current source before restoring a deleted file
   const state = await service.dispatch({ action: 'state' });
   assert.equal(state.checkpoints.find(checkpoint => checkpoint.id === receipt.safetyCheckpointId).coverage.included.length, 0);
   assert.equal(await fs.readFile(path.join(repo, 'app.txt'), 'utf8'), 'working\r\n');
+});
+
+test('the CLI default vault lives in the same data root as the app on every platform', () => {
+  assert.equal(defaultDataRoot({ APPDATA: 'D:/profile/Roaming', XDG_CONFIG_HOME: '/x/config' }, 'win32', 'D:/profile'), 'D:/profile/Roaming');
+  assert.equal(defaultDataRoot({ XDG_CONFIG_HOME: '/x/config', XDG_DATA_HOME: '/x/data' }, 'darwin', '/Users/u'), path.join('/Users/u', 'Library', 'Application Support'));
+  assert.equal(defaultDataRoot({ XDG_CONFIG_HOME: '/x/config', XDG_DATA_HOME: '/x/data' }, 'linux', '/home/u'), '/x/config');
+  assert.equal(defaultDataRoot({ XDG_CONFIG_HOME: 'relative/config' }, 'linux', '/home/u'), path.join('/home/u', '.config'));
+  assert.equal(defaultDataRoot({}, 'linux', '/home/u'), path.join('/home/u', '.config'));
 });

@@ -3,8 +3,8 @@ use std::path::Path;
 
 // The resource two BitGit processes corrupt is the data directory, so the lock lives inside it.
 pub struct InstanceLock {
-    // Open without sharing for the life of the process. The OS closes it when the process dies,
-    // so a crash never leaves a lock that blocks the next start.
+    // Held for the life of the process: opened without sharing on Windows, flocked elsewhere. The
+    // OS closes it when the process dies, so a crash never leaves a lock that blocks the next start.
     _file: Option<File>,
 }
 
@@ -36,13 +36,31 @@ pub fn acquire(data_dir: &Path) -> Result<InstanceLock, AlreadyRunning> {
     }
 }
 
-// BitGit ships for Windows only; elsewhere the guard is a no-op.
+// An advisory flock, released with the file. Windows keeps share_mode(0): a LockFileEx lock can
+// outlive a crashed process for a while.
 #[cfg(not(windows))]
-pub fn acquire(_data_dir: &Path) -> Result<InstanceLock, AlreadyRunning> {
-    Ok(InstanceLock { _file: None })
+pub fn acquire(data_dir: &Path) -> Result<InstanceLock, AlreadyRunning> {
+    let opened = std::fs::create_dir_all(data_dir).and_then(|()| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(data_dir.join("instance.lock"))
+    });
+    let locked = opened.map_err(std::fs::TryLockError::Error).and_then(|file| file.try_lock().map(|()| file));
+    match locked {
+        Ok(file) => Ok(InstanceLock { _file: Some(file) }),
+        Err(std::fs::TryLockError::WouldBlock) => Err(AlreadyRunning),
+        Err(std::fs::TryLockError::Error(error)) => {
+            // Fail open, as on Windows.
+            eprintln!("BitGit instance lock unavailable, starting without it: {error}");
+            Ok(InstanceLock { _file: None })
+        }
+    }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
