@@ -1,10 +1,8 @@
 # macOS and Linux build plan
 
-Status (2026-10-25): the Phase 1 runtime (8d3e51a) and the decided release work
-(`git log cea9ca6..` on `main`) are on local `main` and pass the Windows gates. Version 1.2.0 is
-prepared to ship Windows, an unsigned macOS build and the Linux AppImage. Nothing is pushed or
-released, and nothing has run on a Mac or a Linux machine. `ci.yml` and `release.yml` start on the
-first push.
+Status (2026-10-26): `release.yml` published 1.2.0 (Windows, an unsigned macOS build and the Linux
+AppImage) on 2026-10-25, and 1.2.1 follows with the repository picker fix and ⌘ shortcuts. The
+items under "Verification still needed" stay open until checked on a Mac or a Linux desktop.
 
 ## Goal
 

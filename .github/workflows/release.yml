@@ -40,10 +40,18 @@ jobs:
             **Linux (AppImage only):** Download `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage`, make it executable (`chmod +x`) and run it. It needs FUSE 2 (`libfuse2`; `libfuse2t64` on Ubuntu 24.04), Node.js 22 or later, Git, and a running Secret Service (GNOME Keyring, KWallet or KeePassXC) to store the GitHub token. The .deb and .rpm are no longer published: they need webkit2gtk 4.0, which current distributions do not ship. For a blank window on NVIDIA drivers, see [INSTALL.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALL.md).
 
             ### What's New
-            - Linux: physical paths are resolved at the recovery boundary, a missing Secret Service is named, and timed-out Git groups end
-            - macOS: the first build, for macOS 11 or later on Apple Silicon and Intel, with the GitHub token in the Keychain. It is not signed or notarized by Apple; see Installation
-            - Linux: only the AppImage is published; the .deb and .rpm need webkit2gtk 4.0, which current distributions do not ship
-            - Windows installers are unchanged apart from the version
+            - Linking a project to an existing GitHub repository works again: the list shows each repository's owner, searching no longer closes it with an error, only the repository you pick is selected, and linking saves its URL. Thanks @zznam (#1)
+            - macOS: dashboard shortcuts use ⌘ (⌘R refresh, ⌘N new project, ⌘F search, ⌘A select all, ⌘D theme) and their hints say so; Ctrl still works
+
+            ### In 1.2.0
+            - macOS: builds for macOS 11 or later on Apple Silicon and Intel, with the GitHub token kept in the Keychain. The app is not signed or notarized by Apple; see Installation
+            - macOS and Linux: BitGit starts its Git service from the installed app and finds Node.js and Git through your login shell's PATH, even when opened from Finder, the Dock or a desktop menu
+            - macOS and Linux: projects inside a linked folder (such as macOS `/tmp` or Fedora Atomic's `/var/home`) can be saved and recovered, and a timed-out fetch or push also stops its ssh or HTTPS helper
+            - macOS: Git errors suggest `xcode-select --install` when the Command Line Tools are missing, and VS Code, Cursor and Sublime Text open without their shell command
+            - Linux: only the AppImage is published; the .deb and .rpm need webkit2gtk 4.0, which current distributions no longer ship. If you installed the 1.1.2 .deb, remove it with `sudo apt remove bit-git` and use the AppImage
+            - Linux: saving the GitHub token without a Secret Service says which is missing
+            - Security: simple-git 4.0.2 fixes critical command-execution advisories in the Git service. Branch and tag names are validated, and cloning or linking accepts only HTTPS, SSH and `git://` remote URLs
+            - Editors start directly instead of through `cmd /C` on Windows, and recoveries running in different projects each use their own GitHub token
 
             ### Since 1.1.0
             - Automatic updates: BitGit checks for a newer release at startup and offers to install it (Windows installers, the macOS app and the Linux AppImage)
