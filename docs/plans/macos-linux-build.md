@@ -52,7 +52,6 @@ Code and docs, not started:
 - `AddProjectModal.tsx`, `LinkLocalModal.tsx`: placeholders that are not Windows paths.
 - `src-tauri/src/commands.rs`: scrub AppImage variables (`APPDIR`, `GTK_*`, `GDK_*`) for editor
   launches, if a test shows them leaking.
-- `README.md`: per-OS prerequisites. It waits for another session's uncommitted README edit.
 - Known limit: when a symlinked project root's target is deleted, the dangling link's own path
   becomes the vault key, so that history shows only under the target's spelling until it returns.
 

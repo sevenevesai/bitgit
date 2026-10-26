@@ -1,299 +1,312 @@
+<div align="center">
+
+<img src="bitgit-icon-square.png" alt="BitGit logo" width="112">
+
 # BitGit
 
-**Website:** https://seveneves.ai/bitgit/
+**Save the version that worked. See what changed. Get it back.**
 
-**Save milestones, compare changes, and recover your code during AI-assisted development.**
+A desktop app for recovering code during AI-assisted development,<br>
+with a visual Git dashboard for the projects you publish.
 
-![BitGit](bitgit-icon-square.png)
+[![Latest release](https://img.shields.io/github/v/release/sevenevesai/bitgit?sort=semver)](https://github.com/sevenevesai/bitgit/releases/latest)
+[![CI](https://github.com/sevenevesai/bitgit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sevenevesai/bitgit/actions/workflows/ci.yml)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue)](#install)
+[![License: MIT](https://img.shields.io/github/license/sevenevesai/bitgit)](LICENSE)
 
----
+[**Download**](https://github.com/sevenevesai/bitgit/releases/latest) ·
+[Website](https://seveneves.ai/bitgit/) ·
+[Documentation](#documentation) ·
+[For AI agents](#for-ai-agents) ·
+[Report a bug](https://github.com/sevenevesai/bitgit/issues/new)
 
-## What is BitGit?
-
-BitGit is a Windows desktop app for people building with AI and developers who prefer visual Git.
-Save a working milestone before a large coding session, inspect what changed, and recover a separate
-copy or repair selected files while preserving a safety checkpoint. Local recovery works without
-GitHub and without initializing Git in your project.
-
-Start with the [recovery guide](docs/RECOVERY_GUIDE.md), then explore
-[automatic saves, evidence and regression finding](docs/RECOVERY_WORKFLOWS.md),
-[visual Git](docs/VISUAL_GIT_GUIDE.md), or the [JSON harness CLI](docs/RECOVERY_AUTOMATION.md#cli).
-The [audience review and research](docs/PRODUCT_REVIEW.md) explain the product direction.
-
-### Why BitGit?
-
-**The problem:** Long coding sessions can erase a working version
-- AI changes can break a feature that worked earlier
-- Git commands and staging rules can obscure what will be saved or published
-- A local save does not establish that a remote copy exists or that the code works
-- Finding a regression requires comparing versions and recording what was tested
-
-**The workflow:** Save, inspect, recover
-- See all your projects at a glance
-- Name milestones and inspect exactly which files are covered
-- Enable local automatic saves after inactivity while BitGit is open
-- Recover an old version separately before deciding what to repair
+</div>
 
 ---
+
+An AI coding agent can change dozens of files in a few minutes. When a feature that worked an hour
+ago breaks, the working version is often gone: it was never committed, it sits among commits nobody
+tested, or Git's staging rules make it hard to say what a restore would bring back.
+
+BitGit keeps named, byte-exact copies of a project folder on your computer and shows exactly which
+files each copy covers. Compare any saved version with your current files, recover it into a new
+folder, or repair only the files you choose. Your project's branch, index and remotes stay
+untouched while you do. GitHub is optional, and so is Git: a plain folder works.
 
 ## Features
 
-### Core Functionality ✅
-- **Recovery Milestones** - Manual and automatic checkpoints with coverage and exclusions
-- **Recover & Repair** - Verified new copies or selected-file repair with a safety checkpoint
-- **Remote Recovery** - Explicit backup verification and import into a fresh vault
-- **Evidence & Regression Search** - Notes, screenshots, explicit checks, and good/bad/skip history
-- **Harness CLI** - The same checkpoint and recovery API through JSON requests
-- **Project Management** - Create, link, archive, and favorite projects
-- **Git Operations** - Review selected files before publishing; push existing commits separately
-- **GitHub Integration** - Create repos, clone, secure token storage
-- **Status Detection** - Branch/upstream, local changes, ahead/behind, and remote-check failures
-- **Publish Validation** - Block credentials and oversized files; review warnings before proceeding
+### Save & Recover
 
-### Advanced Git Tools ✅
-- **Branch Management** - View, switch, create, and delete branches
-- **Commit History** - Visual timeline of all commits
-- **Diff Viewer** - See exactly what changed
-- **Stash Manager** - Save and restore work-in-progress
-- **Tag Management** - Create, push, and manage release tags
+- **Named milestones.** Save a version before a risky change, with an optional note. Preview every
+  file it will include, and see why others are left out (dependencies, build output, likely
+  secrets).
+- **Automatic saves.** Opt in per project to save after your files stay unchanged for 1–60
+  minutes while BitGit is open. Every version is kept; nothing is pruned.
+- **Compare.** See which files restoring a version would add, replace or delete, with a text diff
+  for each.
+- **Recover a copy.** Write any version into a new folder, verified file by file against the saved
+  copy. Your working project is not touched.
+- **Repair selected files.** Restore only the files you tick. BitGit saves a safety checkpoint
+  first, and if a repair stops part-way it offers an explicit undo.
+- **Remote backup.** Upload a version to a GitHub repository or a local bare repository, read it
+  back to confirm it, and restore it on another computer with no local history.
 
-### Performance & Reliability ✅
-- **Background Checking** - Auto-refresh all projects every 5 minutes
-- **Batch Operations** - Process selected projects with individual results
-- **Auto-Retry** - Exponential backoff handles transient failures
-- **Operation Queue** - Cancel, retry, or track long-running operations
+### Find what broke
 
-### User Experience ✅
-- **Dark Mode** - Easy on the eyes for late-night coding
-- **Custom Branding** - Professional BitGit icon and UI
-- **Keyboard Shortcuts** - Ctrl+R refresh, Ctrl+N new project, etc.
-- **Search & Filter** - Find projects instantly by name, status, or path
-- **Batch Operations** - Select multiple projects and sync them all at once
+- **Notes and screenshots** attached to one exact version: what you tested and whether it passed.
+- **Explicit checks.** Run a command such as `npm test` against a recovered copy of a version,
+  never in your project folder.
+- **Regression search.** Mark a known-good and a known-bad version, then answer Good, Bad or Skip
+  for each version BitGit suggests until it finds the first bad one.
 
----
+### Visual Git
 
-## Getting Started
+- **Multi-project dashboard** with branch, upstream, ahead/behind counts and the time of the last
+  successful check for every repository, refreshed in the background every 5 minutes.
+- **Publish only what you choose.** Pick whole files to commit and push. Nothing is preselected
+  and nothing is staged for you.
+- **Checks before anything is sent.** Likely credentials, `.env` files and files over 100 MB are
+  blocked; warnings need an explicit confirmation.
+- **Branches, commits, stashes and tags** in a details view. Merges of the branches you select use
+  `--no-ff` and keep the source branches. BitGit never force-pushes.
+- **GitHub integration** to create, clone and link repositories.
+- **Bulk import** by scanning a folder for existing repositories.
+- **Analytics** with commit history, an activity heatmap and repository health.
+- **Open in your editor:** VS Code, Cursor, Sublime Text or a custom command.
 
-### Prerequisites
-- Windows 10/11
-- Git for Windows installed
-- Node.js 20 or later on PATH (the desktop app runs the Node Git service)
-- GitHub Personal Access Token only when using GitHub integration
-- Rust and the Tauri Windows build prerequisites when building from source
+### For scripts and agents
 
-### Running BitGit
+- **JSON harness CLI** on the same engine and history as the app: one JSON request in, one JSON
+  line out. An agent can save a milestone before it edits and check its work afterwards. See
+  [For AI agents](#for-ai-agents).
 
-**Development Mode:**
+## Install
+
+Download the installer for your platform from the
+[latest release](https://github.com/sevenevesai/bitgit/releases/latest).
+
+| Platform | File | First launch |
+|---|---|---|
+| Windows 10/11 (x64) | `BitGit_<version>_x64-setup.exe` or `BitGit_<version>_x64_en-US.msi` | The installers are not code-signed. If SmartScreen appears, choose **More info → Run anyway**. |
+| macOS 11+ (Apple Silicon) | `BitGit_<version>_aarch64.dmg` | Not notarized by Apple yet. Open BitGit once, then choose **Open Anyway** in System Settings → Privacy & Security. |
+| macOS 11+ (Intel) | `BitGit_<version>_x64.dmg` | As above. |
+| Linux (x86_64) | `bit-git_<version>_amd64.AppImage` | `chmod +x` the file and run it. Needs FUSE 2 (`libfuse2`). |
+
+**Every platform also needs** [Git](https://git-scm.com/downloads) and
+[Node.js](https://nodejs.org/) 20 or later (22 or 24 recommended). BitGit runs its Git service on
+your Node.js. On macOS and Linux it reads your login shell's `PATH`, so it finds the same `node`
+and `git` as your terminal even when started from Finder, the Dock or a desktop menu.
+
+BitGit checks for a newer release at startup and offers to install it. macOS support is in beta.
+On Linux, storing a GitHub token needs a running Secret Service such as GNOME Keyring, KWallet or
+KeePassXC. Per-platform steps, troubleshooting, data locations and uninstalling are in
+[INSTALL.md](INSTALL.md).
+
+## Quick start
+
+1. Click **Add Project** and link a project folder. It does not need to be a Git repository.
+2. On the project card, open **Save & Recover**, review the files it will include, name the version
+   (for example, "Checkout works") and save it.
+3. Keep working. Turn on **Automatic saves** in the same window if you want versions saved
+   whenever your files settle.
+4. When something breaks, select a version under **History** and choose **Compare & repair** or
+   **Recover copy**.
+5. Optional: add a GitHub token in **Settings** to create, clone and publish repositories. It needs
+   the `repo` scope (or `public_repo` for public repositories only) and `read:user`.
+
+> [!IMPORTANT]
+> A saved version is a copy of your source files. It does not include databases, credentials,
+> installed dependencies, external services or deployment state, and nothing tests that the code
+> runs. Versions are stored on this computer; use **Remote backup** to protect against disk loss.
+
+The [Save & Recover guide](docs/RECOVERY_GUIDE.md) walks through each tab and what every status
+means.
+
+## For AI agents
+
+### Protect a project from an agent or script
+
+`bitgit-recovery` is a command-line front end to the recovery engine. Versions it saves appear in
+the app, and the reverse. Build it from a source checkout:
+
 ```bash
-npm run tauri:dev
+git clone https://github.com/sevenevesai/bitgit.git
+cd bitgit
+npm --prefix git-service ci
+npm --prefix git-service run build
 ```
 
-For a fresh checkout, first run `npm ci`, `npm --prefix git-service ci`, and
-`npm --prefix git-service run build`. See [recovery development](docs/RECOVERY_DEVELOPMENT.md).
+Each call reads one JSON request on stdin and writes one JSON line to stdout:
 
-**Production Build:**
 ```bash
-npm run tauri:build
+# Save a milestone before the agent starts editing
+echo '{"action":"create","label":"Before auth refactor","note":"login works by hand"}' \
+  | node git-service/dist/recovery-cli.js --repo /work/app
+
+# List saved versions and settings
+echo '{"action":"state"}' | node git-service/dist/recovery-cli.js --repo /work/app
+
+# Run the tests against a recovered copy of a saved version
+echo '{"action":"runCheck","checkpointId":"<id>","command":"npm test","timeoutSeconds":300}' \
+  | node git-service/dist/recovery-cli.js --repo /work/app
 ```
 
-### First-Time Setup
-1. Launch BitGit
-2. Click "+" and link a local project folder
-3. Open **Save & Recover**, review coverage, and save a named milestone
-4. Optionally configure GitHub in Settings and review files before publishing
+- **Output:** `{"success":true,"data":...}` or `{"success":false,"error":"..."}`. Exit code 0 means
+  success, 1 a failed request, 2 bad arguments or malformed input.
+- **Actions:** `state`, `preview`, `create`, `compare`, `recover`, `repair`, `repairRollback`,
+  `backup`, `verifyBackup`, `remoteList`, `remoteImport`, `settings`, `autoTick`, `evidence`,
+  `evidenceImage`, `runCheck`, `regressionStart`, `regressionObserve`, `regressionGet`.
+- **Boundaries:** nothing runs unless a request is sent: no daemon, no progress output, no
+  credential flags. Remote actions use your Git credential helper. `runCheck` is not a sandbox: the
+  command runs with your normal user permissions, in a fresh recovered copy.
 
-Local checkpoints are stored on this machine. For disk-loss protection, use Remote backup and
-verify the destination. Code recovery excludes credentials, databases, dependencies and external
-services; it does not recreate a deployed application. Command checks run with your normal permissions.
+The full protocol, including a step-by-step regression loop, is in
+[Automation and CLI](docs/RECOVERY_AUTOMATION.md#cli). `--help` prints a summary.
 
----
+### Work on BitGit with a coding agent
 
-## How It Works
+[CLAUDE.md](CLAUDE.md) is the agent brief for this repository: build and test commands, the
+invariants every change must keep, and a map of the design contracts. It is plain Markdown that
+any coding agent can read.
 
-**Three-Layer Architecture:**
+## How it works
 
-```
-┌─────────────────────┐
-│   React Frontend    │  TypeScript, Vite, Tailwind CSS
-│   (Zustand Store)   │
-└──────────┬──────────┘
-           │ Tauri IPC
-           ↓
-┌─────────────────────┐
-│   Rust Backend      │  Tauri, Windows Credential Manager
-│   (Commands)        │
-└──────────┬──────────┘
-           │ JSON IPC via stdin/stdout
-           ↓
-┌─────────────────────┐
-│ Node.js Git Service │  simple-git, @octokit/rest
-│ (IPC Server)        │
-└─────────────────────┘
+```mermaid
+flowchart LR
+    UI["React UI"] -- "Tauri IPC" --> Core["Rust core"]
+    Core -- "JSON over stdio" --> Service["Node.js Git service"]
+    Core --> Store[("OS credential store")]
+    CLI["bitgit-recovery CLI"] --> Engine
+    Service --> Engine["Recovery engine"]
+    Engine --> Vault[("Checkpoint vault")]
+    Service --> Repos[("Your projects")]
+    Service --> GitHub[("GitHub API")]
 ```
 
-**Why This Architecture?**
-- **Small & Fast** - ~10MB app size, <100MB RAM usage
-- **Best Libraries** - Uses `simple-git` (best Node.js Git library)
-- **Native Integration** - Windows Credential Manager for secure tokens
-- **Modern UI** - React + Tailwind for rapid development
+- **React UI** (TypeScript, Zustand, Tailwind CSS) renders the dashboard and the recovery
+  workspace.
+- **Rust core** (Tauri 1) validates every command, keeps the project list, stores the GitHub token
+  in the OS credential store and supervises the Git service.
+- **Node.js Git service** (simple-git, Octokit) runs Git and GitHub operations and the recovery
+  engine.
+- **Checkpoint vault:** each project's saved versions live in a separate bare Git repository under
+  BitGit's data folder. Saving reads your files without changing the project's HEAD, index,
+  branches or remotes, and history stays available even if the project folder is deleted.
 
----
+Design details: [recovery design](docs/RECOVERY_DESIGN.md),
+[Git operations](docs/GIT_OPERATIONS.md) and [native integration](docs/NATIVE_RECOVERY.md).
 
-## Project States
+## Safety guarantees
 
-Project configuration and Git status are separate. Every local project can use Save & Recover.
+- Reading status and saving versions never change your project's HEAD, index, branches or remotes.
+- Publishing commits only the files you selected, or pushes commits that already exist. There is no
+  implicit stage-all.
+- BitGit never force-pushes. Explicit branch merges use `--no-ff` and keep the source branches.
+- Credential and oversize problems block publishing; only warnings can be overridden.
+- Recovery writes to a new folder by default. Repairs take a safety checkpoint first and never
+  silently rewrite current work.
+- GitHub tokens live in Windows Credential Manager, the macOS Keychain or the Linux Secret Service,
+  never in files.
+- Commands run only when you ask, with your normal user permissions, in a recovered copy. Saving,
+  listing and restoring never install dependencies or run project scripts.
+- No telemetry. BitGit connects only to GitHub and the Git remotes you use, plus the update check
+  against this repository's releases.
 
-| State | GitHub | Local | Available Actions |
-|-------|--------|-------|-------------------|
-| **not_configured** | ✗ | ✗ | Link GitHub, Link Local |
-| **github_only** | ✓ | ✗ | Clone to Local, Link Existing Local |
-| **local_only** | ✗ | ✓ | Save & Recover, inspect Git, optionally link GitHub |
-| **ready** | ✓ | ✓ | All Git Operations |
-| **synced** | optional | ✓ | Current branch matches its last checked upstream |
-| **needs_push** | ✓ | ✓ | Has uncommitted changes |
-| **needs_merge** | ✓ | ✓ | Has remote branches to merge |
-| **needs_sync** | ✓ | ✓ | Has both local changes and remote branches |
-| **behind / diverged** | optional | ✓ | Current upstream has commits to review |
-| **unavailable** | optional | ✓ | Status could not be checked; recovery history remains accessible |
+## Known limitations
 
----
+- Automatic saves run only while BitGit is open.
+- Publishing works on whole files; there is no line or hunk selection.
+- A branch that is both behind and dirty, or diverged, cannot be resolved inside BitGit yet.
+- Secret screening is heuristic, not a guarantee.
+- Linux ships only as an AppImage: the `.deb` and `.rpm` need webkit2gtk 4.0, which current
+  distributions no longer ship. They return with the move to Tauri 2.
+- Keyboard shortcuts use Ctrl on every platform, including macOS.
 
-## Key Operations
+## Documentation
 
-### For Local Changes
-- **Push Local** - Commit reviewed whole files and publish the current branch to its upstream
+| Guide | Covers |
+|---|---|
+| [Install](INSTALL.md) | Per-platform setup, troubleshooting, data location, uninstalling |
+| [Save & Recover guide](docs/RECOVERY_GUIDE.md) | The recovery workspace, what each status means, limits |
+| [Recovery workflows](docs/RECOVERY_WORKFLOWS.md) | Automatic saves, notes and checks, regression search, interrupted repair |
+| [Visual Git guide](docs/VISUAL_GIT_GUIDE.md) | Publishing, status, bulk actions and branches |
+| [Automation and CLI](docs/RECOVERY_AUTOMATION.md) | Harness protocol, check isolation, regression search |
 
-### For Remote Branches
-- **Pull / Merge Branches** - Integrate explicitly selected remote branches; retain source branches
+For contributors:
 
-### Combined
-- **Full Sync** - Update the current upstream when safe; publish reviewed changes or existing commits
+| Reference | Covers |
+|---|---|
+| [Build](BUILD.md) | Installers, signing and release builds for each platform |
+| [Recovery development](docs/RECOVERY_DEVELOPMENT.md) | Development conventions and verification |
+| [Recovery design](docs/RECOVERY_DESIGN.md) | Vault, coverage, repair, remote trust and verification |
+| [Git operations](docs/GIT_OPERATIONS.md) | Selection, validation, status, diffs and branch semantics |
+| [Native integration](docs/NATIVE_RECOVERY.md) | Command validation, cache, credentials and test isolation |
+| [Verification](docs/RECOVERY_VERIFICATION.md) | Test evidence and verification boundaries |
 
-### Utilities
-- **Refresh Status** - Check current Git status on demand
-- **Open in VS Code** - Open project directory in editor
+## Build from source
 
----
+Prerequisites: Git, Node.js 20 or later, Rust 1.89 or later, and the
+[Tauri 1 system dependencies](https://v1.tauri.app/v1/guides/getting-started/prerequisites) for
+your platform. On Linux, build on Ubuntu 22.04 or Debian 12, which still ship webkit2gtk 4.0.
 
-## Earlier product ideas
-
-The active roadmap is the [recovery plan](docs/RECOVERY_PLAN.md). The ideas below are retained for
-reference and are not commitments for this release.
-
-The [recovery evolution design specs](docs/design/recovery-evolution/README.md) preserve the
-2026-09-30 audience review and ten optional priorities for future implementation, with selectable
-subfeatures, dependencies, acceptance criteria and supporting evidence.
-
-### 🎯 Priority 1: Dashboard Analytics & Insights
-- Overview panel with project statistics
-- Activity timeline across all projects
-- Repository health indicators
-- Contribution heatmap with streak tracking
-
-### 🗂️ Priority 2: Workspace & Organization
-- Multiple workspaces (Work, Personal, Client projects)
-- Project groups and collections
-- Smart auto-grouping (Recently Active, Needs Attention, Stale)
-- Custom tags and labels
-
-### ⚡ Priority 3: Automation & Workflows
-- Scheduled sync operations
-- Workflow templates (End of Day Sync, etc.)
-- Auto-actions based on rules
-- Git hooks integration
-
-### 🔍 Priority 4: Discovery & Bulk Import
-- Full system scan for all Git repos
-- Bulk GitHub import (import all your repos at once)
-- Quick setup wizard for new users
-- Project templates and scaffolding
-
-### 👥 Priority 5: Collaboration Features
-- Collaborator visibility
-- Pull request integration
-- Branch comparison tools
-- Team activity feed
-
-### 🔌 Priority 6: External Tool Integration
-- VS Code extension
-- CI/CD status display (GitHub Actions, etc.)
-- Issue tracker integration (GitHub Issues, Jira)
-- Custom command palette
-
----
-
-## Technology Stack
-
-**Frontend:**
-- React 18
-- TypeScript 5
-- Vite 5
-- Tailwind CSS 3
-- Zustand (state management)
-- Lucide React (icons)
-
-**Backend (Rust):**
-- Tauri 1.5
-- Windows Credential Manager
-- Tokio (async runtime)
-
-**Git Service (Node.js):**
-- simple-git 3.21
-- @octokit/rest 20.0
-
----
-
-## Development
-
-### Project Structure
+```bash
+npm ci
+npm --prefix git-service ci
+npm --prefix git-service run build   # required before the first launch
+npm run tauri:dev                    # run the app in development mode
+npm run tauri:build                  # installers in src-tauri/target/release/bundle/
 ```
+
+Tests and checks, all of which CI runs on Windows, macOS and Linux:
+
+```bash
+npm run build                                     # type check and frontend build
+node --test git-service/tests/*.test.mjs          # service tests in disposable repositories
+cargo test --manifest-path src-tauri/Cargo.toml   # needs the frontend build first
+```
+
+In Windows PowerShell, run the service tests with
+`node --test (Get-ChildItem git-service/tests -Filter *.test.mjs).FullName`.
+
+### Project structure
+
+```text
 bitgit/
-├── src/                     # React frontend
-├── src-tauri/               # Rust backend
-├── git-service/             # Node.js Git service
-├── docs/                    # Historical documentation
-├── SESSION_NOTES.md         # Development progress
-├── CLAUDE.md                # Instructions for Claude Code
-└── README.md                # This file
+├── src/            React UI: dashboard, recovery workspace, Zustand store
+├── src-tauri/      Rust core: Tauri commands, credentials, project cache, service supervisor
+├── git-service/    Node.js Git service, recovery engine and bitgit-recovery CLI
+│   └── tests/      node:test suites against disposable repositories
+├── docs/           User guides, design contracts and plans
+├── scripts/        Build, signing and bundle smoke-test scripts
+└── website/        Project website
 ```
 
-### Key Files
-- `git-service/src/recovery-service.ts` - Checkpoint, repair and remote recovery dispatch
-- `git-service/src/git-operations.ts` - Git operations and publishing validation
-- `src-tauri/src/commands.rs` - Native IPC handlers
-- `src/components/ProjectCard.tsx` - Project actions
-- `src/stores/useAppStore.ts` - Application state
+## Roadmap
 
-### Contributing
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to get started.
+Open work is tracked in the [recovery plan](docs/RECOVERY_PLAN.md) and the
+[macOS and Linux build plan](docs/plans/macos-linux-build.md); that plan covers the move to
+Tauri 2, which brings back `.deb` and `.rpm` packages. Proposed features, including faster history,
+guided onboarding, a protection overview and background capture, are written up as
+[design specs](docs/design/recovery-evolution/README.md). They are proposals, not commitments.
 
----
+## Contributing
 
-## Credits
+Bug reports, feature requests and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+first, run the build and tests above before opening a pull request, and keep the
+[invariants](CLAUDE.md#invariants) intact.
 
-Built with:
-- [Tauri](https://tauri.app/) - Desktop framework
-- [simple-git](https://github.com/steveukx/git-js) - Git operations
-- [Octokit](https://github.com/octokit/rest.js) - GitHub API
-- [React](https://react.dev/) - UI framework
-- [Tailwind CSS](https://tailwindcss.com/) - Styling
+## Security
 
----
+Please report vulnerabilities privately, not in a public issue. [SECURITY.md](SECURITY.md) explains
+how, and how BitGit stores credentials and local data.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+[MIT](LICENSE)
 
----
+## Acknowledgments
 
-## Status
-
-**Build Version:** 1.0.0
-**Status:** Recovery roadmap implemented and verified on Windows; see [verification and limits](docs/RECOVERY_VERIFICATION.md)
-**Platform:** Windows 10/11 (macOS/Linux support planned)
-
-**Repository:** https://github.com/sevenevesai/bitgit
-
----
-
-See the recovery guides for supported workflows and their limits.
+BitGit is built on [Tauri](https://tauri.app/), [React](https://react.dev/),
+[simple-git](https://github.com/steveukx/git-js), [Octokit](https://github.com/octokit/rest.js),
+[Tailwind CSS](https://tailwindcss.com/), [Zustand](https://github.com/pmndrs/zustand) and
+[Lucide](https://lucide.dev/).
