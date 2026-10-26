@@ -27,16 +27,18 @@ Simple guide for installing BitGit on Windows. For macOS and Linux, see [macOS](
 
 ### 2. Download BitGit
 
-Download the latest MSI installer:
+From the [latest release](https://github.com/sevenevesai/bitgit/releases/latest), download either
+installer:
 ```
-BitGit_0.1.0_x64_en-US.msi
+BitGit_<version>_x64-setup.exe
+BitGit_<version>_x64_en-US.msi
 ```
 
 ### 3. Unblock the Installer (Important!)
 
 Before running the installer:
 
-1. **Right-click** the downloaded MSI file
+1. **Right-click** the downloaded installer
 2. Select **Properties**
 3. If you see an **"Unblock"** checkbox at the bottom, check it
 4. Click **OK**
@@ -45,7 +47,7 @@ This prevents Windows from blocking the installation.
 
 ### 4. Run the Installer
 
-Double-click `BitGit_0.1.0_x64_en-US.msi`
+Double-click the downloaded `.exe` or `.msi`.
 
 ### 5. Handle SmartScreen (If it appears)
 
@@ -54,7 +56,7 @@ If you see **"Windows protected your PC"**:
 1. Click **"More info"**
 2. Click **"Run anyway"**
 
-This warning appears because the app uses a self-signed certificate. The application is safe to run.
+This warning appears because the installers are not code-signed.
 
 ### 6. Complete Installation
 
@@ -122,7 +124,7 @@ When you first launch BitGit:
 1. **Generate a GitHub Personal Access Token:**
    - Go to: https://github.com/settings/tokens
    - Click **"Generate new token (classic)"**
-   - Select scope: `repo` (Full control of private repositories)
+   - Select scopes: `repo` (or `public_repo` for public repositories only) and `read:user`
    - Copy the token (starts with `ghp_` or `github_pat_`)
 
 2. **Add Token to BitGit:**
@@ -218,12 +220,12 @@ This folder is **NOT** automatically deleted on uninstall. Delete it manually if
 
 ## Update Instructions
 
-To update to a newer version:
+BitGit checks for a newer release at startup and offers to install it (Windows installers, the
+macOS app and the Linux AppImage). Your settings and configuration are preserved.
 
-1. Download the new MSI installer
-2. Run the new installer
-3. It will automatically upgrade the existing installation
-4. Your settings and configuration will be preserved
+To update by hand, download the new installer from the
+[latest release](https://github.com/sevenevesai/bitgit/releases/latest) and run it; it upgrades the
+existing installation.
 
 ## Support
 

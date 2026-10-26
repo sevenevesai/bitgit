@@ -35,10 +35,11 @@ Feature requests are welcome! Open a [GitHub Issue](https://github.com/seveneves
 
 ### Prerequisites
 
-- Windows 10/11 (x64)
-- Node.js 18+
-- Rust toolchain (https://rustup.rs/)
-- Git for Windows
+- Windows 10/11, macOS 11+ or Linux (build on Ubuntu 22.04 or Debian 12)
+- Node.js 20+ (22 or 24 recommended)
+- Rust 1.89+ (https://rustup.rs/) and the
+  [Tauri 1 system dependencies](https://v1.tauri.app/v1/guides/getting-started/prerequisites)
+- Git
 
 ### Running Locally
 
@@ -47,17 +48,21 @@ Feature requests are welcome! Open a [GitHub Issue](https://github.com/seveneves
 git clone https://github.com/sevenevesai/bitgit.git
 cd bitgit
 
-# Install frontend dependencies
-npm install
-
-# Install git-service dependencies
-cd git-service && npm install && cd ..
-
-# Build the git-service
-cd git-service && npm run build && cd ..
+# Install dependencies and build the git-service
+npm ci
+npm --prefix git-service ci
+npm --prefix git-service run build
 
 # Start development mode
 npm run tauri:dev
+```
+
+Run the checks before opening a pull request; CI runs the same on Windows, macOS and Linux:
+
+```bash
+npm run build
+node --test git-service/tests/*.test.mjs
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 ### Project Structure
@@ -92,7 +97,7 @@ React UI  -->  Tauri IPC  -->  Rust Backend  -->  Node.js Git Service  -->  simp
 
 - Keep PRs focused on a single change
 - Include a description of what changed and why
-- Ensure the app builds without errors: `npm run tauri:build`
+- Ensure the checks above pass and the app builds: `npm run tauri:build`
 - Test your changes with real git repositories
 
 ## License

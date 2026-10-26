@@ -17,13 +17,16 @@ We will acknowledge your report within 48 hours and aim to release a fix as quic
 BitGit stores GitHub Personal Access Tokens in the operating system's secure credential store:
 
 - **Windows:** Windows Credential Manager
-- **macOS/Linux:** OS keyring (planned)
+- **macOS:** the login Keychain
+- **Linux:** the Secret Service (GNOME Keyring, KWallet or KeePassXC)
 
 Tokens are **never** stored in files, environment variables, or application configuration.
 
 ### Local Data
 
-- Project metadata is stored in `%APPDATA%/BitGit/projects.json`
+- Project metadata is stored in `projects.json` in BitGit's data folder: `%APPDATA%\BitGit` on
+  Windows, `~/Library/Application Support/BitGit` on macOS, `$XDG_CONFIG_HOME/BitGit` or
+  `~/.config/BitGit` on Linux
 - This file contains project names, paths, and GitHub URLs - no credentials
 - Atomic writes with backup recovery prevent data corruption
 
