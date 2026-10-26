@@ -1,0 +1,26 @@
+{
+  "reviewDate": "2026-09-30",
+  "version": "1.1.2",
+  "commit": "de468ac67b01e13b9f940eea066e9e28123c3a36",
+  "environment": {
+    "platform": "Windows",
+    "node": "v20.19.2",
+    "git": "2.45.1.windows.1",
+    "hardwareAndLoadControlled": false
+  },
+  "fixture": {
+    "sourceFileCount": 1,
+    "firstCheckpointCreatedThroughService": true,
+    "additionalCheckpoints": "Valid parentless commits with distinct IDs and manifests sharing the first source tree",
+    "temporaryPathsOmitted": true
+  },
+  "measures": [
+    { "count": 1, "milliseconds": 184, "returned": 1 },
+    { "count": 25, "milliseconds": 11263, "returned": 25 },
+    { "count": 100, "milliseconds": 46280, "returned": 100 }
+  ],
+  "corruptState": { "error": "Checkpoint manifest is unreadable" },
+  "validCheckpointStillRecoverable": true,
+  "repeatWithoutUiInteraction": { "count": 100, "milliseconds": 40268 },
+  "limits": "Single local observations, not percentile benchmarks, real-project save latency or cross-platform evidence. Adapted reproduction script was not used to generate these archived values."
+}

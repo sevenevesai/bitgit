@@ -180,6 +180,10 @@ Project configuration and Git status are separate. Every local project can use S
 The active roadmap is the [recovery plan](docs/RECOVERY_PLAN.md). The ideas below are retained for
 reference and are not commitments for this release.
 
+The [recovery evolution design specs](docs/design/recovery-evolution/README.md) preserve the
+2026-09-30 audience review and ten optional priorities for future implementation, with selectable
+subfeatures, dependencies, acceptance criteria and supporting evidence.
+
 ### 🎯 Priority 1: Dashboard Analytics & Insights
 - Overview panel with project statistics
 - Activity timeline across all projects
