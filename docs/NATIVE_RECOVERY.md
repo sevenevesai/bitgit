@@ -61,8 +61,9 @@ an optional scope and preserves scope/binary/truncated flags for the UI.
 by normalized path; GitHub imports by lower-cased `owner/repo` (URL, `owner`+`repo`, or full name), linked
 or not. A match keeps its id and user fields.
 
-`fetch_github_repos` returns candidates for repository pickers without persisting them. The explicit
-create/link flow chooses which repository becomes a saved project.
+`fetch_github_repos` returns candidates for repository pickers without persisting them. Candidates
+are `Project`s (`githubOwner`, `githubRepo`, `githubUrl`), not GitHub API repositories; pickers map
+them. The explicit create/link flow chooses which repository becomes a saved project.
 
 `apply_project_template` prepends missing defaults and preserves existing rules last, so user exceptions
 retain precedence. It refuses a linked `.gitignore`. Application templates include lockfiles.

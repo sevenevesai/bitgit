@@ -2,15 +2,22 @@ import { useState, useEffect } from 'react';
 import { X, Github, Search, Loader2 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/tauri';
 import toast from 'react-hot-toast';
+import type { Project } from '../types';
 
 interface GitHubRepo {
   name: string;
   fullName: string;
   cloneUrl: string;
-  htmlUrl: string;
   owner: string;
-  isPrivate: boolean;
-  defaultBranch: string;
+}
+
+// fetch_github_repos returns import candidates in the saved-project shape, not GitHub API repositories.
+// githubRepo is `owner/name` for imported repositories and `name` for manually linked ones.
+function toGitHubRepo(project: Project): GitHubRepo | null {
+  const { githubOwner: owner, githubUrl: cloneUrl } = project;
+  if (!owner || !cloneUrl) return null;
+  const name = project.githubRepo?.split('/').pop() || project.name;
+  return { name, fullName: `${owner}/${name}`, cloneUrl, owner };
 }
 
 interface LinkGitHubModalProps {
@@ -66,7 +73,8 @@ export function LinkGitHubModal({ isOpen, onClose, onLink, projectName }: LinkGi
       const token = await invoke<string>('get_github_token', { username: credentials.username });
 
       // Fetch repos
-      const fetchedRepos = await invoke<GitHubRepo[]>('fetch_github_repos', { token });
+      const candidates = await invoke<Project[]>('fetch_github_repos', { token });
+      const fetchedRepos = candidates.map(toGitHubRepo).filter((repo): repo is GitHubRepo => repo !== null);
       setRepos(fetchedRepos);
       setFilteredRepos(fetchedRepos);
     } catch (error: any) {
@@ -245,11 +253,6 @@ export function LinkGitHubModal({ isOpen, onClose, onLink, projectName }: LinkGi
                           <div className="flex items-center gap-2">
                             <Github className="w-4 h-4 text-gray-500 flex-shrink-0" />
                             <p className="font-medium text-gray-900 truncate">{repo.name}</p>
-                            {repo.isPrivate && (
-                              <span className="text-xs px-2 py-1 bg-yellow-100 text-yellow-800 rounded">
-                                Private
-                              </span>
-                            )}
                           </div>
                           <p className="text-sm text-gray-500 mt-1">{repo.fullName}</p>
                         </div>

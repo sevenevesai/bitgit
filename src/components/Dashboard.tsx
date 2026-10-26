@@ -9,6 +9,10 @@ import { BulkResultPanel } from './git/BulkResultPanel';
 import type { BulkProjectResult, PublishAction } from '../types';
 import { Plus, RefreshCw, Settings, Sun, Moon, CheckSquare, Square, Upload, Search, Filter, BarChart3, FolderGit2 } from 'lucide-react';
 
+// Shortcuts take Ctrl everywhere and also ⌘ on macOS, where hints show ⌘.
+const IS_MAC = navigator.userAgent.includes('Mac');
+const MOD = IS_MAC ? '⌘' : 'Ctrl+';
+
 export function Dashboard() {
   const {
     projects,
@@ -161,30 +165,32 @@ export function Dashboard() {
       const target = e.target as HTMLElement;
       const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
 
-      // Ctrl+R: Refresh (re-reads Git state, not just the saved list)
-      if (e.ctrlKey && e.key === 'r') {
+      const modKey = e.ctrlKey || (IS_MAC && e.metaKey);
+
+      // Mod+R: Refresh (re-reads Git state, not just the saved list)
+      if (modKey && e.key === 'r') {
         e.preventDefault();
         void handleRefreshAll();
         return;
       }
 
-      // Ctrl+N: New Project
-      if (e.ctrlKey && e.key === 'n') {
+      // Mod+N: New Project
+      if (modKey && e.key === 'n') {
         e.preventDefault();
         setIsAddProjectOpen(true);
         return;
       }
 
-      // Ctrl+F: Focus search (only if not already in an input)
-      if (e.ctrlKey && e.key === 'f' && !isInputField) {
+      // Mod+F: Focus search (only if not already in an input)
+      if (modKey && e.key === 'f' && !isInputField) {
         e.preventDefault();
         const searchInput = document.querySelector('input[type="text"]') as HTMLInputElement;
         searchInput?.focus();
         return;
       }
 
-      // Ctrl+A: Select All (only if not in an input field)
-      if (e.ctrlKey && e.key === 'a' && !isInputField && projects.length > 0) {
+      // Mod+A: Select All (only if not in an input field)
+      if (modKey && e.key === 'a' && !isInputField && projects.length > 0) {
         e.preventDefault();
         selectAll();
         return;
@@ -196,8 +202,8 @@ export function Dashboard() {
         return;
       }
 
-      // Ctrl+D: Toggle theme (dark mode)
-      if (e.ctrlKey && e.key === 'd') {
+      // Mod+D: Toggle theme (dark mode)
+      if (modKey && e.key === 'd') {
         e.preventDefault();
         toggleTheme();
         return;
@@ -301,7 +307,7 @@ export function Dashboard() {
               <button
                 onClick={toggleTheme}
                 className="flex items-center gap-2 px-3 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                title={`Theme: ${settings.ui.theme} (Ctrl+D to toggle)`}
+                title={`Theme: ${settings.ui.theme} (${MOD}D to toggle)`}
               >
                 <ThemeIcon className="w-4 h-4" />
               </button>
@@ -310,7 +316,7 @@ export function Dashboard() {
                 onClick={() => void handleRefreshAll()}
                 disabled={isRefreshing}
                 className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
-                title="Refresh: re-read every project's Git state and check GitHub (Ctrl+R)"
+                title={`Refresh: re-read every project's Git state and check GitHub (${MOD}R)`}
               >
                 <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
                 Refresh
@@ -319,7 +325,7 @@ export function Dashboard() {
               <button
                 onClick={() => setIsAddProjectOpen(true)}
                 className="flex items-center gap-2 px-4 py-2 text-white bg-teal-600 dark:bg-teal-700 rounded-lg hover:bg-teal-700 dark:hover:bg-teal-800 transition-colors"
-                title="Add new project (Ctrl+N)"
+                title={`Add new project (${MOD}N)`}
               >
                 <Plus className="w-4 h-4" />
                 Add Project
@@ -347,7 +353,7 @@ export function Dashboard() {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
               <input
                 type="text"
-                placeholder="Search projects by name, path, or repository... (Ctrl+F)"
+                placeholder={`Search projects by name, path, or repository... (${MOD}F)`}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
@@ -428,7 +434,7 @@ export function Dashboard() {
                   <button
                     onClick={selectAll}
                     className="text-sm px-3 py-1.5 text-teal-700 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/40 rounded transition-colors"
-                    title="Select all projects (Ctrl+A)"
+                    title={`Select all projects (${MOD}A)`}
                   >
                     <CheckSquare className="w-4 h-4 inline mr-1" />
                     Select All

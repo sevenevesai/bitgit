@@ -48,7 +48,6 @@ For the user, at publish time:
   steps from the release notes and `INSTALL.md`.
 
 Code and docs, not started:
-- `src/components/Dashboard.tsx`: accept `metaKey` on macOS and show ⌘ in hints.
 - `AddProjectModal.tsx`, `LinkLocalModal.tsx`: placeholders that are not Windows paths.
 - `src-tauri/src/commands.rs`: scrub AppImage variables (`APPDIR`, `GTK_*`, `GDK_*`) for editor
   launches, if a test shows them leaking.
