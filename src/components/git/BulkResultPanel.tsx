@@ -33,7 +33,7 @@ export function BulkResultPanel({ title, results, onReview, onDismiss }: BulkRes
     <section
       aria-label="Batch results"
       data-testid="bulk-results"
-      className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm p-4 mb-4"
+      className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm p-4"
     >
       <div className="flex items-center justify-between mb-2">
         <h2 className="font-semibold text-gray-900 dark:text-white">{title}</h2>

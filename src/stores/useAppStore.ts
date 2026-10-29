@@ -329,7 +329,7 @@ export const useAppStore = create<AppState>((set, get) => {
     const problems = count('blocked') + count('failed');
 
     if (problems > 0) {
-      toast.error(`${summary}. See the results below.`, { id: loadingToastId, duration: 8000 });
+      toast.error(`${summary}. See the results at the bottom of the window.`, { id: loadingToastId, duration: 8000 });
     } else if (published > 0 && published + count('up_to_date') === results.length) {
       toast.success(summary, { id: loadingToastId });
     } else {
