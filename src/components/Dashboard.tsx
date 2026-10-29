@@ -418,7 +418,7 @@ export function Dashboard() {
         <div className="container mx-auto px-8 py-4">
           <div className="flex flex-wrap gap-4">
             {/* Search Box */}
-            <div className="flex-1 min-w-[14rem] relative">
+            <div className="flex-1 min-w-[12rem] relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
               <input
                 type="text"

@@ -54,14 +54,16 @@ export function SavedViews({ current, onApply }: SavedViewsProps) {
           setOpenLeftward(event.currentTarget.getBoundingClientRect().right > MENU_WIDTH_PX + 8);
           setOpen((value) => !value);
         }}
-        className={`flex h-full max-w-[12rem] items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+        aria-label={active ? `Saved view: ${active.name}` : 'Saved views'}
+        className={`flex h-full max-w-[12rem] items-center gap-2 py-2 rounded-lg font-medium transition-colors ${
           active
-            ? 'bg-teal-50 dark:bg-teal-900/30 text-teal-800 dark:text-teal-200 border-2 border-teal-500'
-            : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+            ? 'px-4 bg-teal-50 dark:bg-teal-900/30 text-teal-800 dark:text-teal-200 border-2 border-teal-500'
+            : 'px-3 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
         }`}
       >
         <Bookmark className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
-        <span className="truncate">{active ? active.name : 'Views'}</span>
+        {/* Icon only until a view is active, so the filter row fits one line at the default window size */}
+        {active && <span className="truncate">{active.name}</span>}
       </button>
       {open && (
         <div className={`absolute ${openLeftward ? 'right-0' : 'left-0'} z-30 mt-1 w-72 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg p-2`}>
