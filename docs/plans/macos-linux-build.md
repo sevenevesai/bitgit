@@ -1,7 +1,8 @@
 # macOS and Linux build plan
 
-Status (2026-10-26): `release.yml` published 1.2.0 (Windows, an unsigned macOS build and the Linux
-AppImage) on 2026-10-25, and 1.2.1 follows with the repository picker fix and ⌘ shortcuts. The
+Status (2026-10-29): `release.yml` published 1.2.0 (Windows, an unsigned macOS build and the Linux
+AppImage) on 2026-10-25; 1.2.1 followed with the repository picker fix and ⌘ shortcuts, and 1.3.0
+adds labels, non-GitHub remotes, folder import and a terminal button. The
 items under "Verification still needed" stay open until checked on a Mac or a Linux desktop.
 
 ## Goal

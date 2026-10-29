@@ -40,6 +40,13 @@ jobs:
             **Linux (AppImage only):** Download `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage`, make it executable (`chmod +x`) and run it. It needs FUSE 2 (`libfuse2`; `libfuse2t64` on Ubuntu 24.04), Node.js 22 or later, Git, and a running Secret Service (GNOME Keyring, KWallet or KeePassXC) to store the GitHub token. The .deb and .rpm are no longer published: they need webkit2gtk 4.0, which current distributions do not ship. For a blank window on NVIDIA drivers, see [INSTALL.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALL.md).
 
             ### What's New
+            - GitLab and other Git hosts: a folder whose branch already tracks a remote (or has `origin`) counts as connected, not Local Only. The card shows and links that remote, and Push, Sync Branch and the bulk actions work without a saved GitHub link. Remote URLs are stored without usernames or passwords
+            - Labels: give a project up to eight labels, then filter the board by label or find projects by label in search
+            - Add Project > Import Folders: choose a folder, untick the repositories you don't want, and add the rest at once
+            - Open a terminal in a project's folder from its card (Terminal on macOS, Windows Terminal or Command Prompt on Windows, the installed terminal on Linux)
+            - Select All and Ctrl/⌘+A select only the projects the current filters show, so bulk actions never reach hidden projects
+
+            ### In 1.2.1
             - Linking a project to an existing GitHub repository works again: the list shows each repository's owner, searching no longer closes it with an error, only the repository you pick is selected, and linking saves its URL. Thanks @zznam (#1)
             - macOS: dashboard shortcuts use ⌘ (⌘R refresh, ⌘N new project, ⌘F search, ⌘A select all, ⌘D theme) and their hints say so; Ctrl still works
 
