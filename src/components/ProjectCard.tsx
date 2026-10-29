@@ -34,6 +34,7 @@ import {
   ChevronDown,
   ChevronUp,
   Star,
+  Terminal,
   Archive,
   Edit2,
   Save,
@@ -351,6 +352,14 @@ export function ProjectCard({ project }: ProjectCardProps) {
       toast.success(`Opening in ${editorName}...`);
     } catch (error: any) {
       toast.error(`Failed to open ${editorName}: ${error}`);
+    }
+  };
+
+  const handleOpenTerminal = async () => {
+    try {
+      await invoke('open_in_terminal', { projectId: project.id });
+    } catch (error) {
+      toast.error(`Failed to open a terminal: ${errorText(error)}`);
     }
   };
 
@@ -778,6 +787,17 @@ export function ProjectCard({ project }: ProjectCardProps) {
             >
               <HistoryIcon className="w-4 h-4" />
               Save &amp; Recover
+            </button>
+          )}
+
+          {project.localPath && (
+            <button
+              onClick={() => void handleOpenTerminal()}
+              aria-label="Open terminal"
+              className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              title="Open a terminal in this project's folder"
+            >
+              <Terminal className="w-4 h-4" />
             </button>
           )}
 

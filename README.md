@@ -72,7 +72,8 @@ untouched while you do. GitHub is optional, and so is Git: a plain folder works.
 - **GitHub integration** to create, clone and link repositories.
 - **Bulk import** by scanning a folder for existing repositories.
 - **Analytics** with commit history, an activity heatmap and repository health.
-- **Open in your editor:** VS Code, Cursor, Sublime Text or a custom command.
+- **Open in your editor** (VS Code, Cursor, Sublime Text or a custom command) **or a terminal** in
+  the project folder.
 
 ### For scripts and agents
 

@@ -665,6 +665,113 @@ pub async fn open_in_editor(
     execute_editor_command(&command, &args)
 }
 
+/// Open a terminal in a saved project's folder. Only folders BitGit already tracks can be opened, and
+/// the folder reaches the terminal as its working directory, never through a shell or a parsed argument.
+#[tauri::command]
+pub async fn open_in_terminal(project_id: String) -> Result<(), String> {
+    let project = find_project(&project_id)?;
+    let local_path = project
+        .local_path
+        .ok_or_else(|| "This project has no local folder".to_string())?;
+    let dir = std::fs::canonicalize(&local_path)
+        .map_err(|e| format!("Cannot open {}: {}", local_path, e))?;
+    if !dir.is_dir() {
+        return Err(format!("Not a folder: {}", local_path));
+    }
+    spawn_terminal(&plain_path(dir))
+}
+
+// canonicalize() gives Windows verbatim paths (\\?\C:\..., or \\?\UNC\server\share for mapped and
+// network drives), which terminals do not accept as a working directory. Return the ordinary form.
+fn plain_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let text = path.to_string_lossy();
+        if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+            return std::path::PathBuf::from(format!(r"\\{}", share));
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return std::path::PathBuf::from(rest);
+        }
+    }
+    path
+}
+
+// Reap the launcher in the background so it never lingers as a zombie process.
+fn detach(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_terminal(dir: &std::path::Path) -> Result<(), String> {
+    let child = std::process::Command::new("/usr/bin/open")
+        .args(["-a", "Terminal"])
+        .arg(dir)
+        .spawn()
+        .map_err(|e| format!("Failed to open Terminal: {}", e))?;
+    detach(child);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_terminal(dir: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    // Windows Terminal treats ';' in its arguments as a command separator, so the folder is given as
+    // the working directory and wt is told to start in ".".
+    if let Some(wt) = resolve_command("wt") {
+        let child = Command::new(wt)
+            .current_dir(dir)
+            .args(["-d", "."])
+            .spawn()
+            .map_err(|e| format!("Failed to open Windows Terminal: {}", e))?;
+        detach(child);
+        return Ok(());
+    }
+
+    const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+    let child = Command::new("cmd.exe")
+        .current_dir(dir)
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+        .map_err(|e| format!("Failed to open Command Prompt: {}", e))?;
+    detach(child);
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_terminal(dir: &std::path::Path) -> Result<(), String> {
+    use std::process::Command;
+
+    // Each terminal's own working-directory flag; x-terminal-emulator has none and uses the cwd.
+    const TERMINALS: &[(&str, &[&str])] = &[
+        ("gnome-terminal", &["--working-directory"]),
+        ("konsole", &["--workdir"]),
+        ("xfce4-terminal", &["--working-directory"]),
+        ("kitty", &["--directory"]),
+        ("alacritty", &["--working-directory"]),
+        ("wezterm", &["start", "--cwd"]),
+        ("x-terminal-emulator", &[]),
+    ];
+    for (name, flags) in TERMINALS {
+        let Some(program) = resolve_command(name) else { continue };
+        let mut command = Command::new(program);
+        command.current_dir(dir).args(*flags);
+        if !flags.is_empty() {
+            command.arg(dir);
+        }
+        let child = command
+            .spawn()
+            .map_err(|e| format!("Failed to open {}: {}", name, e))?;
+        detach(child);
+        return Ok(());
+    }
+    Err("No terminal program was found. Install one such as GNOME Terminal or Konsole.".to_string())
+}
+
 /// Save editor settings
 #[tauri::command]
 pub async fn save_editor_settings(
