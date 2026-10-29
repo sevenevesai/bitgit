@@ -158,6 +158,11 @@ export function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.ui.refreshInterval]);
 
+  // Select All acts on the projects the filters show; the shortcut handler reads the latest list.
+  const shownIdsRef = useRef<string[]>([]);
+  shownIdsRef.current = filteredProjects.map((project) => project.id);
+  const selectShown = useCallback(() => selectAll(shownIdsRef.current), [selectAll]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -189,10 +194,10 @@ export function Dashboard() {
         return;
       }
 
-      // Mod+A: Select All (only if not in an input field)
-      if (modKey && e.key === 'a' && !isInputField && projects.length > 0) {
+      // Mod+A: select the projects shown (only if not in an input field)
+      if (modKey && e.key === 'a' && !isInputField && currentView === 'projects' && shownIdsRef.current.length > 0) {
         e.preventDefault();
-        selectAll();
+        selectShown();
         return;
       }
 
@@ -212,7 +217,7 @@ export function Dashboard() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleRefreshAll, projects.length, hasSelection, selectAll, clearSelection, toggleTheme]);
+  }, [handleRefreshAll, hasSelection, selectShown, clearSelection, toggleTheme, currentView]);
 
   if (isLoading) {
     return (
@@ -432,9 +437,9 @@ export function Dashboard() {
                 </span>
                 <div className="flex gap-2">
                   <button
-                    onClick={selectAll}
+                    onClick={selectShown}
                     className="text-sm px-3 py-1.5 text-teal-700 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/40 rounded transition-colors"
-                    title={`Select all projects (${MOD}A)`}
+                    title={`Select the projects shown (${MOD}A)`}
                   >
                     <CheckSquare className="w-4 h-4 inline mr-1" />
                     Select All

@@ -59,7 +59,7 @@ interface AppState {
 
   // Selection actions
   toggleSelection: (id: string) => void;
-  selectAll: () => void;
+  selectAll: (ids: string[]) => void;
   clearSelection: () => void;
 
   // Settings actions
@@ -515,10 +515,9 @@ export const useAppStore = create<AppState>((set, get) => {
     });
   },
 
-  selectAll: () => {
-    set((state) => ({
-      selectedProjectIds: new Set(state.projects.map((p) => p.id)),
-    }));
+  // Callers pass the projects on screen, so a filtered board never selects hidden projects.
+  selectAll: (ids: string[]) => {
+    set({ selectedProjectIds: new Set(ids) });
   },
 
   clearSelection: () => {
