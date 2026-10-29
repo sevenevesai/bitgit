@@ -10,14 +10,14 @@ import { LabelFilter } from './LabelFilter';
 import { labelCatalog, sameLabel } from '../lib/labels';
 import { useAutomationProblems } from '../lib/recovery-automation';
 import { attentionRank } from './git/gitStatusView';
+import { SavedViews } from './SavedViews';
+import type { BoardFilters, SavedView, SortOrder } from '../lib/boardViews';
 import type { BulkProjectResult, PublishAction } from '../types';
 import { Plus, RefreshCw, Settings, Sun, Moon, CheckSquare, Square, Upload, Search, Filter, BarChart3, FolderGit2 } from 'lucide-react';
 
 // Shortcuts take Ctrl everywhere and also ⌘ on macOS, where hints show ⌘.
 const IS_MAC = navigator.userAgent.includes('Mac');
 const MOD = IS_MAC ? '⌘' : 'Ctrl+';
-
-type SortOrder = 'favorite' | 'attention' | 'activity' | 'name';
 
 export function Dashboard() {
   const {
@@ -68,6 +68,23 @@ export function Dashboard() {
       return next.length === current.length ? current : next;
     });
   }, [catalogKey]);
+
+  const filters: BoardFilters = {
+    search: searchQuery,
+    status: statusFilter,
+    labels: selectedLabels,
+    favoritesOnly,
+    showArchived,
+    sort: sortBy,
+  };
+  const applyView = (view: SavedView) => {
+    setSearchQuery(view.search);
+    setStatusFilter(view.status);
+    setSelectedLabels([...view.labels]);
+    setFavoritesOnly(view.favoritesOnly);
+    setShowArchived(view.showArchived);
+    setSortBy(view.sort);
+  };
 
   // Filter and sort projects
   const query = searchQuery.toLowerCase();
@@ -399,9 +416,9 @@ export function Dashboard() {
       {currentView === 'projects' && (
       <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-16 z-10">
         <div className="container mx-auto px-8 py-4">
-          <div className="flex gap-4">
+          <div className="flex flex-wrap gap-4">
             {/* Search Box */}
-            <div className="flex-1 relative">
+            <div className="flex-1 min-w-[14rem] relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
               <input
                 type="text"
@@ -464,6 +481,8 @@ export function Dashboard() {
               <option value="activity">Sort: Recent Activity</option>
               <option value="name">Sort: Name (A-Z)</option>
             </select>
+
+            <SavedViews current={filters} onApply={applyView} />
           </div>
         </div>
       </div>
