@@ -67,8 +67,8 @@ every pending file with its scope label; a failed read shows an error, not "no c
 
 ## Bulk actions
 
-**Bulk Push Commits** and **Bulk Sync Branches** act on the selected projects, one row per project in
-the results panel:
+Selecting projects opens a bar at the bottom of the window. Its **Push Commits** and **Sync Branches**
+act on the selected projects, one row per project in the results panel above the bar:
 
 - Clean projects are checked and published (`selectedFiles` is never sent).
 - Projects with uncommitted changes, or with warnings, are **held back** with a **Review project**

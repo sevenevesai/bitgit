@@ -72,7 +72,8 @@ untouched while you do. GitHub is optional, and so is Git: a plain folder works.
 - **GitHub integration** to create, clone and link repositories.
 - **Bulk import** by scanning a folder for existing repositories, from Add Project (pick which to
   add) or Settings.
-- **Labels** to group projects: add up to eight per project, then filter or search the board by them.
+- **Labels** to group projects: add up to eight per project, then filter or search the board by them
+  or by favorites. Sort by what needs attention, and save a set of filters as a named view.
 - **Analytics** with commit history, an activity heatmap and repository health.
 - **Open in your editor** (VS Code, Cursor, Sublime Text or a custom command) **or a terminal** in
   the project folder.
@@ -223,7 +224,6 @@ Design details: [recovery design](docs/RECOVERY_DESIGN.md),
 - Secret screening is heuristic, not a guarantee.
 - Linux ships only as an AppImage: the `.deb` and `.rpm` need webkit2gtk 4.0, which current
   distributions no longer ship. They return with the move to Tauri 2.
-- Keyboard shortcuts use Ctrl on every platform, including macOS.
 
 ## Documentation
 
