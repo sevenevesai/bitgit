@@ -9,12 +9,15 @@ import { BulkResultPanel } from './git/BulkResultPanel';
 import { LabelFilter } from './LabelFilter';
 import { labelCatalog, sameLabel } from '../lib/labels';
 import { useAutomationProblems } from '../lib/recovery-automation';
+import { attentionRank } from './git/gitStatusView';
 import type { BulkProjectResult, PublishAction } from '../types';
 import { Plus, RefreshCw, Settings, Sun, Moon, CheckSquare, Square, Upload, Search, Filter, BarChart3, FolderGit2 } from 'lucide-react';
 
 // Shortcuts take Ctrl everywhere and also ⌘ on macOS, where hints show ⌘.
 const IS_MAC = navigator.userAgent.includes('Mac');
 const MOD = IS_MAC ? '⌘' : 'Ctrl+';
+
+type SortOrder = 'favorite' | 'attention' | 'activity' | 'name';
 
 export function Dashboard() {
   const {
@@ -44,7 +47,7 @@ export function Dashboard() {
   const [showArchived, setShowArchived] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
-  const [sortBy, setSortBy] = useState<'name' | 'favorite' | 'activity'>('favorite');
+  const [sortBy, setSortBy] = useState<SortOrder>('favorite');
   const [currentView, setCurrentView] = useState<'projects' | 'analytics'>('projects');
 
   // Check actual dark mode state from document class, not just settings
@@ -68,6 +71,7 @@ export function Dashboard() {
 
   // Filter and sort projects
   const query = searchQuery.toLowerCase();
+  const now = Date.now();
   const filteredProjects = projects
     .filter((project) => {
       // Search filter
@@ -93,6 +97,11 @@ export function Dashboard() {
       return matchesSearch && matchesLabels && matchesStatus && matchesArchive && matchesFavorites;
     })
     .sort((a, b) => {
+      if (sortBy === 'attention') {
+        const order = attentionRank(a, now) - attentionRank(b, now);
+        if (order !== 0) return order;
+      }
+
       // Sort by favorites first if enabled
       if (sortBy === 'favorite') {
         const aFav = a.favorite ? 1 : 0;
@@ -423,20 +432,13 @@ export function Dashboard() {
               </select>
             </div>
 
-            {/* Favorites Filter */}
-            <button
-              onClick={() => setFavoritesOnly(!favoritesOnly)}
-              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                favoritesOnly
-                  ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border-2 border-yellow-400 dark:border-yellow-600'
-                  : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
-              }`}
-              title="Show only favorites"
-            >
-              ⭐ {favoritesOnly ? 'Favorites Only' : 'All'}
-            </button>
-
-            <LabelFilter options={catalog} selected={selectedLabels} onChange={setSelectedLabels} />
+            <LabelFilter
+              options={catalog}
+              selected={selectedLabels}
+              onChange={setSelectedLabels}
+              favoritesOnly={favoritesOnly}
+              onFavoritesOnlyChange={setFavoritesOnly}
+            />
 
             {/* Archived Filter */}
             <button
@@ -454,10 +456,11 @@ export function Dashboard() {
             {/* Sort dropdown */}
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as 'name' | 'favorite' | 'activity')}
+              onChange={(e) => setSortBy(e.target.value as SortOrder)}
               className="px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:ring-2 focus:ring-teal-500 min-w-[180px]"
             >
               <option value="favorite">Sort: Favorites First</option>
+              <option value="attention">Sort: Needs Attention</option>
               <option value="activity">Sort: Recent Activity</option>
               <option value="name">Sort: Name (A-Z)</option>
             </select>
@@ -490,6 +493,7 @@ export function Dashboard() {
                   setSearchQuery('');
                   setStatusFilter('all');
                   setSelectedLabels([]);
+                  setFavoritesOnly(false);
                 }}
                 className="px-6 py-3 text-white bg-teal-600 dark:bg-teal-700 rounded-lg hover:bg-teal-700 dark:hover:bg-teal-800 transition-colors"
               >

@@ -92,6 +92,26 @@ export function hasGitRemote(project: Pick<Project, 'githubUrl' | 'gitStatus'>):
   return Boolean(project.githubUrl || project.gitStatus?.upstream || project.gitStatus?.remoteUrl);
 }
 
+// "Sort: Needs Attention" order, lowest first: states only the user can resolve, then work waiting
+// in either direction, then states with nothing to publish, Synced last.
+const ATTENTION_ORDER: Record<CardTone, number> = {
+  diverged: 0,
+  unavailable: 1,
+  not_git: 1,
+  behind: 2,
+  changes: 3,
+  unconfirmed: 4,
+  ready: 5,
+  local_only: 5,
+  github_only: 6,
+  not_configured: 6,
+  synced: 7,
+};
+
+export function attentionRank(project: Project, now: number = Date.now()): number {
+  return ATTENTION_ORDER[getCardStatus(project, now).tone];
+}
+
 // What the card badge says. Anything the last check could not confirm is never shown as Synced.
 export function getCardStatus(project: Project, now: number = Date.now()): CardStatus {
   if (project.projectStatus === 'not_configured') return { tone: 'not_configured', text: 'Not Configured' };
