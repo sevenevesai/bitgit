@@ -70,7 +70,8 @@ untouched while you do. GitHub is optional, and so is Git: a plain folder works.
 - **Branches, commits, stashes and tags** in a details view. Merges of the branches you select use
   `--no-ff` and keep the source branches. BitGit never force-pushes.
 - **GitHub integration** to create, clone and link repositories.
-- **Bulk import** by scanning a folder for existing repositories.
+- **Bulk import** by scanning a folder for existing repositories, from Add Project (pick which to
+  add) or Settings.
 - **Analytics** with commit history, an activity heatmap and repository health.
 - **Open in your editor** (VS Code, Cursor, Sublime Text or a custom command) **or a terminal** in
   the project folder.

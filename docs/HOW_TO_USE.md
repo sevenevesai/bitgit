@@ -47,6 +47,10 @@ The token is securely stored in Windows Credential Manager!
 
 The app will find all Git repositories in that directory!
 
+To pick which ones to add instead, use **Add Project → Import Folders**: choose a folder, untick
+any repositories you don't want, and click **Add Selected**. Folders already in BitGit are shown
+but can't be added twice.
+
 ### Step 3: View Your Repositories
 
 1. **Close the Settings modal**

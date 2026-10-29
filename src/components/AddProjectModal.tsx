@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { open } from '@tauri-apps/api/dialog';
 import { X, ArrowLeft, ArrowRight, Check, Github, FolderGit, Search, Loader2 } from 'lucide-react';
 import { useAppStore } from '../stores/useAppStore';
+import { ImportFoldersPanel } from './ImportFoldersPanel';
 import toast from 'react-hot-toast';
 
 interface AddProjectModalProps {
@@ -19,9 +20,11 @@ interface GitHubRepo {
 }
 
 type Step = 1 | 2 | 3;
+type Mode = 'create' | 'import';
 
 export function AddProjectModal({ isOpen, onClose }: AddProjectModalProps) {
   const { createProject } = useAppStore();
+  const [mode, setMode] = useState<Mode>('create');
 
   // Step state
   const [currentStep, setCurrentStep] = useState<Step>(1);
@@ -51,6 +54,7 @@ export function AddProjectModal({ isOpen, onClose }: AddProjectModalProps) {
   }, [isOpen]);
 
   const resetModal = () => {
+    setMode('create');
     setCurrentStep(1);
     setProjectName('');
     setSelectedGitHub(null);
@@ -218,8 +222,12 @@ export function AddProjectModal({ isOpen, onClose }: AddProjectModalProps) {
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Create New Project</h2>
-            <p className="text-sm text-gray-600 mt-1">Step {currentStep} of 3</p>
+            <h2 className="text-2xl font-bold text-gray-900">
+              {mode === 'create' ? 'Create New Project' : 'Import Existing Folders'}
+            </h2>
+            <p className="text-sm text-gray-600 mt-1">
+              {mode === 'create' ? `Step ${currentStep} of 3` : 'Add several Git repositories at once'}
+            </p>
           </div>
           <button
             onClick={onClose}
@@ -229,6 +237,32 @@ export function AddProjectModal({ isOpen, onClose }: AddProjectModalProps) {
           </button>
         </div>
 
+        <div className="px-6 pt-4">
+          <div className="flex items-center gap-2 bg-gray-100 rounded-lg p-1" role="tablist">
+            {([
+              ['create', 'Create Step by Step'],
+              ['import', 'Import Folders'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={mode === value}
+                onClick={() => setMode(value)}
+                className={`flex-1 px-3 py-2 rounded-md text-sm transition-colors ${
+                  mode === value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {mode === 'import' ? (
+          <ImportFoldersPanel onCancel={onClose} onDone={onClose} />
+        ) : (
+        <>
         {/* Progress Bar */}
         <div className="px-6 pt-4">
           <div className="flex items-center gap-2">
@@ -493,6 +527,8 @@ export function AddProjectModal({ isOpen, onClose }: AddProjectModalProps) {
             )}
           </div>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

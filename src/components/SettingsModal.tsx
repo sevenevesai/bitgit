@@ -3,8 +3,9 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { open } from '@tauri-apps/api/dialog';
 import toast from 'react-hot-toast';
 import { X, Github, Folder, Search, CheckCircle, XCircle, AlertCircle, ExternalLink, Loader2, Info, ChevronDown, ChevronUp, Code, Terminal } from 'lucide-react';
-import { EditorPreset, EditorConfig, EditorAvailability, Project } from '../types';
+import { EditorPreset, EditorConfig, EditorAvailability } from '../types';
 import { useAppStore } from '../stores/useAppStore';
+import { importRepositories, scanForRepositories } from '../lib/repoImport';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -189,11 +190,7 @@ export function SettingsModal({ isOpen, onClose, onRepositoriesAdded }: Settings
     setIsScanning(true);
     try {
       // First, scan for repositories
-      const repos = await invoke<string[]>('scan_directories', {
-        directories,
-        maxDepth: 3,
-        excludePatterns: ['node_modules', 'target', 'dist', 'build', '.git'],
-      });
+      const repos = await scanForRepositories(directories, useAppStore.getState().settings.scanning);
 
       if (repos.length === 0) {
         toast.error('No repositories found');
@@ -206,10 +203,7 @@ export function SettingsModal({ isOpen, onClose, onRepositoriesAdded }: Settings
 
       // Then, add them to the backend cache. Folders that are already projects keep their
       // settings and are only re-checked, so the count of new ones comes from the result.
-      const knownIds = new Set(useAppStore.getState().projects.map((p) => p.id));
-      const saved = await invoke<Project[]>('add_repositories', { repoPaths: repos });
-      const added = saved.filter((p) => !knownIds.has(p.id)).length;
-      const already = saved.length - added;
+      const { added, already } = await importRepositories(repos, useAppStore.getState().projects);
       toast.success(
         `Added ${added} new project${added !== 1 ? 's' : ''}` +
           (already > 0 ? `; ${already} ${already !== 1 ? 'were' : 'was'} already in BitGit and ${already !== 1 ? 'were' : 'was'} re-checked.` : '.')
