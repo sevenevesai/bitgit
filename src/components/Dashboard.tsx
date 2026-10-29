@@ -6,6 +6,8 @@ import { SettingsModal } from './SettingsModal';
 import { AddProjectModal } from './AddProjectModal';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { BulkResultPanel } from './git/BulkResultPanel';
+import { LabelFilter } from './LabelFilter';
+import { labelCatalog, sameLabel } from '../lib/labels';
 import type { BulkProjectResult, PublishAction } from '../types';
 import { Plus, RefreshCw, Settings, Sun, Moon, CheckSquare, Square, Upload, Search, Filter, BarChart3, FolderGit2 } from 'lucide-react';
 
@@ -40,6 +42,7 @@ export function Dashboard() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [showArchived, setShowArchived] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<'name' | 'favorite' | 'activity'>('favorite');
   const [currentView, setCurrentView] = useState<'projects' | 'analytics'>('projects');
 
@@ -48,14 +51,34 @@ export function Dashboard() {
   const ThemeIcon = isDarkMode ? Moon : Sun;
   const hasSelection = selectedProjectIds.size > 0;
 
+  // Every label in use, for the filter and for suggestions on each card
+  const catalog = labelCatalog(projects);
+  const catalogNames = catalog.map((item) => item.name);
+  const catalogKey = catalogNames.join('\n').toLowerCase();
+
+  // A label removed from its last project leaves the catalog, so it must leave the filter too.
+  useEffect(() => {
+    const inUse = new Set(catalogKey ? catalogKey.split('\n') : []);
+    setSelectedLabels((current) => {
+      const next = current.filter((label) => inUse.has(label.toLowerCase()));
+      return next.length === current.length ? current : next;
+    });
+  }, [catalogKey]);
+
   // Filter and sort projects
+  const query = searchQuery.toLowerCase();
   const filteredProjects = projects
     .filter((project) => {
       // Search filter
-      const matchesSearch = project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                           project.localPath?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                           (project.githubOwner && project.githubOwner.toLowerCase().includes(searchQuery.toLowerCase())) ||
-                           (project.githubRepo && project.githubRepo.toLowerCase().includes(searchQuery.toLowerCase()));
+      const matchesSearch = project.name.toLowerCase().includes(query) ||
+                           project.localPath?.toLowerCase().includes(query) ||
+                           (project.githubOwner && project.githubOwner.toLowerCase().includes(query)) ||
+                           (project.githubRepo && project.githubRepo.toLowerCase().includes(query)) ||
+                           (project.labels ?? []).some((label) => label.toLowerCase().includes(query));
+
+      // Label filter: any one of the selected labels
+      const matchesLabels = selectedLabels.length === 0 ||
+                           (project.labels ?? []).some((label) => selectedLabels.some((picked) => sameLabel(picked, label)));
 
       // Status filter
       const matchesStatus = statusFilter === 'all' || project.projectStatus === statusFilter;
@@ -66,7 +89,7 @@ export function Dashboard() {
       // Favorites filter
       const matchesFavorites = !favoritesOnly || project.favorite;
 
-      return matchesSearch && matchesStatus && matchesArchive && matchesFavorites;
+      return matchesSearch && matchesLabels && matchesStatus && matchesArchive && matchesFavorites;
     })
     .sort((a, b) => {
       // Sort by favorites first if enabled
@@ -358,7 +381,7 @@ export function Dashboard() {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
               <input
                 type="text"
-                placeholder={`Search projects by name, path, or repository... (${MOD}F)`}
+                placeholder={`Search projects by name, path, repository or label... (${MOD}F)`}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
@@ -397,6 +420,8 @@ export function Dashboard() {
             >
               ⭐ {favoritesOnly ? 'Favorites Only' : 'All'}
             </button>
+
+            <LabelFilter options={catalog} selected={selectedLabels} onChange={setSelectedLabels} />
 
             {/* Archived Filter */}
             <button
@@ -507,6 +532,7 @@ export function Dashboard() {
                 onClick={() => {
                   setSearchQuery('');
                   setStatusFilter('all');
+                  setSelectedLabels([]);
                 }}
                 className="px-6 py-3 text-white bg-teal-600 dark:bg-teal-700 rounded-lg hover:bg-teal-700 dark:hover:bg-teal-800 transition-colors"
               >
@@ -517,7 +543,7 @@ export function Dashboard() {
         ) : (
           <div className="space-y-4">
             {filteredProjects.map((project) => (
-              <ProjectCard key={project.id} project={project} />
+              <ProjectCard key={project.id} project={project} labelCatalog={catalogNames} />
             ))}
           </div>
         )}

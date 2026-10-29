@@ -38,6 +38,39 @@ pub struct Project {
     pub statistics: Option<ProjectStatistics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
+    // User labels, already normalized by `normalize_labels`. Missing on caches written before labels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+}
+
+pub const MAX_LABELS: usize = 8;
+pub const MAX_LABEL_CHARS: usize = 24;
+
+/// The labels to store for a project: each trimmed with inner whitespace collapsed to one space,
+/// blanks dropped, and case-insensitive duplicates reduced to their first spelling. Any label that
+/// is too long or uses characters other than letters, digits, spaces and hyphens rejects the whole
+/// list, so a failed save never changes what is stored.
+pub fn normalize_labels(input: &[String]) -> Result<Vec<String>, String> {
+    let mut labels: Vec<String> = Vec::new();
+    for raw in input {
+        let label = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        if label.is_empty() {
+            continue;
+        }
+        if label.chars().count() > MAX_LABEL_CHARS {
+            return Err(format!("Label \"{label}\" is longer than {MAX_LABEL_CHARS} characters"));
+        }
+        if !label.chars().all(|c| c == ' ' || c == '-' || c.is_alphanumeric()) {
+            return Err(format!("Label \"{label}\" can only use letters, numbers, spaces and hyphens"));
+        }
+        if !labels.iter().any(|existing| existing.to_lowercase() == label.to_lowercase()) {
+            labels.push(label);
+        }
+    }
+    if labels.len() > MAX_LABELS {
+        return Err(format!("A project can have at most {MAX_LABELS} labels"));
+    }
+    Ok(labels)
 }
 
 // Overall project configuration state
@@ -210,6 +243,40 @@ pub enum ValidationSeverity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn labels_are_trimmed_collapsed_and_deduplicated_by_first_spelling() {
+        let labels = normalize_labels(&strings(&["  Work  ", "work", "client   one", "工作", "  ", "v2-beta"])).unwrap();
+        assert_eq!(labels, strings(&["Work", "client one", "工作", "v2-beta"]));
+        assert_eq!(normalize_labels(&[]).unwrap(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn invalid_labels_reject_the_whole_list() {
+        assert!(normalize_labels(&strings(&["ok", "bad!"])).unwrap_err().contains("letters"));
+        assert!(normalize_labels(&strings(&["<script>"])).is_err());
+        assert!(normalize_labels(&strings(&["tab\there"])).is_ok(), "inner whitespace collapses to a space");
+        assert!(normalize_labels(&strings(&["a\u{0}b"])).is_err());
+        assert!(normalize_labels(&strings(&[&"x".repeat(MAX_LABEL_CHARS)])).is_ok());
+        assert!(normalize_labels(&strings(&[&"x".repeat(MAX_LABEL_CHARS + 1)])).unwrap_err().contains("24"));
+    }
+
+    #[test]
+    fn at_most_eight_distinct_labels() {
+        let eight: Vec<String> = (0..MAX_LABELS).map(|n| format!("l{n}")).collect();
+        assert_eq!(normalize_labels(&eight).unwrap().len(), MAX_LABELS);
+        let mut nine = eight.clone();
+        nine.push("one more".to_string());
+        assert!(normalize_labels(&nine).is_err());
+        // Duplicates do not count toward the limit.
+        let mut repeated = eight;
+        repeated.push("L0".to_string());
+        assert_eq!(normalize_labels(&repeated).unwrap().len(), MAX_LABELS);
+    }
 
     #[test]
     fn validation_accepts_service_mb_acronyms_and_serializes_frontend_names() {

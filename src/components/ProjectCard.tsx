@@ -15,6 +15,7 @@ import { BranchIntegrationModal } from './git/BranchIntegrationModal';
 import { GitStatusSummary } from './git/GitStatusSummary';
 import { formatRelativeTime, getCardStatus, hasGitRemote, remoteTarget, CardTone } from './git/gitStatusView';
 import { RecoveryWorkspace } from './recovery/RecoveryWorkspace';
+import { ProjectLabels } from './ProjectLabels';
 import {
   GitBranch,
   CheckCircle,
@@ -45,6 +46,8 @@ import {
 
 interface ProjectCardProps {
   project: Project;
+  // Labels used across all projects, offered when adding one here.
+  labelCatalog?: string[];
 }
 
 type NoticeTone = 'success' | 'neutral' | 'error';
@@ -65,7 +68,7 @@ const NOTICE_STYLE: Record<NoticeTone, string> = {
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-export function ProjectCard({ project }: ProjectCardProps) {
+export function ProjectCard({ project, labelCatalog = [] }: ProjectCardProps) {
   const {
     syncProject,
     toggleSelection,
@@ -822,6 +825,8 @@ export function ProjectCard({ project }: ProjectCardProps) {
           <Trash2 className="w-5 h-5" />
         </button>
       </div>
+
+      <ProjectLabels project={project} catalog={labelCatalog} />
 
       {/* Description Section */}
       {(project.description || isEditingDescription) && (

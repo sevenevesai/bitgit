@@ -44,6 +44,8 @@ interface AppState {
   loadProjects: () => Promise<void>;
   createProject: (name: string, githubOwner?: string, githubRepo?: string, githubUrl?: string, localPath?: string) => Promise<Project>;
   updateProject: (project: Project) => Promise<void>;
+  // Replaces the project's labels; rejects with the reason when the backend refuses them.
+  setProjectLabels: (id: string, labels: string[]) => Promise<Project>;
   deleteProject: (id: string) => Promise<void>;
   // Re-reads Git state from disk (and the remote). Never rejects: the outcome says what happened.
   refreshProject: (id: string, options?: { silent?: boolean }) => Promise<RefreshOutcome>;
@@ -416,6 +418,14 @@ export const useAppStore = create<AppState>((set, get) => {
       toast.error(`Failed to update project: ${error}`);
       throw error;
     }
+  },
+
+  setProjectLabels: async (id: string, labels: string[]) => {
+    const updated = await invoke<Project>('set_project_labels', { projectId: id, labels });
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? updated : p)),
+    }));
+    return updated;
   },
 
   // Delete a project

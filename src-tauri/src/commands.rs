@@ -360,6 +360,7 @@ pub async fn create_project(
         last_activity: None,
         statistics: None,
         template: None,
+        labels: Vec::new(),
     };
 
     // Save to cache
@@ -371,7 +372,9 @@ pub async fn create_project(
 
 /// Update an existing project
 #[tauri::command]
-pub async fn update_project(project: Project) -> Result<Project, String> {
+pub async fn update_project(mut project: Project) -> Result<Project, String> {
+    // Labels follow the same rules whichever command saves them.
+    project.labels = normalize_labels(&project.labels)?;
     project_cache::save_project(project.clone())
         .map_err(|e| format!("Failed to update project: {}", e))?;
 
@@ -1064,6 +1067,17 @@ pub async fn update_project_metadata(
 pub async fn toggle_project_favorite(project_id: String) -> Result<Project, String> {
     project_cache::update_project(&project_id, |project| {
         project.favorite = Some(!project.favorite.unwrap_or(false));
+        project.last_activity = Some(now_rfc3339());
+    })
+    .map_err(|e| format!("Failed to save project: {}", e))
+}
+
+/// Replace a project's labels. An invalid list is rejected and the stored labels stay as they were.
+#[tauri::command]
+pub async fn set_project_labels(project_id: String, labels: Vec<String>) -> Result<Project, String> {
+    let labels = normalize_labels(&labels)?;
+    project_cache::update_project(&project_id, |project| {
+        project.labels = labels;
         project.last_activity = Some(now_rfc3339());
     })
     .map_err(|e| format!("Failed to save project: {}", e))
