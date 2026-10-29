@@ -43,20 +43,34 @@ export function TooltipLayer(): JSX.Element | null {
       setTip(null);
     };
 
+    // An icon-only control is named by its title, so it keeps that name as an aria-label while held.
+    let lentLabel = false;
+    const hold = (element: Element, title: string) => {
+      heldTitle = title;
+      element.removeAttribute('title');
+      if (lentLabel) {
+        element.setAttribute('aria-label', title);
+      } else if (!element.textContent?.trim() && !element.hasAttribute('aria-label') && !element.hasAttribute('aria-labelledby')) {
+        element.setAttribute('aria-label', title);
+        lentLabel = true;
+      }
+    };
+
     // React can set a new title while the pointer stays put, such as a favorite toggle's.
     const observer = new MutationObserver(() => {
       const next = hovered?.getAttribute('title');
       if (!hovered || next == null) return;
-      hovered.removeAttribute('title');
-      heldTitle = next;
+      hold(hovered, next);
       setTip((current) => (current ? { ...current, text: next.trim() } : current));
     });
 
     const release = () => {
       observer.disconnect();
       if (hovered && heldTitle && !hovered.hasAttribute('title')) hovered.setAttribute('title', heldTitle);
+      if (hovered && lentLabel) hovered.removeAttribute('aria-label');
       hovered = null;
       heldTitle = '';
+      lentLabel = false;
       hide();
     };
 
@@ -69,8 +83,7 @@ export function TooltipLayer(): JSX.Element | null {
       const text = titled?.getAttribute('title')?.trim();
       if (!titled || !text) return;
       hovered = titled;
-      heldTitle = titled.getAttribute('title') ?? '';
-      titled.removeAttribute('title');
+      hold(titled, titled.getAttribute('title') ?? '');
       observer.observe(titled, { attributes: true, attributeFilter: ['title'] });
       show(titled, text);
     };
