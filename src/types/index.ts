@@ -54,6 +54,7 @@ export interface GitStatus {
   modifiedFiles: string[];
   currentBranch?: string | null;   // null when detached or not a repository
   upstream?: string | null;        // e.g. "origin/main"; null when none is configured
+  remoteUrl?: string | null;       // fetch URL of that remote, credentials removed
 
   // Remote state
   unpushedCommits: number;         // ahead of the upstream

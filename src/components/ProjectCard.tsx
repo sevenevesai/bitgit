@@ -13,7 +13,7 @@ import { ValidationWarningModal } from './ValidationWarningModal';
 import { CommitModal } from './CommitModal';
 import { BranchIntegrationModal } from './git/BranchIntegrationModal';
 import { GitStatusSummary } from './git/GitStatusSummary';
-import { formatRelativeTime, getCardStatus, CardTone } from './git/gitStatusView';
+import { formatRelativeTime, getCardStatus, hasGitRemote, remoteTarget, CardTone } from './git/gitStatusView';
 import { RecoveryWorkspace } from './recovery/RecoveryWorkspace';
 import {
   GitBranch,
@@ -26,6 +26,7 @@ import {
   RefreshCw,
   FolderGit,
   Github,
+  Globe,
   Link as LinkIcon,
   Download,
   Trash2,
@@ -100,6 +101,9 @@ export function ProjectCard({ project }: ProjectCardProps) {
   const isArchived = project.archived || false;
   const isBusy = isLoading || isCommitting || syncingProjects.has(project.id);
   const cardStatus = getCardStatus(project);
+  // A folder that already has a remote (GitLab, a server, or GitHub not yet linked) gets the publish actions.
+  const actionStatus = project.projectStatus === 'local_only' && hasGitRemote(project) ? 'ready' : project.projectStatus;
+  const otherRemote = project.githubUrl ? null : remoteTarget(project.gitStatus?.remoteUrl);
 
   // Advanced Git views need a local Git folder; a GitHub link is not required.
   const canShowDetails = Boolean(project.localPath) && project.gitStatus?.isGitRepo !== false;
@@ -542,7 +546,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
 
   // Render different action buttons based on project status
   const renderActions = () => {
-    switch (project.projectStatus) {
+    switch (actionStatus) {
       case 'not_configured':
         return (
           <div className="flex gap-2">
@@ -662,7 +666,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
               onClick={() => setIntegrationMode('pull_branches')}
               disabled={notGit || !hasRemoteBranches || isBusy}
               className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Bring in branches you choose from GitHub; the branches are kept"
+              title="Bring in branches you choose from the remote; the branches are kept"
             >
               <Download className="w-4 h-4" />
               Pull Updates
@@ -682,7 +686,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
               onClick={() => void startPublish('full_sync')}
               disabled={notGit || isBusy}
               className="flex items-center gap-2 px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Sync the current branch with its GitHub branch. Other branches are not touched."
+              title="Sync the current branch with its remote branch. Other branches are not touched."
             >
               <RefreshCw className="w-4 h-4" />
               Sync Branch
@@ -784,7 +788,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
               disabled={isRefreshing || syncingProjects.has(project.id)}
               aria-label="Refresh status"
               className="p-1.5 text-gray-400 dark:text-gray-500 hover:text-teal-600 dark:hover:text-teal-400 hover:bg-teal-50 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
-              title="Refresh status: re-reads this folder and checks GitHub"
+              title="Refresh status: re-reads this folder and checks its remote"
             >
               <RotateCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
             </button>
@@ -872,6 +876,22 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </a>
           </div>
         )}
+        {otherRemote && (
+          <div className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
+            <Globe className="w-4 h-4" />
+            <span className="font-medium">Remote:</span>
+            <span className="text-gray-600 dark:text-gray-400 truncate">{otherRemote.label}</span>
+            <a
+              href={otherRemote.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-1 text-teal-600 dark:text-teal-400 hover:text-teal-700 dark:hover:text-teal-300 transition-colors"
+              title="Open the remote in the browser"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        )}
         {project.localPath && (
           <div className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
             <FolderGit className="w-4 h-4" />
@@ -889,13 +909,13 @@ export function ProjectCard({ project }: ProjectCardProps) {
           </div>
         )}
 
-        {/* Branch, upstream, ahead/behind and how fresh the GitHub reading is */}
+        {/* Branch, upstream, ahead/behind and how fresh the remote reading is */}
         <GitStatusSummary project={project} />
         {project.gitStatus && project.gitStatus.remoteBranches.length > 0 && (
           <div className="flex items-center gap-2 text-orange-700 dark:text-orange-400">
             <GitBranch className="w-4 h-4" aria-hidden="true" />
             <span>
-              {project.gitStatus.remoteBranches.length} other branch(es) on GitHub:{' '}
+              {project.gitStatus.remoteBranches.length} other branch(es) on the remote:{' '}
               {project.gitStatus.remoteBranches.join(', ')}
             </span>
           </div>

@@ -72,6 +72,9 @@ pub struct GitStatus {
     pub current_branch: Option<String>,
     #[serde(default)]
     pub upstream: Option<String>,
+    // Fetch URL of that remote with any credentials removed.
+    #[serde(default)]
+    pub remote_url: Option<String>,
     #[serde(default)]
     pub behind_commits: u32,
     // When the remote was last read successfully; never set from a failed check.
@@ -248,6 +251,7 @@ mod tests {
         assert_eq!(status.sync_status, SyncStatus::LocalChanges);
         assert_eq!(status.current_branch, None);
         assert_eq!(status.upstream, None);
+        assert_eq!(status.remote_url, None);
         assert_eq!(status.behind_commits, 0);
         assert_eq!(status.remote_checked_at, None);
         assert_eq!(status.remote_error, None);

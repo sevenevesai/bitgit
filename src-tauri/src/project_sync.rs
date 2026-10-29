@@ -73,6 +73,7 @@ pub fn git_status_from_info(info: StatusInfo, now: &str) -> GitStatus {
         last_checked: now.to_string(),
         current_branch: info.current_branch,
         upstream: info.upstream,
+        remote_url: info.remote_url,
         behind_commits: info.behind_commits,
         remote_checked_at: info.remote_checked_at,
         remote_error: info.remote_error,
@@ -96,6 +97,7 @@ pub fn unavailable_git_status(previous: Option<&GitStatus>, error: &str, now: &s
         last_checked: now.to_string(),
         current_branch: None,
         upstream: None,
+        remote_url: None,
         behind_commits: 0,
         remote_checked_at: None,
         remote_error: None,
@@ -487,6 +489,7 @@ mod tests {
             has_remote: Some(true),
             current_branch: Some("main".to_string()),
             upstream: Some("origin/main".to_string()),
+            remote_url: Some("https://github.com/o/r.git".to_string()),
             behind_commits: 0,
             remote_checked_at: Some(REMOTE_READ.to_string()),
             remote_error: None,
@@ -632,6 +635,7 @@ mod tests {
         assert_eq!(status.remote_checked_at.as_deref(), Some(REMOTE_READ));
         assert_eq!(status.current_branch.as_deref(), Some("main"));
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
+        assert_eq!(status.remote_url.as_deref(), Some("https://github.com/o/r.git"));
     }
 
     #[test]

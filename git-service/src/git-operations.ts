@@ -86,6 +86,13 @@ async function gitOutput(cwd: string, args: string[], options?: GitRunOptions): 
   return run.stdout.toString('utf8');
 }
 
+// A remote URL safe to store and show: no embedded user or token, no control characters, bounded length.
+export function displayRemoteUrl(url: string): string | null {
+  // Greedy up to the last '@' before the path, so a password containing '@' is removed whole.
+  const value = url.trim().replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/\s]*@/i, '$1');
+  return value && value.length <= 2048 && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
+}
+
 function normalizeRemoteUrl(url: string): string {
   return url.trim().replace(/\\/g, '/').replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1').replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase();
 }
@@ -468,6 +475,7 @@ export class GitOperations {
       hasRemote: false,
       currentBranch: null,
       upstream: null,
+      remoteUrl: null,
       behindCommits: 0,
       remoteCheckedAt: null,
       remoteError: null,
@@ -488,6 +496,13 @@ export class GitOperations {
       status.currentBranch = branch;
       status.hasRemote = remotes.length > 0;
       status.upstream = upstream?.short ?? null;
+
+      // Only a remote that publishing would use (see pushTarget) is reported as the project's remote.
+      const pushRemote = upstream?.remote ?? (remotes.includes('origin') ? 'origin' : null);
+      if (pushRemote) {
+        const listed = await this.run(['remote', 'get-url', '--', pushRemote], { readOnly: true });
+        if (listed.code === 0) status.remoteUrl = displayRemoteUrl(listed.stdout.toString('utf8'));
+      }
 
       if (remote) {
         try {

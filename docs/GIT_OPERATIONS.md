@@ -17,10 +17,14 @@ A folder that is not a repository root (including a subfolder of another repo) r
 |---|---|
 | `currentBranch` | Branch name, `null` when detached |
 | `upstream` | Configured upstream (`origin/main`), `null` if none |
+| `remoteUrl` | Fetch URL of the remote publishing would push to (the upstream's, else `origin`), user and password removed; `null` if neither exists |
 | `behindCommits` | Upstream commits missing locally (remote branch presence is not behind) |
 | `unpushedCommits` | Ahead of the upstream; with none, commits on no remote-tracking ref |
 | `remoteCheckedAt` / `remoteError` | Fetch time, or `null` + sanitized failure (30 s limit); counts then use the last known remote state |
 | others | `hasRemote`, `uncommittedFiles`, `untrackedFiles`, `modifiedFiles`, `remoteBranches` (hides current, upstream, default) |
+
+A remote publishing can use (an upstream, or `origin`) counts as connected, GitHub or not: the card shows that remote and offers
+publishing, and bulk push/sync no longer require a saved GitHub link.
 
 ## Publishing
 

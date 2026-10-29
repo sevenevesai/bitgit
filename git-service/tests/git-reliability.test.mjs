@@ -50,7 +50,7 @@ describe('checkStatus', () => {
     fx.write(dir, 'note.txt', 'hi');
     const status = await new GitOperations(dir).checkStatus();
     assert.deepEqual(status, {
-      isGitRepo: false, hasRemote: false, currentBranch: null, upstream: null, behindCommits: 0,
+      isGitRepo: false, hasRemote: false, currentBranch: null, upstream: null, remoteUrl: null, behindCommits: 0,
       remoteCheckedAt: null, remoteError: null, uncommittedFiles: 0, untrackedFiles: 0, modifiedFiles: [],
       unpushedCommits: 0, remoteBranches: [],
     });
@@ -77,6 +77,7 @@ describe('checkStatus', () => {
     assert.equal(status.hasRemote, false);
     assert.equal(status.currentBranch, 'develop');
     assert.equal(status.upstream, null);
+    assert.equal(status.remoteUrl, null);
     assert.equal(status.behindCommits, 0);
     assert.equal(status.remoteCheckedAt, null);
     assert.equal(status.remoteError, null);
@@ -96,6 +97,7 @@ describe('checkStatus', () => {
     assert.equal(status.behindCommits, 1);
     assert.equal(status.unpushedCommits, 0);
     assert.equal(status.upstream, 'origin/trunk');
+    assert.equal(status.remoteUrl, remote);
     assert.equal(status.currentBranch, 'trunk');
     assert.equal(status.remoteError, null);
     assert.ok(!Number.isNaN(Date.parse(status.remoteCheckedAt)));
@@ -138,9 +140,23 @@ describe('checkStatus', () => {
     assert.equal(status.remoteCheckedAt, null);
     assert.ok(status.remoteError && status.remoteError.length > 0);
     assert.ok(!status.remoteError.includes('hunter2'));
+    assert.equal(status.remoteUrl, 'http://127.0.0.1:9/nope.git');
+    fx.git(work, 'remote', 'set-url', 'origin', 'http://user:p@ss@127.0.0.1:9/nope.git');
+    const again = await new GitOperations(work).checkStatus();
+    assert.equal(again.remoteUrl, 'http://127.0.0.1:9/nope.git');
     assert.equal(status.unpushedCommits, 1);
     assert.equal(status.behindCommits, 0);
     assert.equal(status.isGitRepo, true);
+  });
+
+  it('reports no remote URL when publishing would have nowhere to push', async () => {
+    const { work } = project();
+    fx.git(work, 'remote', 'rename', 'origin', 'gitlab');
+    fx.git(work, 'branch', '--unset-upstream');
+    const status = await new GitOperations(work).checkStatus();
+    assert.equal(status.hasRemote, true);
+    assert.equal(status.upstream, null);
+    assert.equal(status.remoteUrl, null);
   });
 
   it('reports an upstream branch that no longer exists on the remote', async () => {
