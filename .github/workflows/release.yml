@@ -28,6 +28,9 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: BitGit ${{ steps.get_version.outputs.VERSION }}
+          # Thank contributors with @name only under What's New. When those notes move under
+          # "In x.y.z", drop the thanks: GitHub lists every user @-mentioned in a release's notes
+          # as a contributor to that release.
           body: |
             ## BitGit ${{ steps.get_version.outputs.VERSION }}
 
@@ -47,7 +50,7 @@ jobs:
             - Select All and Ctrl/⌘+A select only the projects the current filters show, so bulk actions never reach hidden projects
 
             ### In 1.2.1
-            - Linking a project to an existing GitHub repository works again: the list shows each repository's owner, searching no longer closes it with an error, only the repository you pick is selected, and linking saves its URL. Thanks @zznam (#1)
+            - Linking a project to an existing GitHub repository works again: the list shows each repository's owner, searching no longer closes it with an error, only the repository you pick is selected, and linking saves its URL (#1)
             - macOS: dashboard shortcuts use ⌘ (⌘R refresh, ⌘N new project, ⌘F search, ⌘A select all, ⌘D theme) and their hints say so; Ctrl still works
 
             ### In 1.2.0
