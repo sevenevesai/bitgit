@@ -6,6 +6,8 @@ Thank you for your interest in contributing to BitGit! This guide will help you 
 
 ### Reporting Bugs
 
+Questions and feature requests: [Discord](https://seveneves.ai/discord/?from=bitgit-readme). Bugs: [open an issue](https://github.com/sevenevesai/bitgit/issues/new).
+
 If you find a bug, please open a [GitHub Issue](https://github.com/sevenevesai/bitgit/issues) with:
 
 - A clear, descriptive title

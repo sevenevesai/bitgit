@@ -18,7 +18,7 @@ with a visual Git dashboard for the projects you publish.
 [Website](https://seveneves.ai/bitgit/) ·
 [Documentation](#documentation) ·
 [For AI agents](#for-ai-agents) ·
-[Report a bug](https://github.com/sevenevesai/bitgit/issues/new)
+[Report a bug](https://github.com/sevenevesai/bitgit/issues/new) · [Discord](https://seveneves.ai/discord/?from=bitgit-readme)
 
 </div>
 
@@ -293,6 +293,8 @@ guided onboarding, a protection overview and background capture, are written up 
 [design specs](docs/design/recovery-evolution/README.md). They are proposals, not commitments.
 
 ## Contributing
+
+Questions and feature requests: [Discord](https://seveneves.ai/discord/?from=bitgit-readme). Bugs: [open an issue](https://github.com/sevenevesai/bitgit/issues/new).
 
 Bug reports, feature requests and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
 first, run the build and tests above before opening a pull request, and keep the
