@@ -43,6 +43,14 @@ jobs:
             **Linux (AppImage only):** Download `bit-git_${{ steps.get_version.outputs.VERSION }}_amd64.AppImage`, make it executable (`chmod +x`) and run it. It needs FUSE 2 (`libfuse2`; `libfuse2t64` on Ubuntu 24.04), Node.js 22 or later, Git, and a running Secret Service (GNOME Keyring, KWallet or KeePassXC) to store the GitHub token. The .deb and .rpm are no longer published: they need webkit2gtk 4.0, which current distributions do not ship. For a blank window on NVIDIA drivers, see [INSTALL.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/INSTALL.md).
 
             ### What's New
+            - Added a Discord community link in Settings and a one-time card pointing to it
+            - Saved views: name a combination of search, status, labels, favorites, archived setting and sort, and restore it with one click
+            - Favorites moved into the Labels filter, and a new Needs Attention sort lists diverged and unreadable projects first
+            - The selection bar and batch results now float at the bottom of the window instead of pushing the cards down
+            - Hints show as tooltips on macOS, where the native ones never appeared, and icon-only buttons keep their accessible names
+            - A favorited project card shows one star instead of two, and the filter row stays on one line at the default window size
+
+            ### In 1.3.0
             - GitLab and other Git hosts: a folder whose branch already tracks a remote (or has `origin`) counts as connected, not Local Only. The card shows and links that remote, and Push, Sync Branch and the bulk actions work without a saved GitHub link. Remote URLs are stored without usernames or passwords
             - Labels: give a project up to eight labels, then filter the board by label or find projects by label in search
             - Add Project > Import Folders: choose a folder, untick the repositories you don't want, and add the rest at once
