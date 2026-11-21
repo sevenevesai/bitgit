@@ -41,6 +41,9 @@ fn main() {
 
     tauri::Builder::default()
         .setup(|_app| {
+            if let Err(error) = app_settings::record_launch() {
+                eprintln!("[Rust] Launch count not saved: {error:#}");
+            }
             // Windows keeps finding the script next to the executable: there the resolver would
             // hand Node a \\?\ verbatim path.
             #[cfg(not(windows))]
@@ -53,6 +56,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            claim_community_nudge,
             get_repositories,
             sync_repository,
             check_repository_status,

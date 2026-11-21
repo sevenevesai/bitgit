@@ -43,7 +43,64 @@ impl Default for EditorConfig {
 pub struct AppSettings {
     #[serde(default)]
     pub editor: EditorConfig,
-    // Future settings can be added here
+    /// Launches of the app, counted once per start.
+    #[serde(default)]
+    pub launch_count: u32,
+    /// Set the moment the community nudge is displayed; it never returns afterwards.
+    #[serde(default)]
+    pub community_nudge_seen: bool,
+}
+
+/// Launch from which the community nudge is eligible without a first successful sync.
+const NUDGE_LAUNCH: u32 = 3;
+
+/// Whether the one-time community nudge may be shown now. Never on the first launch; from the
+/// third launch, or after a successful sync on a later launch; never twice, never while busy.
+pub fn should_show_nudge(launch_count: u32, seen: bool, busy: bool, synced_this_launch: bool) -> bool {
+    if seen || busy || launch_count < 2 {
+        return false;
+    }
+    launch_count >= NUDGE_LAUNCH || synced_this_launch
+}
+
+/// Load settings, failing when an existing file cannot be read or parsed. `load_settings` falls
+/// back to defaults there, and a launch write on top of that would overwrite the user's file.
+fn load_settings_strict() -> Result<AppSettings> {
+    let path = get_settings_path()?;
+    if !path.exists() {
+        return Ok(AppSettings::default());
+    }
+    let json = fs::read_to_string(&path).context("Failed to read settings file")?;
+    serde_json::from_str(&json).context("Failed to parse settings file")
+}
+
+/// Count this launch and return the new total.
+pub fn record_launch() -> Result<u32> {
+    let mut settings = load_settings_strict()?;
+    settings.launch_count = settings.launch_count.saturating_add(1);
+    save_settings(&settings)?;
+    Ok(settings.launch_count)
+}
+
+/// Decide whether to show the nudge and, when yes, persist "seen" before answering. Any failure
+/// to read or write settings answers no.
+pub fn claim_nudge(busy: bool, synced_this_launch: bool) -> bool {
+    let attempt = || -> Result<bool> {
+        let mut settings = load_settings_strict()?;
+        if !should_show_nudge(settings.launch_count, settings.community_nudge_seen, busy, synced_this_launch) {
+            return Ok(false);
+        }
+        settings.community_nudge_seen = true;
+        save_settings(&settings)?;
+        Ok(true)
+    };
+    match attempt() {
+        Ok(show) => show,
+        Err(e) => {
+            eprintln!("[AppSettings] Community nudge skipped: {:#}", e);
+            false
+        }
+    }
 }
 
 /// Get the path to the settings file
@@ -155,5 +212,53 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("\"preset\":\"custom\""));
         assert!(json.contains("\"customCommand\":\"nvim\""));
+    }
+
+    #[test]
+    fn nudge_never_on_first_or_second_launch() {
+        assert!(!should_show_nudge(1, false, false, false));
+        assert!(!should_show_nudge(1, false, false, true));
+        assert!(!should_show_nudge(2, false, false, false));
+    }
+
+    #[test]
+    fn nudge_shown_on_third_launch() {
+        assert!(should_show_nudge(3, false, false, false));
+        assert!(should_show_nudge(10, false, false, false));
+    }
+
+    #[test]
+    fn nudge_shown_after_sync_on_later_launch() {
+        assert!(should_show_nudge(2, false, false, true));
+    }
+
+    #[test]
+    fn nudge_suppressed_while_busy() {
+        assert!(!should_show_nudge(3, false, true, false));
+        assert!(!should_show_nudge(2, false, true, true));
+    }
+
+    #[test]
+    fn nudge_not_shown_again_once_seen_including_round_trip() {
+        assert!(!should_show_nudge(5, true, false, true));
+
+        let mut settings = AppSettings { launch_count: 3, ..AppSettings::default() };
+        assert!(should_show_nudge(settings.launch_count, settings.community_nudge_seen, false, false));
+        settings.community_nudge_seen = true;
+        let json = serde_json::to_string_pretty(&settings).unwrap();
+        let loaded: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(loaded.community_nudge_seen);
+        assert!(!should_show_nudge(loaded.launch_count, loaded.community_nudge_seen, false, false));
+    }
+
+    #[test]
+    fn settings_from_current_release_load_with_defaults() {
+        let json = r#"{"editor":{"preset":"cursor"}}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.editor.preset, EditorPreset::Cursor);
+        assert_eq!(settings.launch_count, 0);
+        assert!(!settings.community_nudge_seen);
+        let empty: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty.launch_count, 0);
     }
 }

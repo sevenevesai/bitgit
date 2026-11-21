@@ -799,6 +799,13 @@ pub async fn load_editor_settings() -> Result<EditorConfig, String> {
     app_settings::get_editor_config().map_err(|e| format!("Failed to load editor settings: {}", e))
 }
 
+/// Claim the one-time community nudge. The caller reports whether the app is busy and whether a
+/// sync succeeded this launch; "seen" is persisted before a yes is returned.
+#[tauri::command]
+pub async fn claim_community_nudge(busy: bool, synced_this_launch: bool) -> bool {
+    app_settings::claim_nudge(busy, synced_this_launch)
+}
+
 /// Clone a GitHub repository to a local directory
 #[tauri::command]
 pub async fn clone_repository(

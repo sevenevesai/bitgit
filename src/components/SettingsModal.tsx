@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { X, Github, Folder, Search, CheckCircle, XCircle, AlertCircle, ExternalLink, Loader2, Info, ChevronDown, ChevronUp, Code, Terminal } from 'lucide-react';
 import { EditorPreset, EditorConfig, EditorAvailability } from '../types';
 import { useAppStore } from '../stores/useAppStore';
+import { openDiscord } from '../lib/community';
 import { importRepositories, scanForRepositories } from '../lib/repoImport';
 
 interface SettingsModalProps {
@@ -621,6 +622,17 @@ export function SettingsModal({ isOpen, onClose, onRepositoriesAdded }: Settings
                 {isSavingEditor ? 'Saving...' : 'Save Editor Preference'}
               </button>
             </div>
+          </section>
+
+          {/* Help */}
+          <section>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Help</h3>
+            <button
+              onClick={() => void openDiscord('bitgit-app')}
+              className="text-sm text-gray-600 dark:text-gray-400 underline hover:text-gray-900 dark:hover:text-white"
+            >
+              Discord community
+            </button>
           </section>
         </div>
 

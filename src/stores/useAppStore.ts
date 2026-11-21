@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { announceSyncSucceeded } from '../lib/community';
 import { invoke } from '@tauri-apps/api/tauri';
 import toast from 'react-hot-toast';
 import {
@@ -493,6 +494,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const text = describeSyncResult(action, result);
       if (syncMovedData(action, result)) {
         toast.success(text, { id: loadingToast });
+        announceSyncSucceeded();
       } else {
         toast(text, { id: loadingToast });
       }

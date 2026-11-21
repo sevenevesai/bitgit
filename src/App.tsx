@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Toaster } from "react-hot-toast";
 import { Dashboard } from "./components/Dashboard";
 import { RecoveryBackground } from "./components/recovery/AutomationObserver";
+import { CommunityNudge } from "./components/CommunityNudge";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { useAppStore } from "./stores/useAppStore";
 
@@ -42,6 +43,7 @@ function App() {
         <Dashboard />
         <RecoveryBackground />
         <TooltipLayer />
+        <CommunityNudge />
       </>
     );
   } catch (error) {
